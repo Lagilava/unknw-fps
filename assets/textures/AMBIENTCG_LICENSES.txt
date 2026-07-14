@@ -1,0 +1,11 @@
+Texture assets downloaded from ambientCG.com.
+
+Assets:
+- Concrete034: https://ambientcg.com/a/Concrete034
+- Metal063: https://ambientcg.com/a/Metal063
+- OfficeCeiling001: https://ambientcg.com/a/OfficeCeiling001
+
+License:
+Creative Commons CC0 1.0 Universal.
+ambientCG states that downloadable asset files may be copied, modified,
+distributed, and included as raw files in projects such as video games.

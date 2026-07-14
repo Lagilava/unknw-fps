@@ -1,0 +1,30 @@
+# ============================================================================
+#  TURN relay configuration  (OPTIONAL but recommended)
+# ============================================================================
+#
+#  WHAT THIS IS FOR
+#  Most friends on normal home internet connect fine with no relay (STUN only).
+#  But friends on mobile data, university/office wifi, or CGNAT internet are
+#  behind a "strict NAT" and CANNOT make a direct peer-to-peer connection.
+#  Those players need a TURN relay to route their traffic. Without it they will
+#  see "Could not establish a connection to the host" even though the page loads.
+#
+#  HOW TO GET FREE TURN CREDENTIALS (about 2 minutes, no payment)
+#    1. Go to  https://dashboard.metered.ca/signup   (free, 50 GB/month)
+#    2. Create an app, open the "TURN Server" / "Credentials" page.
+#    3. Copy the server host, username, and credential (password).
+#    4. Fill them in below, remove the leading "#" on the three lines, save.
+#    5. Re-run "Start Multiplayer.bat". The banner will say "TURN relay: ACTIVE".
+#
+#  (ExpressTURN at https://expressturn.com works the same way.)
+#
+#  Example with Metered:
+#    turnhost=global.relay.metered.ca
+#    turnuser=1a2b3c4d5e6f7g8h
+#    turncred=AbCdEfGhIjKlMnOp
+#
+#  Lines starting with # are ignored. Fill in and uncomment these three:
+#
+#turnhost=
+#turnuser=
+#turncred=

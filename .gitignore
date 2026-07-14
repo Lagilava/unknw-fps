@@ -1,0 +1,41 @@
+# ── Dependencies & build output ──────────────────────────────────────────────
+node_modules/
+dist/
+
+# ── Test artifacts (Playwright screenshots, traces, headless Chrome profiles) ─
+test-artifacts/
+test-results/
+.tools/chrome-*/
+*.log
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# turn-config.txt holds TURN relay credentials once filled in — never commit it.
+# Use turn-config.example.txt (committed) as the template.
+turn-config.txt
+
+# ── Legacy / superseded snapshots kept locally, not part of the shipped game ──
+three_fps_game.v4.js
+three_fps_game_perf.js
+guns.js
+apply_perf_patches.mjs
+angel.zip
+
+# ── Unused heavyweight assets (not referenced by any runtime code) ────────────
+assets/models/player/Remy.fbx
+assets-original/
+
+# ── Babylon.js editor leftovers (unrelated tooling, not loaded by the game) ───
+.bjseditor/
+project.bjseditor
+public/scene/
+assets/example.scene/
+assets/country.env
+src/
+
+# ── Old Java prototype (predates the Three.js game) ───────────────────────────
+JAVA/
+
+# ── Editor/OS noise ────────────────────────────────────────────────────────────
+.vscode/
+Thumbs.db
+.DS_Store
