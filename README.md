@@ -57,45 +57,36 @@ Then open `http://localhost:3000/` and hit **New Mission**. First boot takes 15�
 
 ```mermaid
 flowchart TB
-    subgraph entry ["Entry (index.html · Vite)"]
-        HTML["HTML shell<br/>loading screen · menu · HUD"]
-    end
+    HTML["index.html — Vite entry<br/>loading screen, menu, HUD"]
+    ENV["environment.js<br/>MAP grid, arena geometry, collision"]
+    EXT["exterior_map.js<br/>street and plaza zone, colliders"]
+    LOOP["three_fps_game.js — game loop<br/>WebGL/WebGPU renderer, camera rig"]
+    AI["Enemy AI<br/>per-type brains, ability kits, telegraphs"]
+    WPN["Weapons and combat<br/>hitscan, recoil, Pack-a-Punch"]
+    ECON["Interactables<br/>crates, perks, horde beacon, XP"]
+    FX["FX pools<br/>lightning, particles, fixed light budget"]
+    RIG["storm_warden.js, zombie_character.js<br/>procedural and Mixamo rigs"]
+    GUN["gun_config.js"]
+    NET["netcode.js<br/>PeerJS co-op and PvP"]
+    UI["dom_ui.js, settings.js, audio_assets.js"]
+    DEVE["dev_engine.js<br/>preset system"]
+    DEVC["dev.html<br/>developer console"]
+    TESTS[".tools/<br/>Playwright specs"]
 
-    subgraph world ["World (classic scripts)"]
-        ENV["environment.js<br/>MAP grid · arena geometry<br/>collision · interior lighting"]
-        EXT["exterior_map.js<br/>street & plaza zone<br/>buildings · colliders"]
-    end
-
-    subgraph game ["three_fps_game.js (async IIFE, ~17k lines)"]
-        LOOP["Game loop<br/>renderer (WebGL/WebGPU) · camera rig"]
-        AI["Enemy AI<br/>per-type brains · pathfinding<br/>ability kits · telegraph rings"]
-        WPN["Weapons & combat<br/>hitscan · recoil · Pack-a-Punch"]
-        ECON["Interactables<br/>crates · perks · beacon<br/>XP economy"]
-        FX["FX pools<br/>lightning · particles · tracers<br/>fixed light budget"]
-    end
-
-    subgraph mods ["modules/"]
-        GUN["gun_config.js"]
-        NET["netcode.js<br/>PeerJS co-op / PvP"]
-        RIG["storm_warden.js<br/>zombie_character.js<br/>procedural + Mixamo rigs"]
-        DEVE["dev_engine.js<br/>preset system"]
-        UI["dom_ui.js<br/>audio_assets.js · settings.js"]
-    end
-
-    subgraph tooling ["Tooling"]
-        DEVC["dev.html<br/>developer console"]
-        PREV["model_preview.html<br/>animation inspector"]
-        TESTS[".tools/<br/>Playwright specs"]
-    end
-
-    HTML --> ENV --> EXT --> LOOP
-    LOOP --> AI & WPN & ECON & FX
+    HTML --> ENV
+    ENV --> EXT
+    EXT --> LOOP
+    LOOP --> AI
+    LOOP --> WPN
+    LOOP --> ECON
+    LOOP --> FX
+    LOOP --> NET
+    LOOP --> UI
     AI --> RIG
     WPN --> GUN
-    LOOP --> NET & UI
-    DEVE -. "localStorage snapshot" .-> LOOP
-    DEVC -. "live apply" .-> DEVE
-    TESTS -. "?test=1 harness" .-> LOOP
+    DEVC -.-> DEVE
+    DEVE -.-> LOOP
+    TESTS -.-> LOOP
 ```
 
 **Boot sequence:** the HTML shell reveals the menu only after `bootGame()` finishes building the world, priming enemy pools and warming every shader (`body[data-rb-ready]`). At runtime the visible-light count is treated as an invariant — lights are dimmed, never toggled — because Three.js bakes the light count into every shader program.
