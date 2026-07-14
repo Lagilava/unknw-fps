@@ -25,8 +25,11 @@ function applySecurityHeaders(res) {
 }
 
 // ── Rate limiter (static file requests) ──────────────────────────────────────
+// The game's first load bursts several hundred asset requests (textures, FBX
+// animation clips, audio); the cap must sit comfortably above that or the
+// server 429s its own game.
 const RATE_WINDOW_MS = 10_000;
-const RATE_MAX_REQ   = 120;
+const RATE_MAX_REQ   = 1200;
 const rateBuckets    = new Map();
 
 function isRateLimited(ip) {
@@ -71,6 +74,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".woff", ".woff2", ".ttf", ".otf",
   ".wav", ".mp3", ".ogg",
   ".glb", ".gltf", ".bin",
+  ".hdr", ".fbx", // HDRI skybox + Mixamo character/animation rigs
 ]);
 
 app.use((req, res, next) => {

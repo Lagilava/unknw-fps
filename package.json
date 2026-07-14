@@ -9,9 +9,12 @@
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "multiplayer": "node server.js",
     "optimize:textures": "node scripts/optimize-textures.mjs"
   },
   "dependencies": {
+    "express": "^4.22.2",
+    "peer": "^1.0.2",
     "peerjs": "^1.5.4",
     "three": "^0.166.1"
   },

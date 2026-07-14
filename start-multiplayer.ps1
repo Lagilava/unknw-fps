@@ -9,7 +9,30 @@ $ErrorActionPreference = "SilentlyContinue"
 $ProjectDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Port        = 8765
 $HtmlFile    = "first_person_shooter_room_game%20(1).html"
-$Cloudflared = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+
+# Locate cloudflared: known install paths → PATH → local .tools copy.
+function Find-Cloudflared {
+  $candidates = @(
+    "C:\Program Files (x86)\cloudflared\cloudflared.exe",
+    "C:\Program Files\cloudflared\cloudflared.exe",
+    (Join-Path $ProjectDir ".tools\cloudflared.exe")
+  )
+  foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+  $inPath = Get-Command cloudflared -ErrorAction SilentlyContinue
+  if ($inPath) { return $inPath.Source }
+  return $null
+}
+$Cloudflared = Find-Cloudflared
+if (-not $Cloudflared) {
+  Write-Host ""
+  Write-Host "  cloudflared is not installed (needed to make the game reachable" -ForegroundColor Yellow
+  Write-Host "  from the internet without router port-forwarding)." -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "  Install it with:  winget install Cloudflare.cloudflared" -ForegroundColor Cyan
+  Write-Host "  ...then run this launcher again." -ForegroundColor Cyan
+  Read-Host  "  Press Enter to exit"
+  exit 1
+}
 
 $ServerOut = Join-Path $env:TEMP "rb_server_out.log"
 $ServerErr = Join-Path $env:TEMP "rb_server_err.log"
@@ -47,12 +70,27 @@ function Load-TurnConfig {
   }
 }
 
+function Get-GameUrl($url) {
+  return "https://$url/$HtmlFile" + "?peerhost=$url&peerport=443&peersecure=1&peerpath=/peerjs" + $script:TurnQuery
+}
+
+# Open the game in Chrome if available, otherwise the default browser.
+function Open-GameTab($gameUrl) {
+  $chrome = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+    "$env:LocalAppData\Google\Chrome\Application\chrome.exe"
+  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($chrome) { Start-Process -FilePath $chrome -ArgumentList $gameUrl }
+  else { Start-Process $gameUrl }
+}
+
 function Write-Banner($url) {
   Clear-Host
-  $game = "https://$url/$HtmlFile" + "?peerhost=$url&peerport=443&peersecure=1&peerpath=/peerjs" + $script:TurnQuery
+  $game = Get-GameUrl $url
   Write-Host ""
   Write-Host "  ===============================================================" -ForegroundColor DarkCyan
-  Write-Host "             ROOM BREACH FPS - MULTIPLAYER ONLINE" -ForegroundColor Cyan
+  Write-Host "              UNKNW - INTERNET MULTIPLAYER ONLINE" -ForegroundColor Cyan
   Write-Host "  ===============================================================" -ForegroundColor DarkCyan
   Write-Host ""
   Write-Host "  Share this link with everyone (you AND your friends):" -ForegroundColor Yellow
@@ -62,11 +100,17 @@ function Write-Banner($url) {
   Write-Host "  ---------------------------------------------------------------" -ForegroundColor DarkGray
   Write-Host "  Host clicks HOST GAME, then shares the 6-char code." -ForegroundColor Gray
   Write-Host "  Friends click JOIN GAME, then enter that code." -ForegroundColor Gray
+  Write-Host ""
+  Write-Host "  FIRST LOAD IS BIG (~150 MB of game assets through the tunnel)." -ForegroundColor Yellow
+  Write-Host "  Tell friends the loading screen can take several minutes the" -ForegroundColor Yellow
+  Write-Host "  first time - it is downloading, not frozen. Later loads are fast." -ForegroundColor Yellow
+  Write-Host ""
   if ($script:TurnActive) {
     Write-Host "  TURN relay: ACTIVE (works on mobile / strict NAT too)." -ForegroundColor Green
   } else {
-    Write-Host "  TURN relay: off (STUN only). If a friend cannot connect, see" -ForegroundColor DarkYellow
-    Write-Host "  turn-config.txt to enable a free relay for hard NATs." -ForegroundColor DarkYellow
+    Write-Host "  TURN relay: off (STUN only). If a friend sees 'could not" -ForegroundColor DarkYellow
+    Write-Host "  establish a connection', set up turn-config.txt (2 minutes," -ForegroundColor DarkYellow
+    Write-Host "  free) - copy turn-config.example.txt and follow the steps." -ForegroundColor DarkYellow
   }
   Write-Host ""
   Write-Host "  This window must stay open. Press Ctrl+C to stop the server." -ForegroundColor DarkGray
@@ -159,6 +203,8 @@ try {
     exit 1
   }
   Write-Banner $script:TunnelUrl
+  # Open the host's own game tab through the public URL (same link the friends use).
+  Open-GameTab (Get-GameUrl $script:TunnelUrl)
 
   while ($true) {
     Start-Sleep -Seconds 3

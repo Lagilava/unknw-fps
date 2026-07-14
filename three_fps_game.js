@@ -14778,6 +14778,8 @@ async function spawnEnemies(wave, options = {}) {
 
   function clearRemotePlayers() {
     for (const id of [...remotePlayers.keys()]) removeRemotePlayer(id);
+    pvpDamageBudgets.clear();
+    fxRateWindows.clear();
   }
 
   function sendLocalState(now, moveState) {
@@ -15051,6 +15053,24 @@ async function spawnEnemies(wave, options = {}) {
   // Build a whitelist of valid gun identifiers from the GUNS enum so that
   // network messages cannot inject arbitrary strings into avatar.gun.
   const VALID_GUN_NAMES = new Set(Object.values(GUNS));
+  // Module-scope handle to setupMultiplayerUI's internal refreshMultiplayerUi —
+  // handleNetData needs to call it but lives outside that closure.
+  let refreshMultiplayerUiRef = () => {};
+  // PvP anti-cheat: rolling per-attacker damage budget (see the pdamage handler).
+  const PVP_DAMAGE_BUDGET_PER_SEC = 420;
+  const pvpDamageBudgets = new Map();
+  // Per-peer cosmetic-FX rate limit: vfx/packfx are visual-only, so a flooding peer
+  // just gets its extra effects dropped — nothing gameplay-relevant is lost.
+  const fxRateWindows = new Map();
+  function acceptFxRate(id, kind, maxPerSec) {
+    const key = `${id}:${kind}`;
+    const now = performance.now();
+    let win = fxRateWindows.get(key);
+    if (!win || now - win.t > 1000) { win = { t: now, n: 0 }; fxRateWindows.set(key, win); }
+    if (win.n >= maxPerSec) return false;
+    win.n++;
+    return true;
+  }
 
   // Message types that carry a player display-name for registration purposes.
   // Only these types participate in name-conflict checking; authority messages
@@ -15085,7 +15105,8 @@ async function spawnEnemies(wave, options = {}) {
       const dx = nx - avatar.target.x, dz = nz - avatar.target.z;
       if (Math.sqrt(dx * dx + dz * dz) > NET_MAX_POSITION_DELTA) return;
 
-      avatar.target.set(nx, clamp(finiteNumber(msg.y, 0), -2, 4), nz);
+      // y is the jump offset — never below ground, capped at a real jump apex.
+      avatar.target.set(nx, clamp(finiteNumber(msg.y, 0), 0, 3), nz);
       avatar.targetYaw = clamp(finiteNumber(msg.yaw, avatar.targetYaw), -Math.PI * 2, Math.PI * 2);
       avatar.runtime.moveState.f = clamp(finiteNumber(msg.f, 0), -1, 1);
       avatar.runtime.moveState.s = clamp(finiteNumber(msg.s, 0), -1, 1);
@@ -15096,7 +15117,7 @@ async function spawnEnemies(wave, options = {}) {
       avatar.runtime.moveState.reloading = !!msg.reloading;
       avatar.runtime.moveState.melee = !!msg.melee;
       avatar.runtime.netPitch = clamp(finiteNumber(msg.pitch, 0), -Math.PI * 0.5, Math.PI * 0.5);
-      avatar.runtime.netCamY = clamp(finiteNumber(msg.camY, PLAYER_H + finiteNumber(msg.y, 0)), 0.2, PLAYER_H + 4);
+      avatar.runtime.netCamY = clamp(finiteNumber(msg.camY, PLAYER_H + finiteNumber(msg.y, 0)), 0.2, PLAYER_H + 3);
       avatar.runtime.netAds = clamp01(finiteNumber(msg.ads, 0));
       avatar.runtime.netThirdPerson = !!msg.thirdPerson;
       avatar.runtime.flashlightOn = !!msg.flashlight;
@@ -15123,7 +15144,10 @@ async function spawnEnemies(wave, options = {}) {
       // Refuse to register more remote players than the enforced cap.
       if (remotePlayers.size < MAX_REMOTE_PLAYERS) getRemotePlayer(id, safeName);
       // Immediately unblock the LAUNCH button — don't wait for the 1s interval.
-      refreshMultiplayerUi?.();
+      // NOTE: refreshMultiplayerUi is scoped inside setupMultiplayerUI, so this
+      // must go through the module-level handle (a bare identifier here threw a
+      // ReferenceError on the FIRST hello message and killed the handshake).
+      refreshMultiplayerUiRef();
       if (net?.isHost) {
         const sentAt = Math.round(performance.now());
         net.sendTo?.(id, { t: "config", id: myNetId, seq: nextNetSeq(), sentAt, mode: gameMode, name: myName });
@@ -15191,15 +15215,29 @@ async function spawnEnemies(wave, options = {}) {
       applyCoopFx(msg);
     } else if (msg.t === "vfx") {
       if (!acceptPeerSequence(id, msg, "vfx")) return;
+      if (!acceptFxRate(id, "vfx", 30)) return; // cosmetic-only: drop floods silently
       applyVisualFx(msg, id);
     } else if (msg.t === "packfx") {
       // Sequence check to prevent flooding pack-upgrade effects.
       if (!acceptPeerSequence(id, msg, "packfx")) return;
+      if (!acceptFxRate(id, "packfx", 4)) return;
       applyCoopPackFx(msg, id);
     } else if (msg.t === "pdamage") {
       // seq is REQUIRED for pdamage — missing seq is a replay attempt, reject it.
       if (!requirePeerSequence(id, msg, "pdamage")) return;
-      if (msg.target === myNetId) applyPvpDamage(clampNetDamage(msg.dmg, 250), id, msg.hs);
+      // Anti-cheat budget: cap how much damage any single attacker can land on us
+      // per rolling second. Legit fire rates sit well under this; a client spamming
+      // forged max-damage packets gets throttled to survivable numbers instead of
+      // instant-killing. (P2P has no referee — the victim is the authority on its
+      // own HP, so the victim enforces the budget.)
+      if (msg.target === myNetId) {
+        const now = performance.now();
+        let budget = pvpDamageBudgets.get(id);
+        if (!budget || now - budget.t > 1000) { budget = { t: now, sum: 0 }; pvpDamageBudgets.set(id, budget); }
+        const dmg = Math.min(clampNetDamage(msg.dmg, 250), Math.max(0, PVP_DAMAGE_BUDGET_PER_SEC - budget.sum));
+        budget.sum += dmg;
+        if (dmg > 0) applyPvpDamage(dmg, id, msg.hs);
+      }
     } else if (msg.t === "frag") {
       if (!acceptPeerSequence(id, msg, "frag")) return;
       // Killer must be the sender; victim must be a known participant.
@@ -15364,7 +15402,7 @@ async function spawnEnemies(wave, options = {}) {
     }
     function refreshRoster() {
       if (rosterEl) rosterEl.innerHTML = net?.active
-        ? `<span class="mp-dot">â—</span> ${1 + (net.peerCount || 0)} operator(s) connected`
+        ? `<span class="mp-dot">●</span> ${1 + (net.peerCount || 0)} operator(s) connected`
         : "";
       if (startBtnMp) startBtnMp.classList.toggle("hidden", !net?.isHost);
       if (leaveBtn) leaveBtn.classList.toggle("hidden", !net?.active);
@@ -15396,6 +15434,7 @@ async function spawnEnemies(wave, options = {}) {
       if (leaveBtn) leaveBtn.classList.toggle("hidden", !net?.active);
       refreshRoomBadge();
     }
+    refreshMultiplayerUiRef = refreshMultiplayerUi; // expose to handleNetData (module scope)
 
     if (mpBtn) mpBtn.onclick = () => {
       refreshModeLabels();
@@ -15652,6 +15691,9 @@ async function spawnEnemies(wave, options = {}) {
   function applyEnemySnapshot(msg) {
     if (!isCoopGuest() || game.state !== "playing") return;
     if (!Array.isArray(msg.list)) return;
+    // DoS guard: a legitimate host never has anywhere near this many live enemies;
+    // reject oversized snapshots outright rather than allocating proxies for them.
+    if (msg.list.length > 64) return;
     if (!Number.isFinite(msg.seq) || msg.seq <= lastEnemySnapshotSeq) return;
     lastEnemySnapshotSeq = msg.seq;
     lastEnemySnapshotTime = performance.now();

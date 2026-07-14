@@ -152,7 +152,10 @@ export function createNetwork() {
       return {
         host,
         port:   Number(params.get("peerport")) || 9000,
-        path:   params.get("peerpath") || "/",
+        // server.js mounts ExpressPeerServer at /peerjs, and peer's internal WS
+        // suffix makes the real endpoint /peerjs/peerjs — the client must be told
+        // path "/peerjs" (default "/" handshakes at /peerjs and gets HTTP 400).
+        path:   params.get("peerpath") || "/peerjs",
         secure,
         debug: 0,
         config: { iceServers, iceTransportPolicy: "all", iceCandidatePoolSize, bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" },
