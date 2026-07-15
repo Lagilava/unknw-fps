@@ -655,24 +655,32 @@
       const sunShadows = profile.tier !== "low";
       // No shadows → lean on fill for even light across the whole scene.
       // With shadows → keep fill low so the cast shadows read as contrast.
-      scene.add(new THREE.AmbientLight(0xffdfc0, sunShadows ? 0.12 : 0.24));
+      scene.add(new THREE.AmbientLight(0xffdfc0, sunShadows ? 0.10 : 0.24));
       // Dusk sky fill: cool blue-grey from above, warm earth bounce from below.
-      const hemi = new THREE.HemisphereLight(0xafbdd8, 0xa07c56, sunShadows ? 0.36 : 0.60);
+      // With shadows on, fill is kept LOW on purpose — it's what pools inside cast
+      // shadows, so every bit of it lightens them and kills contrast.
+      const hemi = new THREE.HemisphereLight(0xafbdd8, 0xa07c56, sunShadows ? 0.26 : 0.60);
       hemi.position.set(0, 40, 176);
       scene.add(hemi);
       // Warm golden-hour sun — the KEY light (+ shadow caster on medium/high).
-      const sun = new THREE.DirectionalLight(0xffc27c, sunShadows ? 2.65 : 2.3);
+      const sun = new THREE.DirectionalLight(0xffc27c, sunShadows ? 2.9 : 2.3);
       const SUN_CENTER_Z = 60; // between the arena (z<120) and exterior plaza
       sun.position.set(sunDir.x * 200, sunDir.y * 200, SUN_CENTER_Z + sunDir.z * 200);
       sun.target.position.set(0, 0, SUN_CENTER_Z);
       sun.castShadow = sunShadows;
       if (sunShadows) {
-        sun.shadow.mapSize.set(2048, 2048);
+        // High tier gets a denser map (sharper edges); the 370-unit frustum over a
+        // 2048 map is only ~0.18 units/texel, which reads mushy up close.
+        const shadowRes = profile.tier === "high" ? 4096 : 2048;
+        sun.shadow.mapSize.set(shadowRes, shadowRes);
         const sc = sun.shadow.camera;
         sc.left = -185; sc.right = 185; sc.top = 185; sc.bottom = -185;
         sc.near = 1; sc.far = 640;
         sun.shadow.bias = -0.0005;
-        sun.shadow.normalBias = 0.8;
+        // normalBias 0.8 was eroding shadows: it pushes sample points ~a meter off
+        // every surface, shrinking and lightening all shadow edges. The geometry here
+        // is large merged boxes, so a much smaller bias still avoids acne.
+        sun.shadow.normalBias = 0.25;
         sc.updateProjectionMatrix();
       }
       scene.add(sun);

@@ -1723,7 +1723,7 @@ import {
       // Signature default grade (always on, not player-adjustable): deepened blacks,
       // tamed highlights, restrained saturation with a teal-orange lean — replaces the
       // old washed-out bright look. Pairs with the #grade-overlay vignette above.
-      : "contrast(1.17) saturate(1.16) brightness(0.94) sepia(0.09) hue-rotate(-9deg)";
+      : "contrast(1.35) saturate(1.35) brightness(0.85) sepia(0.19) hue-rotate(-19deg)";
     cinematicOverlay.style.opacity = cinematicState.enabled ? "1" : "0";
     for (const toggle of cinematicControls.toggles) toggle.checked = cinematicState.enabled;
     for (const value of cinematicControls.values) value.textContent = cinematicState.enabled ? "ON" : "OFF";
@@ -3756,9 +3756,38 @@ function createLightningEffect() {
     // instead of "daylight under a black ceiling" (intensity change only — never
     // visibility, per the light-count shader-cache invariant).
     const extSun = window.__extSun;
-    if (extSun) extSun.intensity = (extSun.userData.baseIntensity ?? extSun.intensity) * (shouldDarken ? 0.06 : 1);
+    if (extSun) {
+      extSun.intensity = (extSun.userData.baseIntensity ?? extSun.intensity) * (shouldDarken ? 0.10 : 1);
+      // The golden-hour sun is gone during a blackout — the only sky light is the
+      // burning horizon. Retint the key to ember red and drop it to the horizon so
+      // the residual directional light reads as fire glow, not sunlight. Color +
+      // position changes only (never visibility, per the light-count invariant).
+      if (!extSun.userData.baseColorHex) extSun.userData.baseColorHex = extSun.color.getHex();
+      if (!extSun.userData.basePosition) extSun.userData.basePosition = extSun.position.clone();
+      if (shouldDarken) {
+        extSun.color.setHex(0xff4a1e);
+        const bp = extSun.userData.basePosition;
+        extSun.position.set(bp.x, 18, bp.z); // near-horizon: long fire-lit rims
+      } else {
+        extSun.color.setHex(extSun.userData.baseColorHex);
+        extSun.position.copy(extSun.userData.basePosition);
+      }
+    }
     const extHemi = window.__extHemi;
-    if (extHemi) extHemi.intensity = (extHemi.userData.baseIntensity ?? extHemi.intensity) * (shouldDarken ? 0.18 : 1);
+    if (extHemi) {
+      extHemi.intensity = (extHemi.userData.baseIntensity ?? extHemi.intensity) * (shouldDarken ? 0.18 : 1);
+      if (!extHemi.userData.baseSkyHex) {
+        extHemi.userData.baseSkyHex = extHemi.color.getHex();
+        extHemi.userData.baseGroundHex = extHemi.groundColor.getHex();
+      }
+      if (shouldDarken) {
+        extHemi.color.setHex(0x7a2410);      // smoke-red sky bounce
+        extHemi.groundColor.setHex(0x140806); // scorched ground
+      } else {
+        extHemi.color.setHex(extHemi.userData.baseSkyHex);
+        extHemi.groundColor.setHex(extHemi.userData.baseGroundHex);
+      }
+    }
     if (announce) addKillFeed(shouldDarken ? "BLACKOUT WAVE - CEILING LIGHTS OFF" : "ENVIRONMENT LIGHTS RESTORED");
   }
   refreshEnvironmentLightRegistry();
