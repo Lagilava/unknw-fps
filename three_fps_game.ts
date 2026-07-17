@@ -19,7 +19,7 @@ import {
   setTextIfChanged,
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
-import { registerEnemy, unregisterEnemy } from "./modules/ecs";
+import { registerEnemy, unregisterEnemy, enemies as ecsEnemies } from "./modules/ecs";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -10675,8 +10675,12 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function getActiveLightningDroneCount() {
+    // Phase 2 ECS: first system migrated off the raw `enemies[]` array onto the
+    // Miniplex archetype query. The query holds the SAME enemy objects (the
+    // register/unregister seam keeps it in lock-step), so this is behaviourally
+    // identical — it's the proof-of-pattern for iterating `world.with(...)`.
     let count = 0;
-    for (const enemy of enemies) {
+    for (const enemy of ecsEnemies) {
       if (enemy.alive && enemy.lightning && enemy.aggroed) count++;
     }
     return count;
