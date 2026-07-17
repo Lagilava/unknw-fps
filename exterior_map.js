@@ -48,34 +48,22 @@
   // Publish the exterior play-area box so the game's world-boundary failsafe stays in sync.
   window.__extBounds = { xMin: EXT_X_MIN, xMax: EXT_X_MAX, zNear: EXT_Z_NEAR, zFar: EXT_Z_FAR };
 
-  // ── Minimap overlay ───────────────────────────────────────────────────────
-  window.__extDrawMinimapOverlay = function (ctx, pad, s, w, h) {
-    const yaw = window.__playerYaw;
-    if (!yaw) return;
-    const pz = yaw.position.z;
-    if (pz <= EXT_Z_NEAR) return;
-    const MAP_W = 34, MAP_H = 40;
-    const mapH_px = pad + MAP_H * s;
-    const stripH = Math.min(26, Math.max(0, h - mapH_px - pad - 2));
-    if (stripH < 4) return;
-    ctx.save();
-    ctx.fillStyle = "rgba(10,28,10,0.60)";
-    ctx.fillRect(pad, mapH_px + 1, MAP_W * s - 1, stripH);
-    ctx.strokeStyle = "rgba(60,180,60,0.25)";
-    ctx.lineWidth = 0.8;
-    ctx.strokeRect(pad + 0.5, mapH_px + 1, MAP_W * s - 2, stripH - 1);
-    ctx.font = "7px 'Share Tech Mono', monospace";
-    ctx.fillStyle = "rgba(80,200,80,0.50)";
-    ctx.textAlign = "center";
-    ctx.fillText("EXTERIOR", pad + MAP_W * s * 0.5, mapH_px + 7);
-    const fracZ = Math.min(1, (pz - EXT_Z_NEAR) / (EXT_Z_FAR - EXT_Z_NEAR));
-    const fracX = Math.max(0, Math.min(1, (yaw.position.x - EXT_X_MIN) / (EXT_X_MAX - EXT_X_MIN)));
-    const dotX = pad + fracX * (MAP_W * s - 1);
-    const dotY = mapH_px + 10 + fracZ * (stripH - 14);
-    ctx.shadowColor = "#60ff60"; ctx.shadowBlur = 5;
-    ctx.fillStyle = "rgba(100,240,100,0.95)";
-    ctx.beginPath(); ctx.arc(dotX, dotY, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+  // ── Minimap layout export ─────────────────────────────────────────────────
+  // The GTA-style minimap (three_fps_game.js renderMinimap) pre-renders the FULL
+  // world — interior MAP grid + this exterior street — into one offscreen
+  // texture. It reads:
+  //  - __extMapFootprints: LIVE reference to the collider list (building AABBs,
+  //    parked cars, props, boundary walls). Late registrations (landmark statue
+  //    via __extAddCollider) are picked up because the texture rebuilds when the
+  //    list length changes.
+  //  - __extMapLayout: static street layout (road/sidewalk rects, crosswalk) —
+  //    mirrors the queueBox calls in buildGround().
+  window.__extMapFootprints = colliders;
+  window.__extMapLayout = {
+    bounds: window.__extBounds,
+    roadHalfW: 19,                                  // asphalt spans x −19..19
+    sidewalks: [{ x: -43, w: 26 }, { x: 43, w: 26 }],
+    crosswalkZ: 176,
   };
 
   // ── Builder ───────────────────────────────────────────────────────────────
@@ -573,6 +561,7 @@
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(cx, cy, cz);
       mesh.receiveShadow = true;
+      mesh.castShadow = mat.transparent !== true; // opaque props/buildings cast sun shadows
       scene.add(mesh);
       if (addToWalls) extWallMeshes.push(mesh);
       return mesh;
@@ -606,6 +595,11 @@
         const merged = geos.length === 1 ? geos[0] : mergeGeometries(geos);
         const mesh = new THREE.Mesh(merged, mat);
         mesh.receiveShadow = true;
+        // Opaque merged geometry (buildings, kerbs, planters, poles…) must CAST too —
+        // this was the missing half of the exterior shadow setup: everything received
+        // but nothing cast, so the outdoors had no shadows at all. Transparent mats
+        // (glass, water, decals) stay non-casting.
+        mesh.castShadow = mat.transparent !== true;
         mesh.name = "ext_merged";
         scene.add(mesh);
         extWallMeshes.push(mesh);
@@ -669,19 +663,46 @@
       sun.target.position.set(0, 0, SUN_CENTER_Z);
       sun.castShadow = sunShadows;
       if (sunShadows) {
-        // High tier gets a denser map (sharper edges); the 370-unit frustum over a
-        // 2048 map is only ~0.18 units/texel, which reads mushy up close.
+        // High tier gets a denser map (sharper edges).
         const shadowRes = profile.tier === "high" ? 4096 : 2048;
         sun.shadow.mapSize.set(shadowRes, shadowRes);
-        const sc = sun.shadow.camera;
-        sc.left = -185; sc.right = 185; sc.top = 185; sc.bottom = -185;
-        sc.near = 1; sc.far = 640;
         sun.shadow.bias = -0.0005;
         // normalBias 0.8 was eroding shadows: it pushes sample points ~a meter off
         // every surface, shrinking and lightening all shadow edges. The geometry here
         // is large merged boxes, so a much smaller bias still avoids acne.
         sun.shadow.normalBias = 0.25;
-        sc.updateProjectionMatrix();
+        // Fit the ortho shadow frustum TIGHTLY to the actual playable world instead
+        // of a fixed ±185 box: project the world AABB's corners into light space and
+        // size the frustum to them. The old fixed box wasted well over half the map
+        // (play area is x ±74, z -40..232) so texel density was needlessly low.
+        // Exposed as window.__extFitSunShadow so the game can refit after moving the
+        // sun (blackout waves reposition it to the fiery horizon).
+        const fitSunShadow = () => {
+          const sc = sun.shadow.camera;
+          const target = sun.target.position;
+          // World AABB of everything that matters for gameplay shadows:
+          // interior (x ±68, z -40..122) + exterior (x ±74, z 118..232), y 0..26.
+          const min = new THREE.Vector3(-76, -1, -42);
+          const max = new THREE.Vector3(76, 28, EXT_Z_FAR + 4);
+          const look = new THREE.Matrix4().lookAt(sun.position, target, new THREE.Vector3(0, 1, 0));
+          const toLight = new THREE.Matrix4().copy(look).transpose(); // rotation only, world->light
+          const p = new THREE.Vector3();
+          let lx0 = Infinity, lx1 = -Infinity, ly0 = Infinity, ly1 = -Infinity, lz0 = Infinity, lz1 = -Infinity;
+          for (let i = 0; i < 8; i++) {
+            p.set(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z)
+              .sub(sun.position).applyMatrix4(toLight);
+            lx0 = Math.min(lx0, p.x); lx1 = Math.max(lx1, p.x);
+            ly0 = Math.min(ly0, p.y); ly1 = Math.max(ly1, p.y);
+            lz0 = Math.min(lz0, p.z); lz1 = Math.max(lz1, p.z);
+          }
+          const pad = 4;
+          sc.left = lx0 - pad; sc.right = lx1 + pad;
+          sc.bottom = ly0 - pad; sc.top = ly1 + pad;
+          sc.near = Math.max(0.5, -lz1 - pad); sc.far = -lz0 + pad;
+          sc.updateProjectionMatrix();
+        };
+        fitSunShadow();
+        window.__extFitSunShadow = fitSunShadow;
       }
       scene.add(sun);
       scene.add(sun.target);
@@ -1010,6 +1031,7 @@
         if (rx) m.rotation.x = rx;
         if (rz) m.rotation.z = rz;
         m.receiveShadow = true;
+        m.castShadow = mat.transparent !== true; // car bodies cast; glass doesn't
         g.add(m); return m;
       }
 
@@ -1041,6 +1063,7 @@
         tw.rotation.z = Math.PI/2;
         tw.position.set(wx, 0.33, wz);
         tw.receiveShadow = true;
+        tw.castShadow = true;
         g.add(tw);
         const rGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.28, 8);
         const rw = new THREE.Mesh(rGeo, rimMat);
@@ -1066,6 +1089,19 @@
       }
 
       addCollider(cx, cz, 4.4, 2.1);
+
+      // Car-alarm registry: the game (three_fps_game.js) lets the player trigger a
+      // 10 s alarm on any parked car (KeyE). It flashes these emissive materials in
+      // sync with the two-tone — emissive-only, NO real lights (light-count invariant).
+      window.__extCarAlarms = window.__extCarAlarms || [];
+      window.__extCarAlarms.push({
+        x: cx, z: cz, cooldownUntil: 0,
+        mats: [
+          { mat: lightMat,  base: lightMat.emissiveIntensity,  scale: 1 },
+          { mat: bLightMat, base: bLightMat.emissiveIntensity, scale: 1 },
+          { mat: glassMat,  base: glassMat.emissiveIntensity,  scale: 0.35 },
+        ],
+      });
     }
 
     function placeParkedCars() {

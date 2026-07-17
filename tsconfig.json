@@ -8,6 +8,27 @@
     "types": ["vite/client"],
     "noEmit": true,
     "isolatedModules": true,
-    "experimentalDecorators": true
-  }
-} 
+    "experimentalDecorators": true,
+
+    // ── Incremental JS→TS migration (Phase 1) ──────────────────────────────
+    // allowJs lets .ts and .js coexist so we can migrate one file at a time.
+    // checkJs stays OFF for now: turning it on would surface thousands of errors
+    // across the 17k-line game file at once. We migrate a file by renaming it to
+    // .ts (which opts THAT file into checking) rather than flipping a global flag.
+    "allowJs": true,
+    "checkJs": false,
+    // strict is the destination; kept off until enough of the edges are .ts that
+    // enabling it per-file (via migrated files) is the natural next step.
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "three_fps_game.ts",
+    "environment.js",
+    "exterior_map.js",
+    "modules/**/*.ts",
+    "modules/**/*.js",
+    "vite.config.ts"
+  ]
+}
+

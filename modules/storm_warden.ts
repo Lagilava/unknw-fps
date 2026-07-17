@@ -20,16 +20,94 @@
 // this project hands the dynamically-imported THREE to its helper modules), so we
 // never statically import three here — keeps a single THREE instance and avoids a
 // duplicate copy in the bundle.
-export function createStormWarden(THREE, mergeGeometries, options = {}) {
+// ── Shared procedural detail textures ─────────────────────────────────────────
+// Built once per THREE instance (cached) and reused across every Warden/Seraph/
+// Cherub material — a small canvas-drawn scratched-metal noise map used as
+// roughnessMap + bumpMap. This is what gives the armor plating micro-detail
+// (scratches, worn patches, soot blotches) instead of a single flat color/
+// roughness value, without adding any new lights or per-instance texture cost
+// (the canvas is drawn once and shared by every pooled enemy instance).
+let _sharedWardenTex = null;
+function getSharedWardenTextures(THREE) {
+  if (_sharedWardenTex) return _sharedWardenTex;
+  const size = 512; // higher-res so panel seams/rivets read cleanly up close
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  // Base: soft vertical value gradient (subtle top-lit plating read)
+  const bg = ctx.createLinearGradient(0, 0, 0, size);
+  bg.addColorStop(0, "#9c9c9c");
+  bg.addColorStop(1, "#7a7a7a");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, size, size);
+  // Brushed metal grain (long, low, near-horizontal streaks — machined plate look)
+  for (let i = 0; i < 5200; i++) {
+    const v = Math.random() * 255;
+    ctx.fillStyle = `rgba(${v},${v},${v},${0.03 + Math.random() * 0.11})`;
+    const x = Math.random() * size, y = Math.random() * size;
+    const w = 6 + Math.random() * 46, h = 1 + Math.random() * 1.8;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate((Math.random() - 0.5) * 0.22);
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+  // Panel-seam grid: darker recessed grooves so the bumpMap carves real plate edges
+  ctx.strokeStyle = "rgba(18,18,18,0.55)";
+  ctx.lineWidth = 2.4;
+  for (let gx = 72; gx < size; gx += 104) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, size); ctx.stroke(); }
+  for (let gy = 88; gy < size; gy += 128) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(size, gy); ctx.stroke(); }
+  // A brighter hairline beside each groove (raised bevel lip)
+  ctx.strokeStyle = "rgba(225,225,225,0.28)";
+  ctx.lineWidth = 1;
+  for (let gx = 74; gx < size; gx += 104) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, size); ctx.stroke(); }
+  // Rivets punched along the seams
+  for (let gx = 72; gx < size; gx += 104) {
+    for (let gy = 44; gy < size; gy += 64) {
+      ctx.fillStyle = "rgba(28,28,28,0.6)";
+      ctx.beginPath(); ctx.arc(gx, gy, 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(235,235,235,0.35)";
+      ctx.beginPath(); ctx.arc(gx - 0.8, gy - 0.8, 1.1, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // Soft wear/soot blotches (breaks up uniform flatness at a larger scale)
+  for (let i = 0; i < 46; i++) {
+    const x = Math.random() * size, y = Math.random() * size, r = 14 + Math.random() * 68;
+    const dark = Math.random() > 0.42;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, dark ? "rgba(12,12,12,0.34)" : "rgba(240,240,240,0.20)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  const detailMap = new THREE.CanvasTexture(canvas);
+  detailMap.wrapS = detailMap.wrapT = THREE.RepeatWrapping;
+  detailMap.repeat.set(2, 2);
+  detailMap.anisotropy = 4;
+  detailMap.needsUpdate = true;
+  _sharedWardenTex = { detailMap };
+  return _sharedWardenTex;
+}
+
+export function createStormWarden(THREE: any, mergeGeometries: any, options: any = {}) {
   const palette = options.palette || {};
   const DIAG = !!options.diagnostics; // when true, expose rig.gait for warden_diagnostics.mjs
   const accent = new THREE.Color(palette.accent ?? 0x4fc3ff);
   const accent2 = new THREE.Color(palette.accent2 ?? 0x66d4ff);
   const accent3 = new THREE.Color(palette.accent3 ?? 0xb266ff);
+  const { detailMap } = getSharedWardenTextures(THREE);
 
   // ── Materials (per instance) ────────────────────────────────────────────────
-  const metal = (color, rough = 0.5, metalness = 0.95) =>
-    new THREE.MeshStandardMaterial({ color, roughness: rough, metalness });
+  // roughnessMap + bumpMap add scratch/wear micro-detail on top of the flat
+  // base color so the armor reads as worn metal under the game's point lights
+  // instead of a single flat-shaded blob. envMapIntensity is nudged up slightly
+  // so the scene's HDR sky contributes a believable specular response.
+  const metal = (color, rough = 0.5, metalness = 0.95, envMul = 1.0) =>
+    new THREE.MeshStandardMaterial({
+      color, roughness: rough, metalness,
+      roughnessMap: detailMap, bumpMap: detailMap, bumpScale: 0.012,
+      envMapIntensity: 1.25 * envMul,
+    });
 
   // WebGPU-safe "energy" material: emissive, additive, untouched by tone mapping.
   const energyMats = [];
@@ -47,10 +125,12 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     return m;
   };
 
-  const matMetalDark = metal(0x2a2f3a, 0.55, 0.95);
-  const matMetalSteel = metal(0x4a5566, 0.45, 0.9);
-  const matMetalScorch = metal(0x1c1f26, 0.65, 0.85);
-  const matMetalGold = metal(0x6b5630, 0.4, 1.0);
+  // Battle-worn celestial plate: deep gunmetal base, brighter machined steel for
+  // secondary plates, scorched under-armor, and a rich ceremonial gold for trim.
+  const matMetalDark = metal(0x212734, 0.5, 0.96, 1.05);
+  const matMetalSteel = metal(0x5a6678, 0.36, 0.92, 1.15);
+  const matMetalScorch = metal(0x191316, 0.66, 0.8, 0.9);
+  const matMetalGold = metal(0xb98a3c, 0.24, 1.0, 1.4);
   const matCoreGlow = energy(accent);
   const matVeinGlow = energy(accent2);
   const matCrownGlow = energy(accent3);
@@ -58,7 +138,7 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
 
   const warden = new THREE.Group();
   warden.name = "StormWarden";
-  const rig = {};
+  const rig: Record<string, any> = {};
 
   function addMesh(parent, geo, mat, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
     const m = new THREE.Mesh(geo, mat);
@@ -78,6 +158,10 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
   rig.pelvis = pelvis;
   addMesh(pelvis, new THREE.BoxGeometry(0.5, 0.32, 0.34), matMetalDark);
   addMesh(pelvis, new THREE.CylinderGeometry(0.16, 0.2, 0.22, 8), matMetalSteel, [0, 0.18, 0]);
+  // Gold waist belt + hanging tassets to finish the silhouette below the cuirass.
+  addMesh(pelvis, new THREE.BoxGeometry(0.56, 0.07, 0.38), matMetalGold, [0, 0.1, 0]);
+  addMesh(pelvis, new THREE.BoxGeometry(0.17, 0.28, 0.14), matMetalScorch, [0.22, -0.16, 0.08], [0, 0, 0.16]);
+  addMesh(pelvis, new THREE.BoxGeometry(0.17, 0.28, 0.14), matMetalScorch, [-0.22, -0.16, 0.08], [0, 0, -0.16]);
 
   let spine = new THREE.Group();
   spine.position.y = 0.22;
@@ -89,17 +173,35 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
   spine.add(chest);
   rig.chest = chest;
 
-  addMesh(chest, new THREE.CylinderGeometry(0.3, 0.18, 0.6, 4, 1), matMetalDark, [0, 0.12, 0], [0, Math.PI / 4, 0]);
-  addMesh(chest, new THREE.ConeGeometry(0.34, 0.34, 4), matMetalSteel, [0, 0.48, 0], [0, Math.PI / 4, 0]);
-  addMesh(chest, new THREE.BoxGeometry(0.86, 0.16, 0.44), matMetalScorch, [0, -0.2, 0]);
-  addMesh(chest, new THREE.BoxGeometry(0.22, 0.46, 0.08), matMetalGold, [0, 0.46, -0.22], [0.15, 0, 0]);
+  // Cuirass — a rounded 8-sided torso shell reads as forged plate, not a flat box.
+  addMesh(chest, new THREE.CylinderGeometry(0.34, 0.24, 0.62, 8, 1), matMetalDark, [0, 0.12, 0]);
+  // Upper-chest / pectoral bevel flaring up to the collar.
+  addMesh(chest, new THREE.CylinderGeometry(0.3, 0.34, 0.2, 8, 1), matMetalSteel, [0, 0.4, 0]);
+  // Raised sternum ridge with a ceremonial gold inlay.
+  addMesh(chest, new THREE.BoxGeometry(0.1, 0.5, 0.12), matMetalSteel, [0, 0.22, 0.24], [0.06, 0, 0]);
+  addMesh(chest, new THREE.BoxGeometry(0.05, 0.5, 0.05), matMetalGold, [0, 0.24, 0.31], [0.06, 0, 0]);
+  // Collar / gorget ring at the throat.
+  addMesh(chest, new THREE.TorusGeometry(0.16, 0.03, 8, 18), matMetalGold, [0, 0.52, 0], [Math.PI / 2, 0, 0]);
+  // Segmented abdominal plates with a gold belt line.
+  addMesh(chest, new THREE.BoxGeometry(0.52, 0.12, 0.4), matMetalDark, [0, -0.14, 0.02]);
+  addMesh(chest, new THREE.BoxGeometry(0.4, 0.1, 0.36), matMetalScorch, [0, -0.26, 0.02]);
+  addMesh(chest, new THREE.BoxGeometry(0.58, 0.035, 0.42), matMetalGold, [0, -0.06, 0.02]);
 
-  // Asymmetric shoulders
-  addMesh(chest, new THREE.ConeGeometry(0.3, 0.34, 5), matMetalSteel, [-0.5, 0.38, 0], [0, 0, -Math.PI / 2.3]);
-  addMesh(chest, new THREE.TorusGeometry(0.18, 0.03, 8, 5), matMetalGold, [-0.5, 0.38, 0], [Math.PI / 2, 0, 0]);
-  addMesh(chest, new THREE.ConeGeometry(0.1, 0.34, 4), matMetalScorch, [-0.66, 0.6, 0], [0, 0, -0.35]);
-  addMesh(chest, new THREE.ConeGeometry(0.18, 0.22, 5), matMetalSteel, [0.42, 0.34, 0], [0, 0, Math.PI / 2.4]);
-  addMesh(chest, new THREE.ConeGeometry(0.06, 0.2, 4), matMetalScorch, [0.5, 0.46, 0], [0, 0, 0.5]);
+  // Layered pauldrons (decorative shoulder armor sitting over the arm pivots).
+  // Right (cannon) side is the heavier, spiked pauldron; left is a clean dome —
+  // gives the imposing asymmetric silhouette without a jumble of loose cones.
+  const pauldron = (sx, big) => {
+    const r = big ? 0.27 : 0.22;
+    addMesh(chest, new THREE.SphereGeometry(r, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), matMetalSteel, [sx * 0.5, 0.42, 0]);
+    addMesh(chest, new THREE.TorusGeometry(r * 0.92, 0.028, 8, 16, Math.PI), matMetalGold, [sx * 0.5, 0.42, 0], [Math.PI / 2, 0, 0]);
+    addMesh(chest, new THREE.SphereGeometry(r * 0.6, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55), matMetalDark, [sx * 0.5, 0.5, 0]);
+    if (big) {
+      addMesh(chest, new THREE.ConeGeometry(0.06, 0.36, 5), matMetalScorch, [sx * 0.64, 0.58, 0], [0, 0, sx * -0.4]);
+      addMesh(chest, new THREE.ConeGeometry(0.04, 0.22, 4), matMetalGold, [sx * 0.58, 0.62, 0.06], [0, 0, sx * -0.5]);
+    }
+  };
+  pauldron(-1, false);
+  pauldron(1, true);
 
   // Reactor core (energy)
   const reactorGroup = new THREE.Group();
@@ -121,10 +223,28 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
   const head = new THREE.Group();
   neck.add(head);
   rig.head = head;
-  addMesh(head, new THREE.OctahedronGeometry(0.16, 0), matMetalDark, [0, 0.08, 0], [0, 0, 0], [1, 1.3, 0.85]);
-  addMesh(head, new THREE.ConeGeometry(0.07, 0.3, 4), matMetalScorch, [0.1, 0.16, 0], [0, 0, -0.7]);
-  addMesh(head, new THREE.ConeGeometry(0.05, 0.14, 4), matMetalScorch, [-0.1, 0.16, 0], [0, 0, 0.45]);
-  rig.faceCore = addMesh(head, new THREE.SphereGeometry(0.055, 12, 12), matCoreGlow, [0, 0.07, 0.13]);
+  // Helm — a rounded skull with a knightly/celestial visor read instead of a
+  // bare octahedron. Gold brow crest gives the menacing sentinel silhouette.
+  addMesh(head, new THREE.SphereGeometry(0.16, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.8), matMetalSteel, [0, 0.1, 0], [0, 0, 0], [1, 1.12, 0.98]);
+  // Angled faceplate housing the visor.
+  addMesh(head, new THREE.BoxGeometry(0.2, 0.17, 0.09), matMetalDark, [0, 0.08, 0.09], [0.18, 0, 0]);
+  // Gold brow crest sweeping back over the crown.
+  addMesh(head, new THREE.BoxGeometry(0.05, 0.05, 0.24), matMetalGold, [0, 0.24, -0.01], [-0.2, 0, 0]);
+  addMesh(head, new THREE.ConeGeometry(0.045, 0.16, 4), matMetalGold, [0, 0.26, -0.14], [-1.35, 0, 0]);
+  // Cheek fins framing the face.
+  addMesh(head, new THREE.ConeGeometry(0.03, 0.17, 4), matMetalScorch, [0.11, 0.05, 0.02], [0, 0, -0.5]);
+  addMesh(head, new THREE.ConeGeometry(0.03, 0.17, 4), matMetalScorch, [-0.11, 0.05, 0.02], [0, 0, 0.5]);
+  // Visor slit — the glowing eye band recessed into the faceplate.
+  rig.faceCore = addMesh(head, new THREE.BoxGeometry(0.15, 0.028, 0.02), matCoreGlow, [0, 0.09, 0.16], [0.18, 0, 0]);
+  // Visor slit gets its own cloned energy material so it can quick-pulse on
+  // attacks independently of the bulk glow pass (clone at rig-build time only —
+  // same MeshBasicMaterial program, no new shaders).
+  const matVisor = matCoreGlow.clone();
+  matVisor.userData.baseColor = accent.clone();
+  matVisor.userData.isVisor = true;
+  allMaterials.push(matVisor);
+  energyMats.push(matVisor);
+  rig.faceCore.material = matVisor;
 
   const crown = new THREE.Group();
   crown.position.set(0.04, 0.34, -0.02);
@@ -151,6 +271,8 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     const upperArm = new THREE.Group();
     shoulderPivot.add(upperArm);
     addMesh(upperArm, new THREE.CylinderGeometry(0.1 * scale, 0.09 * scale, 0.42 * length, 8), matMetalSteel, [0, -0.21 * length, 0]);
+    // Rounded shoulder cap plate seating the arm into the pauldron.
+    addMesh(upperArm, new THREE.SphereGeometry(0.12 * scale, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), matMetalDark, [0, 0.0, 0]);
     addMesh(upperArm, new THREE.BoxGeometry(0.16 * scale, 0.12 * scale, 0.16 * scale), matMetalDark, [0, -0.02, 0]);
     addMesh(upperArm, new THREE.CylinderGeometry(0.022, 0.022, 0.4 * length, 6), matVeinGlow, [0.07 * scale, -0.21 * length, 0.06]);
 
@@ -161,6 +283,9 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     const forearm = new THREE.Group();
     elbowPivot.add(forearm);
     addMesh(forearm, new THREE.CylinderGeometry(0.085 * scale, 0.075 * scale, 0.4 * length, 8), matMetalSteel, [0, -0.2 * length, 0]);
+    // Armored vambrace plate with a gold cuff.
+    addMesh(forearm, new THREE.BoxGeometry(0.16 * scale, 0.3 * length, 0.14 * scale), matMetalDark, [0, -0.2 * length, 0.012]);
+    addMesh(forearm, new THREE.BoxGeometry(0.17 * scale, 0.035, 0.15 * scale), matMetalGold, [0, -0.34 * length, 0.012]);
     addMesh(forearm, new THREE.CylinderGeometry(0.02, 0.02, 0.38 * length, 6), matVeinGlow, [0.065 * scale, -0.2 * length, 0.05]);
 
     if (isCannon) {
@@ -288,7 +413,7 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
 
   // Energy/VFX parts animate beyond their parent bone, so keep them OUT of the
   // baked skin (left as live bone-attached children).
-  const excludeFromSkin = new Set([rig.reactorCore]);
+  const excludeFromSkin = new Set([rig.reactorCore, rig.faceCore]);
   if (rig.muzzle) excludeFromSkin.add(rig.muzzle);
   rig.crownShards.forEach((s) => excludeFromSkin.add(s));
   backRig.traverse((o) => { if (o.isMesh) excludeFromSkin.add(o); });
@@ -340,7 +465,7 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
       offset += count;
     });
     const skinnedMesh = new THREE.SkinnedMesh(merged, uniqueMaterials);
-    skinnedMesh.castShadow = false;
+    skinnedMesh.castShadow = true; // per-frame shadow map: Warden casts a sun shadow
     skinnedMesh.receiveShadow = false;
     skinnedMesh.frustumCulled = false;
     skinnedMesh.name = "StormWardenBody";
@@ -460,15 +585,47 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
   let rageBlend = 0;
   const rageColor = new THREE.Color(palette.rage ?? 0xffb8ff);
 
+  // ── Per-instance desync seeds (zombie-organic pattern) ──────────────────────
+  // Random phase offsets + detuned frequencies so several angels on screen never
+  // move in unison. Reseeded on pool recycle via setDead(false).
+  const seed: Record<string, any> = {};
+  function reseed() {
+    seed.f1 = 0.85 + Math.random() * 0.3;
+    seed.f2 = 0.85 + Math.random() * 0.3;
+    seed.f3 = 0.85 + Math.random() * 0.3;
+    seed.p1 = Math.random() * Math.PI * 2;
+    seed.p2 = Math.random() * Math.PI * 2;
+    seed.p3 = Math.random() * Math.PI * 2;
+    seed.tw = 0.6 + Math.random() * 1.2;  // Seraph head-twitch cadence
+    seed.fr = 2.2 + Math.random() * 2.6;  // Cherub freeze cadence
+    hoverPhase = Math.random() * Math.PI * 2;
+  }
+
+  // ── Expressive-motion state (all springs/damps — never accumulated into
+  //    transforms; offsets are recomputed from base poses every frame) ─────────
+  let headYaw = 0;                      // smoothed head look offset (all variants)
+  let twitchTimer = 0.8, twitchYaw = 0; // Seraph: sudden head snaps
+  let freezeTimer = 3, freezeHold = 0, freezeTilt = 0, bobGate = 1; // Cherub freeze-then-tilt
+  let prevSpeedNorm = 0, overshoot = 0, overshootVel = 0; // Seraph stop-overshoot spring
+  let flinch = 0, flinchVel = 0, prevHitFlash = 0, flinchSide = 1; // hit reaction spring
+  let crownWobble = 0, crownWobbleVel = 0, prevTurn = 0; // halo wobble on hard turns
+  let rodLagPitch = 0;                  // back-rig rods lag the body pitch (delayed follow)
+  let shardFlare = 0;                   // Warden crown shards flare when aggroed
+  let barrageBlend = 0;                 // Warden Rolling Barrage stance
+  let channelBlend = 0;                 // Cherub Sanctuary Collapse channel stance
+  let empFlash = 0, prevEmpT = 0;       // Cherub Null Field EMP release pop
+  let blinkCrouch = 0, arrivalWhip = 0, prevPhaseOut = 0; // Seraph blink coil + arrival whip
+  reseed();
+
   // Separable parts, captured on first update (after the skeleton settles into bind).
   // Each stores its base local transform + a scatter direction/amplitude + a tumble.
   let _captured = false;
   const sepParts = [];
   function captureParts() {
-    const add = (obj, dir, amp, spin) => {
+    const add = (obj, dir, amp, spin, isShard?) => {
       if (!obj) return;
       sepParts.push({
-        obj, isCrown: obj === rig.crown,
+        obj, isCrown: obj === rig.crown, isShard: !!isShard,
         bx: obj.position.x, by: obj.position.y, bz: obj.position.z,
         rx: obj.rotation.x, ry: obj.rotation.y, rz: obj.rotation.z,
         dx: dir[0], dy: dir[1], dz: dir[2], amp,
@@ -482,7 +639,7 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     rig.rods.forEach((r, i) => add(r.group, [(i - 2) * 0.5, 0.45, -0.8], 0.5, [0.7, 0.3, (i - 2) * 0.4]));
     rig.crownShards.forEach((s, i) => {
       const a = i * 1.7;
-      add(s, [Math.cos(a), 0.5, Math.sin(a)], 0.6, [0.8, 0.8, 0.8]);
+      add(s, [Math.cos(a), 0.5, Math.sin(a)], 0.6, [0.8, 0.8, 0.8], true);
     });
     _captured = true;
   }
@@ -518,8 +675,40 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     const visualSpeed = enemyRef?.visualSpeed || 0;
     const hpRatio     = (enemyRef && enemyRef.maxHp > 0) ? clamp01(enemyRef.hp / enemyRef.maxHp) : 1;
 
+    // Variant identity (all three angels share this rig factory).
+    const tn = enemyRef?.typeName;
+    const isSeraph = tn === "Blink Seraph";
+    const isCherub = tn === "Null Cherub";
+
     if (!alive && !dead) { dead = true; deadTime = 0; }
     if (dead) { _updateDead(dt); return; }
+
+    // ── Ability stance blends (anticipation → release, keyed off existing AI
+    //    timings; no AI/ability logic changed here) ───────────────────────────
+    barrageBlend = damp(barrageBlend, enemyRef?.barrageActive === true ? 1 : 0, 5, dt);
+    channelBlend = damp(channelBlend, (enemyRef?.megaBlastTimer || 0) > 0 ? 1 : 0, 7, dt);
+    const empT = enemyRef?.empWindUp || 0;
+    const empCharge = empT > 0 ? clamp01(1 - empT / 0.6) : 0; // parts contract as EMP charges
+    if (prevEmpT > 0 && empT <= 0) empFlash = 1;              // release pop on detonation
+    prevEmpT = empT;
+    empFlash = damp(empFlash, 0, 8, dt);
+
+    // ── Hit reaction: underdamped flinch spring driven by enemyRef.hitFlash ──
+    const hitFlash = enemyRef?.hitFlash || 0;
+    if (hitFlash > prevHitFlash + 0.04) {
+      flinchVel += 5 + hitFlash * 7;   // impulse; spring below snaps then settles
+      flinchSide = -flinchSide;        // alternate jerk direction per hit
+      crownWobbleVel += flinchSide * 2.2; // halo kicked by the impact too
+    }
+    prevHitFlash = hitFlash;
+    flinchVel += (-flinch * 110 - flinchVel * 12) * dt;
+    flinch += flinchVel * dt;
+
+    // ── Halo wobble on hard direction changes (spring on turn-rate delta) ────
+    crownWobbleVel += (visualTurn - prevTurn) * 2.4;
+    prevTurn = visualTurn;
+    crownWobbleVel += (-crownWobble * 90 - crownWobbleVel * 7) * dt;
+    crownWobble += crownWobbleVel * dt;
 
     // ── Charge / fire ───────────────────────────────────────────────────────
     attackWindUp = damp(attackWindUp, Math.max(atkPulse, windUpProgress), isAttacking ? 10 : 4.5, dt);
@@ -541,10 +730,67 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     separation = damp(separation, sepTarget, sepTarget > separation ? (phaseOut > 0 ? 14 : 5) : 9, dt);
     applySeparation(separation, elapsed * 2.4);
 
-    // ── Hover float ─────────────────────────────────────────────────────────
-    hoverPhase += dt * 1.2;
-    const bob = Math.sin(hoverPhase) * 0.10 + Math.cos(hoverPhase * 1.9 + 0.7) * 0.04;
-    warden.position.y = baseY + HOVER_BASE + bob + charge * 0.35 + separation * 0.18;
+    // Seraph Blink Strike: coil/compress into the phase-out, whip on arrival.
+    blinkCrouch = damp(blinkCrouch, phaseOut, 16, dt);
+    if (prevPhaseOut > 0.5 && phaseOut <= 0.01) arrivalWhip = 1; // reassembled — snap
+    prevPhaseOut = phaseOut;
+    arrivalWhip = damp(arrivalWhip, 0, 6, dt);
+
+    // ── Post-separation part offsets (applySeparation just reset every part to
+    //    its base pose, so these are pure per-frame offsets — never accumulate) ─
+    // Cherub: parts contract inward while channeling Sanctuary Collapse or
+    // charging the EMP, then pop outward on the EMP release.
+    const contract = Math.max(channelBlend * 0.45, empCharge * 0.75);
+    if (contract > 0.01 || empFlash > 0.01) {
+      const k = -contract * 0.3 + empFlash * 0.5;
+      for (const p of sepParts) {
+        p.obj.position.x += p.dx * p.amp * k;
+        p.obj.position.y += p.dy * p.amp * k;
+        p.obj.position.z += p.dz * p.amp * k;
+      }
+    }
+    // Warden: crown shards flare outward on aggro, charge INWARD during the
+    // Judgment Lance wind-up, then blast out with the shot (anticipation-snap).
+    shardFlare = damp(shardFlare, enemyRef?.aggroed ? 1 : 0, 3, dt);
+    const shardK = shardFlare * 0.10 - smootherStep(attackWindUp) * 0.16 + attackFireFlash * 0.22;
+    if (Math.abs(shardK) > 0.005) {
+      for (const p of sepParts) {
+        if (!p.isShard) continue;
+        p.obj.position.x += p.dx * shardK;
+        p.obj.position.y += p.dy * shardK;
+        p.obj.position.z += p.dz * shardK;
+      }
+    }
+
+    // ── Hover float — per-variant personality + per-instance desync ──────────
+    hoverPhase += dt * (isSeraph ? 1.7 : 1.2) * seed.f1;
+    let bob;
+    if (isCherub) {
+      // Erratic: multiple detuned sines, gated by the freeze-then-tilt beat.
+      freezeTimer -= dt;
+      if (freezeHold > 0) {
+        freezeHold -= dt;
+        bobGate = damp(bobGate, 0, 18, dt);            // sudden freeze
+        if (freezeHold <= 0) { freezeTimer = seed.fr + Math.random() * 2.5; freezeTilt = 0; }
+      } else {
+        bobGate = damp(bobGate, 1, 3, dt);             // slow resume
+        if (freezeTimer <= 0) {
+          freezeHold = 0.30 + Math.random() * 0.35;
+          freezeTilt = (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.25);
+        }
+      }
+      bob = (Math.sin(hoverPhase * 0.9 + seed.p1) * 0.07
+           + Math.sin(hoverPhase * 1.63 * seed.f2 + seed.p2) * 0.05
+           + Math.sin(hoverPhase * 2.71 + seed.p3) * 0.03) * bobGate;
+    } else {
+      bobGate = 1;
+      bob = Math.sin(hoverPhase + seed.p1) * 0.10 + Math.cos(hoverPhase * 1.9 + 0.7 + seed.p2) * 0.04;
+    }
+    warden.position.y = baseY + HOVER_BASE + bob + charge * 0.35 + separation * 0.18
+      + barrageBlend * 0.22           // Warden rises calling the barrage line
+      - blinkCrouch * 0.26            // Seraph compresses into the blink
+      + channelBlend * 0.10           // Cherub lifts slightly while channeling
+      - empCharge * 0.14;             // ...but hunkers as the EMP compresses
 
     // ── AI-phase pose weights ───────────────────────────────────────────────
     // The game's warden brain publishes enemyRef.aiPhase (hunt/advance/anchor/
@@ -563,13 +809,34 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     }
     latBank = damp(latBank, latNorm * 0.34, 5, dt);
 
+    // ── Seraph: overshoot when it stops hard (afterimage-y follow-through) ───
+    const decel = prevSpeedNorm - speedNorm;
+    prevSpeedNorm = speedNorm;
+    if (isSeraph && decel > 0.045) overshootVel += decel * 14;
+    overshootVel += (-overshoot * 130 - overshootVel * 9) * dt;
+    overshoot += overshootVel * dt;
+
     // ── Dive tilt + bank + idle sway ────────────────────────────────────────
-    bodyPitch = damp(bodyPitch, -separation * 0.5 - speedNorm * 0.12 - poseRush * 0.16 + poseAnchor * 0.06, 4, dt);
+    // Anticipation: Warden rears back through the lance wind-up (charge term),
+    // Cherub bows forward into its channel.
+    bodyPitch = damp(bodyPitch, -separation * 0.5 - speedNorm * 0.12 - poseRush * 0.16 + poseAnchor * 0.06
+      + charge * 0.20 - channelBlend * 0.12, 4, dt);
     bodyBank  = damp(bodyBank, clamp(visualTurn * -0.22, -0.5, 0.5), 6, dt);
-    rig.spine.rotation.x = bodyPitch;
-    rig.chest.rotation.z = bodyBank + latBank;
-    rig.spine.rotation.y = Math.sin(elapsed * 0.3) * 0.045 * (1 - separation)
-      + poseRecover * Math.sin(elapsed * 1.7) * 0.12; // recover: loose scanning sway
+    // Release + follow-through: forward snap on fire, whip on blink arrival,
+    // overshoot spring on hard stops. All decay back through their own damps.
+    rig.spine.rotation.x = bodyPitch - attackFireFlash * 0.45 - arrivalWhip * 0.3 - overshoot * 0.5;
+    // Seraph cants harder into its strafes (extra bank from lateral velocity).
+    rig.chest.rotation.z = bodyBank + latBank * (isSeraph ? 2.0 : 1.0) + flinch * 0.05 * flinchSide;
+    rig.chest.rotation.x = flinch * 0.09 - channelBlend * 0.15 + empCharge * 0.12;
+    // Seraph: constant fast micro-adjustments; others hold steady.
+    rig.chest.rotation.y = isSeraph
+      ? (Math.sin(elapsed * 9.3 * seed.f1) + Math.sin(elapsed * 13.7 + seed.p1)) * 0.012
+      : 0;
+    // Warden idle sway is slower + weightier; per-instance detuned everywhere.
+    const swayAmp = isSeraph ? 0.03 : isCherub ? 0.04 : 0.06;
+    const swaySpd = isSeraph ? 0.55 : isCherub ? 0.24 : 0.3;
+    rig.spine.rotation.y = Math.sin(elapsed * swaySpd * seed.f2 + seed.p2) * swayAmp * (1 - separation)
+      + poseRecover * Math.sin(elapsed * 1.7 * seed.f3 + seed.p3) * 0.12; // recover: loose scanning sway
 
     // ── Arm aim + locomotion arm posture ────────────────────────────────────
     // (Shoulders/head/rods are reset by applySeparation each frame, so these
@@ -580,14 +847,52 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     // Rush: arms trail behind like swept wings; anchor: squared-up stance.
     if (rig.shoulderL) { rig.shoulderL.rotation.x += poseRush * 0.55 - poseAnchor * 0.12; rig.shoulderL.rotation.z += poseRush * 0.34; }
     if (rig.shoulderR) { rig.shoulderR.rotation.x += poseRush * 0.5  - poseAnchor * 0.08; rig.shoulderR.rotation.z -= poseRush * 0.34; }
+    // ── Per-variant head + shoulder personality (additive after the
+    //    applySeparation reset, so nothing accumulates) ───────────────────────
+    if (isSeraph) {
+      // Quick, twitchy, alert: sudden head snaps toward new bearings.
+      twitchTimer -= dt;
+      if (twitchTimer <= 0) {
+        twitchTimer = seed.tw * (0.5 + Math.random());
+        twitchYaw = (Math.random() - 0.5) * 0.9;
+      }
+      headYaw = damp(headYaw, twitchYaw + clamp(visualTurn * 0.6, -0.4, 0.4), 16, dt); // snap-fast
+    } else if (isCherub) {
+      // Slow creepy observation drift + the freeze-tilt.
+      headYaw = damp(headYaw, Math.sin(elapsed * 0.31 * seed.f3 + seed.p3) * 0.3, 2.2, dt);
+    } else {
+      // Warden: head/visor leads its turns (deliberate hunter tracking).
+      headYaw = damp(headYaw, clamp(visualTurn * 0.9, -0.55, 0.55), 6, dt);
+    }
+    if (rig.head) {
+      rig.head.rotation.y += headYaw;
+      rig.head.rotation.z += flinch * 0.06 * flinchSide
+        + (isCherub ? Math.sin(elapsed * 0.23 * seed.f2 + seed.p2) * 0.16 + freezeTilt * (1 - bobGate) : 0);
+      rig.head.rotation.x += flinch * -0.08 - channelBlend * 0.25;
+    }
+    // Warden: shoulders counter-rotate against the sway as it moves (weighty gait).
+    if (!isSeraph && !isCherub) {
+      const cnt = Math.sin(elapsed * 0.9 * seed.f2 + seed.p2) * 0.05 * (0.4 + speedNorm * 0.6);
+      if (rig.shoulderL) rig.shoulderL.rotation.y += cnt;
+      if (rig.shoulderR) rig.shoulderR.rotation.y -= cnt;
+    }
+    // Cherub: arms rise into the channel/EMP charge, thrown wide on EMP release.
+    if (channelBlend > 0.01 || empCharge > 0.01 || empFlash > 0.01) {
+      if (rig.shoulderL) { rig.shoulderL.rotation.x -= channelBlend * 1.15 + empCharge * 0.5; rig.shoulderL.rotation.z += empFlash * 0.5; }
+      if (rig.shoulderR) { rig.shoulderR.rotation.x -= channelBlend * 1.05 + empCharge * 0.5; rig.shoulderR.rotation.z -= empFlash * 0.5; }
+    }
     // Head: tucks into the dive at rush speed, lifts to sight the target on anchor.
     if (rig.head) rig.head.rotation.x += poseRush * 0.26 - poseAnchor * 0.12;
-    // Rod fan: folds flat backwards in the rush, flares wide open while charging.
-    const fanOpen = poseAnchor * (0.45 + charge * 0.8) - poseRush * 0.5;
+    // Rod fan: folds flat backwards in the rush, flares wide open while charging;
+    // Rolling Barrage flares it even wider and lifts it (calling down the line).
+    // The whole fan also LAGS the body pitch (delayed-follow secondary motion).
+    rodLagPitch = damp(rodLagPitch, bodyPitch, 7, dt);
+    const rodLag = (rodLagPitch - bodyPitch) * 1.6;
+    const fanOpen = poseAnchor * (0.45 + charge * 0.8) - poseRush * 0.5 + barrageBlend * 0.55 + channelBlend * 0.4;
     for (let ri = 0; ri < rig.rods.length; ri++) {
       const rod = rig.rods[ri];
       rod.group.rotation.z += ((ri - 2) / 2) * fanOpen * 0.5; // spread outward from the centre rod
-      rod.group.rotation.x += -poseRush * 0.65 + poseAnchor * 0.1; // sweep back / present forward
+      rod.group.rotation.x += -poseRush * 0.65 + poseAnchor * 0.1 - barrageBlend * 0.35 + rodLag; // sweep back / present / lift
     }
 
     // ── Reactor / face core / crown spin ────────────────────────────────────
@@ -595,12 +900,18 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
     if (rig.reactorCore) rig.reactorCore.scale.setScalar(Math.max(0.1, 1 + Math.sin(reactorPulsePhase) * 0.13 + charge * 0.7 + attackFireFlash * 1.6));
     if (rig.faceCore)    rig.faceCore.scale.setScalar(1 + charge * 0.7 + attackFireFlash * 2.2);
     crownSpin += (0.6 + charge * charge * 7 + separation * 5 + attackFireFlash * 14 + rageBlend * 6) * dt;
-    if (rig.crown) rig.crown.rotation.y = crownSpin; // override the separation Y term
+    if (rig.crown) {
+      rig.crown.rotation.y = crownSpin; // override the separation Y term
+      rig.crown.rotation.z += crownWobble; // halo wobble on hard turns / hits
+    }
 
     // ── Energy glow ─────────────────────────────────────────────────────────
     const glow = clamp01(0.5 + 0.4 * Math.sin(reactorPulsePhase) + charge * 0.6 + attackFireFlash * 0.5);
-    energyMats.forEach((m) => { if (!m.userData.isRodTip) m.opacity = damp(m.opacity, glow, 10, dt); });
+    energyMats.forEach((m) => { if (!m.userData.isRodTip && !m.userData.isVisor) m.opacity = damp(m.opacity, glow, 10, dt); });
     rig.rods.forEach((r) => { if (r.tipMat) r.tipMat.opacity = damp(r.tipMat.opacity, glow, 10, dt); });
+    // Visor slit: quick-pulses on attacks/EMP (fast attack, slower settle).
+    const visorTarget = clamp01(0.55 + charge * 0.5 + attackFireFlash * 1.4 + empFlash * 1.2 + Math.abs(flinch) * 0.3);
+    matVisor.opacity = damp(matVisor.opacity, visorTarget, (attackFireFlash > 0.3 || empFlash > 0.3) ? 30 : 8, dt);
 
     // ── Arc electricity between rod tips (matches the lightning aesthetic) ───
     const arcIntensity = clamp01(smoothstep(clamp01((attackWindUp - 0.25) / 0.75)) * 0.85 + rageBlend * 0.5 + attackFireFlash * 0.6);
@@ -655,11 +966,18 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
       rig.reactorCore.scale.setScalar(Math.max(0, rs));
     }
     if (rig.faceCore) rig.faceCore.scale.setScalar(Math.max(0, 1 - t * 1.5));
-    // all parts blast outward and tumble
-    for (const p of sepParts) {
-      const o = (0.4 + blast * 1.8) * p.amp;
-      p.obj.position.set(p.bx + p.dx * o, p.by + p.dy * o, p.bz + p.dz * o);
-      p.obj.rotation.set(p.rx + p.sx * blast * 5, p.ry + p.sy * blast * 5, p.rz + p.sz * blast * 5);
+    // all parts blast outward and tumble — each part on a slightly staggered,
+    // eased timeline (reads as a collapse rippling through the body, not one
+    // uniform pop). Stagger is derived from the part's base position (stable,
+    // no per-frame allocation or randomness).
+    for (let pi = 0; pi < sepParts.length; pi++) {
+      const p = sepParts[pi];
+      const stag = (pi % 5) * 0.05;
+      const pb = smootherStep(clamp01((deadTime - stag) / 1.4));
+      const o = (0.4 + pb * 1.8) * p.amp;
+      const sag = pb * pb * 0.55; // parts sink as they die (gravity read)
+      p.obj.position.set(p.bx + p.dx * o, p.by + p.dy * o - sag, p.bz + p.dz * o);
+      p.obj.rotation.set(p.rx + p.sx * pb * 5, p.ry + p.sy * pb * 5, p.rz + p.sz * pb * 5);
     }
     if (baseY !== null) warden.position.y = damp(warden.position.y, baseY + HOVER_BASE - blast * 0.7, 3, dt);
     energyMats.forEach((m) => { m.opacity = damp(m.opacity, Math.max(0, 1 - t * 1.3), 8, dt); });
@@ -673,6 +991,16 @@ export function createStormWarden(THREE, mergeGeometries, options = {}) {
       deadTime = 0; separation = 0; attackWindUp = 0; attackFireFlash = 0;
       bodyPitch = 0; bodyBank = 0; ringPulseOpacity = 0; rageBlend = 0; crownSpin = 0;
       poseRush = 0; poseAnchor = 0; poseRecover = 0; latBank = 0;
+      // Expressive-motion state + fresh per-instance desync seeds (pool recycle).
+      headYaw = 0; twitchTimer = 0.8; twitchYaw = 0;
+      freezeTimer = 3; freezeHold = 0; freezeTilt = 0; bobGate = 1;
+      prevSpeedNorm = 0; overshoot = 0; overshootVel = 0;
+      flinch = 0; flinchVel = 0; prevHitFlash = 0; flinchSide = 1;
+      crownWobble = 0; crownWobbleVel = 0; prevTurn = 0;
+      rodLagPitch = 0; shardFlare = 0;
+      barrageBlend = 0; channelBlend = 0; empFlash = 0; prevEmpT = 0;
+      blinkCrouch = 0; arrivalWhip = 0; prevPhaseOut = 0;
+      reseed();
       if (baseY !== null) warden.position.y = baseY + HOVER_BASE;
       for (const p of sepParts) { p.obj.position.set(p.bx, p.by, p.bz); p.obj.rotation.set(p.rx, p.ry, p.rz); }
       energyMats.forEach((m) => { if (m.userData.baseColor) m.color.copy(m.userData.baseColor); });

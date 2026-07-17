@@ -1,17 +1,24 @@
+// THREE / GLTF parser are supplied by the game's dynamic Three import, so they're
+// typed loosely here (any) — this custom glTF extension pokes at internal parser
+// state that @types/three doesn't model. Tighten if/when the loaders are typed.
 class GLTFMaterialsPbrSpecularGlossinessExtension {
-  constructor(parser, THREE) {
+  parser: any;
+  THREE: any;
+  name: string;
+
+  constructor(parser: any, THREE: any) {
     this.parser = parser;
     this.THREE = THREE;
     this.name = "KHR_materials_pbrSpecularGlossiness";
   }
 
-  getMaterialType(materialIndex) {
+  getMaterialType(materialIndex: number) {
     const materialDef = this.parser.json.materials?.[materialIndex];
     if (!materialDef?.extensions?.[this.name]) return null;
     return this.THREE.MeshPhysicalMaterial;
   }
 
-  extendMaterialParams(materialIndex, materialParams) {
+  extendMaterialParams(materialIndex: number, materialParams: any) {
     const THREE = this.THREE;
     const materialDef = this.parser.json.materials?.[materialIndex];
     const extension = materialDef?.extensions?.[this.name];
@@ -34,7 +41,7 @@ class GLTFMaterialsPbrSpecularGlossinessExtension {
       materialParams.roughness = 1 - extension.glossinessFactor;
     }
 
-    const pending = [];
+    const pending: Promise<unknown>[] = [];
 
     if (extension.diffuseTexture) {
       pending.push(this.parser.assignTexture(materialParams, "map", extension.diffuseTexture, THREE.SRGBColorSpace));
@@ -44,8 +51,8 @@ class GLTFMaterialsPbrSpecularGlossinessExtension {
   }
 }
 
-export function createGLTFLoader(THREE, GLTFLoader) {
+export function createGLTFLoader(THREE: any, GLTFLoader: any) {
   const loader = new GLTFLoader();
-  loader.register(parser => new GLTFMaterialsPbrSpecularGlossinessExtension(parser, THREE));
+  loader.register((parser: any) => new GLTFMaterialsPbrSpecularGlossinessExtension(parser, THREE));
   return loader;
 }

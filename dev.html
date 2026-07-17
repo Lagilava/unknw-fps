@@ -156,6 +156,9 @@ const GUN_FIELDS = {
   reloadTime: ["n", 0.1, 5, 0.01], adsFov: ["n", 5, 120, 0.5], adsInSpeed: ["n", 1, 30, 0.1],
   adsOutSpeed: ["n", 1, 30, 0.1], adsMovePenalty: ["n", 0, 1, 0.01], damage: ["n", 0, 500, 0.1],
   pellets: ["i", 1, 40], spread: ["n", 0, 0.4, 0.001],
+  moveSpeedMul: ["n", 0.3, 2, 0.01], swayMul: ["n", 0, 4, 0.05], shakeMul: ["n", 0, 4, 0.05],
+  driftMul: ["n", 0, 4, 0.05], bloomGrow: ["n", 0, 0.1, 0.001], bloomMax: ["n", 0, 0.3, 0.001],
+  bloomDecay: ["n", 0, 2, 0.01],
   recoilKick: ["n", 0, 200, 1], recoilYaw: ["n", 0, 300, 1], recoilRoll: ["n", 0, 300, 1],
 };
 const ENEMY_FIELDS = {
@@ -170,7 +173,7 @@ const FIELDS = {
     staminaDrain: ["n", 0, 200, 1], staminaRegen: ["n", 0, 200, 1],
     jumpVelocity: ["n", 0, 20, 0.05], jumpGravity: ["n", 1, 40, 0.1], maxJumpOffset: ["n", 0, 5, 0.01],
     unlimitedHealth: ["b"], unlimitedSprint: ["b"], unlimitedAmmo: ["b"],
-    startingWeapon: ["s", ["rifle", "shotgun", "sniper"]],
+    startingWeapon: ["s", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "railgun", "flak"]],
   },
   camera: {
     fpWalkFov: ["n", 30, 140, 0.5], fpSprintFov: ["n", 30, 160, 0.5], tpWalkFov: ["n", 30, 140, 0.5],
@@ -470,7 +473,7 @@ function renderSection(cat) {
   if (cat === "presets") return renderPresets();
   if (cat === "map") return renderMap();
   if (cat === "spawn") return renderSpawn();
-  if (cat === "weapons") return renderGrouped("weapons", ["rifle", "shotgun", "sniper"], GUN_FIELDS, (g) => g.toUpperCase());
+  if (cat === "weapons") return renderGrouped("weapons", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "railgun", "flak"], GUN_FIELDS, (g) => g.toUpperCase());
   if (cat === "enemies") return renderGrouped("enemies", Object.keys(DE.DEFAULTS.enemies), ENEMY_FIELDS, (g) => g);
   return renderFlat(cat);
 }

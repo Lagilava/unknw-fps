@@ -73,10 +73,14 @@ Three.js is imported as an ES module inside `three_fps_game.js` (Vite bare impor
   Warden = Judgment Lance / Rolling Barrage / knockback Bulwark; Seraph = Blink Strike
   (phase-out → flank arrival) / Afterimage Feint; Cherub = Sanctuary Collapse (shrinking
   safe ring) / Null Field EMP (disables sprint+reload via `player.nullLockTimer`).
-- **Exterior interactables** (all reuse the Pack-a-Punch prompt pattern; unified through
-  `tryInteract()` on KeyE): wall-buy weapon crates (±10,140), 3-tier perk machine (0,178:
-  Overcharge/Vitality/Aegis via `player.perkDamageMul/maxHp/perkDamageResist`), horde
-  beacon (0,212 — host-only in coop). Currency = `player.xp`.
+- **Exterior interactables** (Pack-a-Punch prompt pattern; unified through
+  `tryInteract()` on KeyE): the landmark STATUE (0,175) is the 3-tier perk machine
+  (Overcharge/Vitality/Aegis via `player.perkDamageMul/maxHp/perkDamageResist`;
+  anchored in `loadWorldLandmarks`, emissive-only pulse when purchasable), and
+  parked-car ALARMS (`window.__extCarAlarms`, 10 s two-tone WebAudio alarm +
+  emissive flash, 30 s per-car cooldown, host-only in coop; enemies steer to the
+  global `soundLure` while ringing). Wall-buy crates + horde beacon were removed.
+  Currency = `player.xp`. Owned perks show on a JS-created `#perk-row` HUD strip.
 - **Signature colour grade**: fixed, non-player-adjustable canvas filter + `#grade-overlay`
   vignette (`applyCinematicSettings` non-cinematic branch). Minimap is cyan/steel.
 - **Rebrand**: user-facing name is UNKNW; `window.RoomBreachEnvironment` and internal

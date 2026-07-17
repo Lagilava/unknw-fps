@@ -226,21 +226,64 @@
     animation: streakPulse 0.3s ease-out;
   }
   #pack-prompt {
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    color: var(--accent-hot);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    padding: 5px 12px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--text-hi);
+    font-weight: 700;
+    background: rgba(9,15,22,0.85);
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    padding: 5px 16px 5px 5px;
     opacity: 0;
-    transform: translateY(-4px);
-    transition: opacity 0.12s, transform 0.12s;
+    transform: translateY(-4px) scale(0.92);
+    transition: opacity 0.15s, transform 0.15s;
     text-transform: uppercase;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(34,211,238,0.14);
   }
   #pack-prompt.active {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
+  }
+  #pack-prompt.pop { animation: promptPop 0.3s cubic-bezier(0.22,1.5,0.4,1); }
+  @keyframes promptPop {
+    0%   { transform: scale(0.82); }
+    55%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
+  }
+  #pack-prompt-key {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 20px; height: 20px;
+    flex-shrink: 0;
+    border-radius: 5px;
+    background: linear-gradient(180deg, var(--accent-hot), var(--accent));
+    color: #04121a;
+    font-weight: 900;
+    font-size: 11px;
+    box-shadow: 0 0 10px rgba(34,211,238,0.7), inset 0 -2px 0 rgba(0,0,0,0.25);
+    animation: promptKeyBounce 1.6s ease-in-out infinite;
+  }
+  #pack-prompt.has-key #pack-prompt-key { display: inline-flex; }
+  @keyframes promptKeyBounce {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-2px); }
+  }
+  #pack-prompt-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.3;
+  }
+  #pack-prompt-cost {
+    font-size: 9px;
+    color: var(--accent-hot);
+    opacity: 0.85;
+    letter-spacing: 0.14em;
   }
   @keyframes streakPulse {
     0%   { transform: scale(1.28); }
@@ -248,19 +291,18 @@
   }
 
   /* ── Minimap ── */
+  /* GTA-style circular radar — the canvas draws its own rim ring/vignette;
+     CSS just rounds the hit-area and adds the drop glow. */
   #minimap-canvas {
     position: absolute;
     top: 16px; right: 16px;
-    width: 188px; height: 250px;
-    border: 1px solid var(--line);
-    border-top: 2px solid var(--accent-dim);
-    border-radius: 2px;
+    width: 200px; height: 200px;
+    border-radius: 50%;
     opacity: 0.96;
-    background: rgba(5,4,3,0.96);
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.90),
-                0 18px 38px rgba(0,0,0,0.55),
-                inset 0 0 28px rgba(34,211,238,0.06);
-    image-rendering: pixelated;
+    background: transparent;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.55),
+                0 14px 32px rgba(0,0,0,0.50),
+                0 0 22px rgba(34,211,238,0.10);
   }
 
   /* ── Bottom HUD bar ── */
@@ -317,13 +359,15 @@
     letter-spacing: 0.02em;
   }
   #weapon-val {
-    font-size: 10px;
-    letter-spacing: 0.20em;
-    color: var(--accent-dim);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--text-hi);
     text-transform: uppercase;
-    margin-bottom: 3px;
-    max-width: 230px;
+    margin-bottom: 4px;
+    max-width: 240px;
     text-align: right;
+    text-shadow: 0 0 12px rgba(34,211,238,0.35), 0 2px 0 rgba(0,0,0,0.6);
   }
   .hud-value.danger   { color: var(--danger); text-shadow: 0 0 16px rgba(192,40,40,0.85); animation: dangerPulse 0.45s infinite alternate; }
   .hud-value.low-ammo { color: var(--accent-hot); }
@@ -1282,6 +1326,21 @@
   }
   .loadout-card:hover { border-color: var(--line-strong); }
   .loadout-card.selected { border-color: var(--accent); }
+  .loadout-card { position: relative; }
+  .loadout-tag {
+    position: absolute; top: 8px; right: 8px; z-index: 2;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
+    padding: 2px 7px; border-radius: 999px; pointer-events: none;
+  }
+  .loadout-tag.starter { color: #6effb0; border: 1px solid rgba(110,255,176,0.5); background: rgba(6,20,14,0.85); }
+  .loadout-tag.box { color: #ffd166; border: 1px solid rgba(255,209,102,0.45); background: rgba(24,16,4,0.85); }
+  .loadout-emblem {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; aspect-ratio: 16 / 9;
+    font-size: 26px; font-weight: 800; letter-spacing: 0.3em;
+    color: rgba(124,243,255,0.55);
+    text-shadow: 0 0 18px rgba(34,211,238,0.35);
+  }
 
   .loadout-preview {
     aspect-ratio: 16 / 7;
@@ -2115,7 +2174,7 @@
     <div id="kill-feed"></div>
   </div>
 
-  <canvas id="minimap-canvas" width="188" height="250"></canvas>
+  <canvas id="minimap-canvas" width="200" height="200"></canvas>
 
   <div id="bottom-hud">
     <div class="hud-block">
@@ -2396,7 +2455,18 @@
       <div class="ov-panel-copy">Select the weapon profile you're committing to before breach entry. Each platform changes how you hold angles, punish rushes, and farm XP under wave pressure. Your secondary and melee remain available regardless of selection.</div>
 
       <div class="loadout-grid">
-        <div class="loadout-card selected" data-loadout="rifle">
+        <div class="loadout-card selected" data-loadout="pistol">
+          <div class="loadout-tag starter">STARTER</div>
+          <div class="loadout-preview"><canvas id="loadout-preview-pistol" width="320" height="180" aria-label="Service Pistol preview"></canvas></div>
+          <div class="loadout-name">Service Pistol</div>
+          <div class="loadout-role">Standard Issue Sidearm</div>
+          <div class="loadout-stat"><span>Damage</span><span>52 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>12 rds</span></div>
+          <div class="loadout-stat"><span>Cadence</span><span>Semi / Snappy</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Fast Handling</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="rifle">
+          <div class="loadout-tag box">MYSTERY BOX</div>
           <div class="loadout-preview"><canvas id="loadout-preview-rifle" width="320" height="180" aria-label="Assault Rifle preview"></canvas></div>
           <div class="loadout-name">Assault Rifle</div>
           <div class="loadout-role">All-Range Control</div>
@@ -2406,6 +2476,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Versatile</span></div>
         </div>
         <div class="loadout-card" data-loadout="shotgun">
+          <div class="loadout-tag box">MYSTERY BOX</div>
           <div class="loadout-preview"><canvas id="loadout-preview-shotgun" width="320" height="180" aria-label="Combat Shotgun preview"></canvas></div>
           <div class="loadout-name">Combat Shotgun</div>
           <div class="loadout-role">Breach Dominance</div>
@@ -2415,6 +2486,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Close-Range Dominance</span></div>
         </div>
         <div class="loadout-card" data-loadout="sniper">
+          <div class="loadout-tag box">MYSTERY BOX</div>
           <div class="loadout-preview"><canvas id="loadout-preview-sniper" width="320" height="180" aria-label="Precision Rifle preview"></canvas></div>
           <div class="loadout-name">Precision Rifle</div>
           <div class="loadout-role">Priority Target Removal</div>
@@ -2422,6 +2494,66 @@
           <div class="loadout-stat"><span>Magazine</span><span>6 rds</span></div>
           <div class="loadout-stat"><span>Optics</span><span>18° FOV Zoom</span></div>
           <div class="loadout-stat"><span>Profile</span><span>High Skill / Punish</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="smg">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">SMG</div></div>
+          <div class="loadout-name">Hornet SMG</div>
+          <div class="loadout-role">Close-Range Saturation</div>
+          <div class="loadout-stat"><span>Damage</span><span>21 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>32 rds</span></div>
+          <div class="loadout-stat"><span>Cadence</span><span>Auto / Very Fast</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>High ROF / High Spread</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="lmg">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">LMG</div></div>
+          <div class="loadout-name">Bastion LMG</div>
+          <div class="loadout-role">Sustained Suppression</div>
+          <div class="loadout-stat"><span>Damage</span><span>31 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>75 rds</span></div>
+          <div class="loadout-stat"><span>Reload</span><span>2.6 s / Slow</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Big Mag / Heavy</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="dmr">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">DMR</div></div>
+          <div class="loadout-name">Verdict DMR</div>
+          <div class="loadout-role">Mid-Range Precision</div>
+          <div class="loadout-stat"><span>Damage</span><span>118 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>10 rds</span></div>
+          <div class="loadout-stat"><span>Optics</span><span>42° FOV Zoom</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Deliberate / Punchy</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="akimbo">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">MP</div></div>
+          <div class="loadout-name">Gemini Machine Pistol</div>
+          <div class="loadout-role">Mobile Skirmisher</div>
+          <div class="loadout-stat"><span>Damage</span><span>26 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>26 rds</span></div>
+          <div class="loadout-stat"><span>Cadence</span><span>Auto / Fast</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Run &amp; Gun</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="railgun">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">RAIL</div></div>
+          <div class="loadout-name">Lancer Railgun</div>
+          <div class="loadout-role">Heavy Target Deletion</div>
+          <div class="loadout-stat"><span>Damage</span><span>430 / shot</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>3 cells</span></div>
+          <div class="loadout-stat"><span>Optics</span><span>24° FOV Zoom</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Slow / Devastating</span></div>
+        </div>
+        <div class="loadout-card" data-loadout="flak">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-preview"><div class="loadout-emblem">FLAK</div></div>
+          <div class="loadout-name">Mauler Auto-Shotgun</div>
+          <div class="loadout-role">Crowd Erasure</div>
+          <div class="loadout-stat"><span>Damage</span><span>150 / burst</span></div>
+          <div class="loadout-stat"><span>Magazine</span><span>8 shells</span></div>
+          <div class="loadout-stat"><span>Pellets</span><span>10 / shot</span></div>
+          <div class="loadout-stat"><span>Profile</span><span>Auto Scatter</span></div>
         </div>
       </div>
 
@@ -2435,7 +2567,7 @@
 
       <div class="ov-action-row">
         <button class="ov-action-btn danger" id="launchLoadoutBtn" type="button">Deploy With Loadout</button>
-        <span class="ov-selected-note">Selected: <span id="selected-loadout-val">Assault Rifle</span></span>
+        <span class="ov-selected-note">Selected: <span id="selected-loadout-val">Service Pistol</span></span>
       </div>
     </div>
 

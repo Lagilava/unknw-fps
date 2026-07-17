@@ -16,7 +16,7 @@
 // frame, the mixer rewrites them first and we compose a small offset after — no
 // accumulation. This makes turns feel weighty and organic rather than a rigid pivot.
 
-export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, options = {}) {
+export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, skeletonClone: any, options: any = {}) {
   const targetHeight = options.targetHeight || 1.8;
   const onceStates = options.onceStates || new Set(["attack", "scream", "dying", "death"]);
 
@@ -26,7 +26,7 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
   // ── Clone the shared source into an independent skinned instance ─────────────
   const model = skeletonClone(sourceScene);
   model.traverse((o) => {
-    if (o.isMesh || o.isSkinnedMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = false; }
+    if (o.isMesh || o.isSkinnedMesh) { o.frustumCulled = false; o.castShadow = true; o.receiveShadow = false; }
   });
   root.add(model);
 
@@ -50,7 +50,7 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
 
   // ── Animation mixer + actions ───────────────────────────────────────────────
   const mixer = new THREE.AnimationMixer(model);
-  const actions = {};
+  const actions: Record<string, any> = {};
 
   // Upper-body-only variant of a clip: strips hips/leg rotation tracks AND all
   // position tracks, so it can play LAYERED on top of walk/run — the locomotion
@@ -91,6 +91,25 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
   const spine2 = bone("mixamorigSpine2") || bone("mixamorigSpine1");
   const neck   = bone("mixamorigNeck");
   const head   = bone("mixamorigHead");
+  const hips     = bone("mixamorigHips");
+  const lShldr   = bone("mixamorigLeftShoulder")  || bone("mixamorigLeftArm");
+  const rShldr   = bone("mixamorigRightShoulder") || bone("mixamorigRightArm");
+  const lFore    = bone("mixamorigLeftForeArm");
+  const rFore    = bone("mixamorigRightForeArm");
+  const baseModelY = model.position.y; // for the reapply-each-frame vertical bob (no accumulation)
+
+  // ── Per-instance "undead" character — makes a horde read as individuals rather
+  // than a marching line. All values are frozen at creation so each zombie keeps a
+  // consistent gait; a group gets desynced footfalls, varied cadence and asymmetry.
+  const gaitPhase   = Math.random() * Math.PI * 2;   // random clip start → footfalls desync
+  const speedJitter = 0.9 + Math.random() * 0.2;     // ±10% personal cadence
+  const limpSide    = Math.random() < 0.5 ? 1 : -1;  // which side the gait favours
+  const limpAmt     = 0.5 + Math.random() * 0.8;     // how pronounced the limp is
+  const lurchFreqA  = 0.7 + Math.random() * 0.5;     // irregular torso lurch, two detuned…
+  const lurchFreqB  = 1.7 + Math.random() * 0.9;     // …sines so it never reads mechanical
+  const lurchPhase  = Math.random() * Math.PI * 2;
+  const armDrift    = Math.random() * Math.PI * 2;   // dangling-arm sway phase
+  let gaitClock     = gaitPhase;                     // advances with stride, drives limp/bob
 
   // ── State ───────────────────────────────────────────────────────────────────
   let activeName = null;
@@ -111,11 +130,17 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
   const _e = new THREE.Euler();
   const _q = new THREE.Quaternion();
 
+  const LOCO_STATES = new Set(["idle", "walk", "run", "crawl", "runCrawl"]);
   function fadeTo(name, fade = 0.22) {
     const action = actions[name] || actions.idle;
     if (!action || name === activeName) return;
     action.enabled = true;
     action.reset();
+    // Desync footfalls: start each looping locomotion clip at a per-instance phase so
+    // a crowd doesn't march in lockstep (reset() would pin everyone to time 0).
+    if (LOCO_STATES.has(name) && action.loop === THREE.LoopRepeat) {
+      action.time = (gaitPhase / (Math.PI * 2)) * action.getClip().duration;
+    }
     action.fadeIn(fade);
     action.play();
     if (activeAction) activeAction.fadeOut(fade);
@@ -202,7 +227,7 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
 
     // ── Death ──────────────────────────────────────────────────────────────
     if (!alive && !dead) setDead();
-    if (dead) { mixer.update(dt); return; }
+    if (dead) { mixer.update(dt); model.position.y = baseModelY; return; }
 
     // ── Scream on first aggro (full-body one-shot; the AI brain reads the
     // exposed lock below and holds position, so the plant reads as intended) ──
@@ -249,8 +274,11 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
     // Scale animation playback speed to match actual movement speed.
     if (activeAction) {
       const baseSpeed = activeName === "run" ? 3.5 : activeName === "walk" ? 1.2 : 1.0;
-      activeAction.timeScale = activeName === "idle" ? 1.0
-        : clamp(visualSpeed / Math.max(0.001, baseSpeed), 0.6, 2.4);
+      // Match stride to travel (no foot-sliding) then apply this zombie's personal
+      // cadence jitter so identical-speed shamblers still differ. Idle keeps a tiny
+      // breathing jitter rather than a dead-constant loop.
+      activeAction.timeScale = activeName === "idle" ? speedJitter
+        : clamp(visualSpeed / Math.max(0.001, baseSpeed), 0.6, 2.4) * speedJitter;
     }
 
     mixer.update(dt);
@@ -262,14 +290,37 @@ export function createZombieCharacter(THREE, sourceScene, clips, skeletonClone, 
     leadTurn = damp(leadTurn, clamp(visualTurn * 0.16, -0.55, 0.55), 7, dt);
     hunch    = damp(hunch, speedN * 0.18, 3, dt);
     swayPhase += dt * (0.8 + speedN * 1.6);
-    const sway = Math.sin(swayPhase) * (0.03 + speedN * 0.025);
+    // Irregular torso lurch: two detuned sines instead of one clean sinusoid so the
+    // shamble never reads mechanical.
+    const lurch = Math.sin(swayPhase * lurchFreqA + lurchPhase) * 0.6
+                + Math.sin(swayPhase * lurchFreqB + lurchPhase * 1.7) * 0.4;
+    const sway = lurch * (0.03 + speedN * 0.03);
+
+    // gaitClock advances with actual stride so the limp/bob lock to footfalls.
+    gaitClock += dt * (1.4 + speedN * 5.0) * speedJitter;
+    const step  = Math.sin(gaitClock);            // one cycle ≈ one stride pair
+    const limp  = (0.5 - 0.5 * Math.cos(gaitClock * 2)) * speedN * limpAmt; // per-step dip weight
 
     // spine: bank into turn (roll) + hunch forward (pitch) + lazy sway (yaw)
-    addBoneOffset(spine,  hunch * 0.5, sway * 0.5, leanTurn * 0.5);
-    addBoneOffset(spine2, hunch * 0.5, sway,       leanTurn * 0.6);
-    // neck + head: lead the turn (head commits before the body) and counter the hunch
-    addBoneOffset(neck, -hunch * 0.3, leadTurn * 0.5, leanTurn * 0.25);
-    addBoneOffset(head, -hunch * 0.4, leadTurn * 0.6, -leanTurn * 0.2);
+    addBoneOffset(spine,  hunch * 0.5, sway * 0.5, leanTurn * 0.5 + limpSide * limp * 0.05);
+    addBoneOffset(spine2, hunch * 0.5, sway,       leanTurn * 0.6 + limpSide * limp * 0.06);
+    // neck + head: lead the turn (head commits before the body) and counter the hunch,
+    // plus a loose head loll driven by the stride so it bobs organically.
+    addBoneOffset(neck, -hunch * 0.3, leadTurn * 0.5, leanTurn * 0.25 + step * speedN * 0.03);
+    addBoneOffset(head, -hunch * 0.4 + step * speedN * 0.04, leadTurn * 0.6, -leanTurn * 0.2 + limpSide * limp * 0.04);
+    // hips: asymmetric limp roll — the body drops toward the favoured side each stride.
+    addBoneOffset(hips, 0, 0, limpSide * limp * 0.08);
+    // dangling arms: undead arms hang and swing loosely, damped hard while the attack
+    // layer owns the arms so we never fight the swing.
+    const armGain = upperAction ? 0.15 : 1.0;
+    const armSwing = Math.sin(gaitClock + armDrift) * (0.05 + speedN * 0.12) * armGain;
+    const armHang  = (0.15 + speedN * 0.1) * armGain; // shoulders slump forward
+    addBoneOffset(lShldr,  armHang * 0.4, 0,  armSwing);
+    addBoneOffset(rShldr,  armHang * 0.4, 0, -armSwing);
+    addBoneOffset(lFore,   armHang + Math.sin(gaitClock * 1.3 + armDrift) * 0.06 * armGain, 0, 0);
+    addBoneOffset(rFore,   armHang + Math.sin(gaitClock * 1.3 + armDrift + 1.1) * 0.06 * armGain, 0, 0);
+    // subtle per-step vertical bob (reapplied from the captured base → no drift).
+    model.position.y = baseModelY + (step * 0.012 - limp * 0.02) * speedN;
   }
 
   function dispose() {

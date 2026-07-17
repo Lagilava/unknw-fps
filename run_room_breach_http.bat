@@ -8,7 +8,8 @@ if not exist "first_person_shooter_room_game (1).html" (
 	exit /b %errorlevel%
 )
 
-start "Room Breach HTTP Server" /D "%~dp0" cmd /k %PY_CMD% -m http.server 8000 --bind 127.0.0.1
+:: Node server transpiles .ts sources on the fly (Python's http.server cannot).
+start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=127.0.0.1&& set PORT=8000&& node .tools\static-server.cjs"
 
 set "SERVER_READY=0"
 for /l %%I in (1,1,30) do (

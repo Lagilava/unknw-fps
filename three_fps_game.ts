@@ -18,7 +18,8 @@ import {
   setStyleIfChanged,
   setTextIfChanged,
 } from "./modules/dom_ui.js";
-import { createGunState, GUNS, GUN_SPECS } from "./modules/gun_config.js";
+import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
+import { registerEnemy, unregisterEnemy } from "./modules/ecs";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -38,6 +39,44 @@ import {
   CHANGE_EVENT as DEV_CHANGE_EVENT,
   STRUCTURAL_CATEGORIES as DEV_STRUCTURAL,
 } from "./modules/dev_engine.js";
+
+declare global {
+  interface Window { [key: string]: any; }
+  // The game reads DOM elements fetched by id/query as inputs/canvases and stashes
+  // ad-hoc fields (e.g. `_timer`) on them. Declaring these optional on the base DOM
+  // interfaces models that usage without casting each getElementById result.
+  interface HTMLElement { value?: any; disabled?: any; width?: any; height?: any; _timer?: any; getContext?: any; }
+  interface Element { disabled?: any; dataset?: any; value?: any; checked?: any; title?: any; style?: any; click?: any; }
+  interface Event { code?: any; }
+  interface Navigator { deviceMemory?: any; }
+}
+// Augment THREE's base Object3D with the discriminant flags + members that live on
+// its subclasses (Mesh/SkinnedMesh/InstancedMesh/Light). The code inspects these via
+// `obj.isMesh` / `obj.material` in traverse() callbacks where the static type is only
+// Object3D. Declaring them optional models reality and clears those accesses without
+// per-site casts.
+declare module "three" {
+  interface Object3D {
+    isMesh?: boolean;
+    isInstancedMesh?: boolean;
+    isSkinnedMesh?: boolean;
+    isLight?: boolean;
+    isPoints?: boolean;
+    isLine?: boolean;
+    isSprite?: boolean;
+    isLineSegments?: boolean;
+    material?: any;
+    geometry?: any;
+    intensity?: number;
+    count?: number;
+    morphTargetInfluences?: number[];
+  }
+  interface Sprite {
+    updateEnergySprite?: any;
+    resetEnergySprite?: any;
+    disposeEnergySprite?: any;
+  }
+}
 
 (async () => {
   "use strict";
@@ -62,7 +101,7 @@ import {
   const createGLTFLoader = () => createConfiguredGLTFLoader(THREE, GLTFLoader);
 
   function withStartupTimeout(promise, ms, label) {
-    let timeoutId = 0;
+    let timeoutId: any = 0;
     const timeout = new Promise((_, reject) => {
       timeoutId = setTimeout(() => reject(new Error(label)), ms);
     });
@@ -128,7 +167,7 @@ import {
   // Only categories a developer explicitly activated are present. Absent
   // categories fall through to the game's own constants, so default behavior is
   // unchanged unless a preset is applied. See modules/dev_engine.js + dev.html.
-  const DEV = loadDevActive();
+  const DEV: any = loadDevActive();
   const devHas = (cat) => !!(DEV && DEV[cat]);
   const devVal = (cat, key, fallback) =>
     (devHas(cat) && DEV[cat][key] != null && DEV[cat][key] !== "" ? DEV[cat][key] : fallback);
@@ -151,13 +190,17 @@ import {
 
   // Weapons + player-damage scaling mutate the shared GUN_SPECS in place. Idempotent:
   // resets from GUN_SPECS_BASE, then layers the active override on top.
+  // Includes the per-gun physics fields (moveSpeedMul/swayMul/shakeMul/driftMul/bloom*).
+  const DEV_WEAPON_NUM_FIELDS = ["magazine", "ammo", "fireRate", "reloadTime", "adsFov",
+    "adsInSpeed", "adsOutSpeed", "adsMovePenalty", "damage", "pellets", "spread",
+    "moveSpeedMul", "swayMul", "shakeMul", "driftMul", "bloomGrow", "bloomMax", "bloomDecay",
+    "equipTime", "muzzleFlashScale", "muzzleFlashTime"];
   function applyDevWeapons() {
     for (const gun of Object.keys(GUN_SPECS)) {
       const base = GUN_SPECS_BASE[gun];
       if (base) {
         const spec = GUN_SPECS[gun];
-        for (const k of ["magazine", "ammo", "fireRate", "reloadTime", "adsFov",
-          "adsInSpeed", "adsOutSpeed", "adsMovePenalty", "damage", "pellets", "spread"]) {
+        for (const k of DEV_WEAPON_NUM_FIELDS) {
           if (Number.isFinite(base[k])) spec[k] = base[k];
         }
         if (spec.recoil && base.recoil) {
@@ -168,12 +211,11 @@ import {
       }
     }
     if (devHas("weapons")) {
-      for (const gun of ["rifle", "shotgun", "sniper"]) {
+      for (const gun of Object.keys(GUN_SPECS)) {
         const o = DEV.weapons[gun];
         const spec = GUN_SPECS[gun];
         if (!o || !spec) continue;
-        for (const k of ["magazine", "ammo", "fireRate", "reloadTime", "adsFov",
-          "adsInSpeed", "adsOutSpeed", "adsMovePenalty", "damage", "pellets", "spread"]) {
+        for (const k of DEV_WEAPON_NUM_FIELDS) {
           if (Number.isFinite(o[k])) spec[k] = o[k];
         }
         if (spec.recoil) {
@@ -382,7 +424,7 @@ import {
   if (wantWebGPU && typeof navigator !== "undefined" && 'gpu' in navigator) {
     try {
       const adapter = await withStartupTimeout(
-        navigator.gpu.requestAdapter?.({ powerPreference: deviceProfile.tier === "low" ? "low-power" : "high-performance" }),
+        (navigator as any).gpu.requestAdapter?.({ powerPreference: deviceProfile.tier === "low" ? "low-power" : "high-performance" }),
         3000,
         "WebGPU adapter request timed out"
       );
@@ -441,10 +483,12 @@ import {
       const devShadows = devVal("quality", "shadows", "auto");
       renderer.shadowMap.enabled = !mobileMode && devShadows !== "off";
       if ('type' in renderer.shadowMap) renderer.shadowMap.type = lowEndMode ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
-      // Static shadow bake (cheap: no per-frame shadow draws — draw count is already
-      // high). The world is static, so one bake after it's built is enough; re-triggered
-      // via renderer.shadowMap.needsUpdate once the level + buildings exist.
-      renderer.shadowMap.autoUpdate = false;
+      // Shadow update policy: low-end keeps the static one-shot bake (no per-frame
+      // shadow draws; characters simply don't cast there). Everything else updates
+      // per-frame so the player/enemies/cars cast MOVING shadows — the depth-only
+      // caster pass is cheap now that the static world is merged/instanced, and the
+      // perf governor below can still drop shadows entirely if the frame rate tanks.
+      renderer.shadowMap.autoUpdate = !lowEndMode;
     }
   } catch (e) {
     console.warn('Failed to apply some renderer settings (non-fatal):', e);
@@ -548,6 +592,12 @@ import {
     let dome = scene.getObjectByName("DaySkyDome");
     const map = equirect.clone();
     map.mapping = THREE.UVMapping; // SphereGeometry UVs already match equirect layout
+    // RGBELoader DataTextures have flipY=false (row 0 = zenith), which renders the sky
+    // upside-down on the sphere: blue zenith at eye level, bright sunset horizon overhead
+    // (looked like a wrong "high noon" HDR while reflections showed the real sunset —
+    // the equirect IBL path flips internally, the raw UV-mapped dome does not).
+    // The procedural canvas fallback is flipY=true and already correct, hence the guard.
+    if (!map.flipY) { map.wrapT = THREE.ClampToEdgeWrapping; map.repeat.y = -1; map.offset.y = 1; }
     map.needsUpdate = true;
     if (dome) {
       dome.material.map?.dispose();
@@ -560,9 +610,178 @@ import {
     // rolls them off. With tone mapping off they hard-clip to white and the sky burns out.
     dome = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map, color: new THREE.Color().setScalar(SKY_DOME_DAMP), side: THREE.BackSide, depthWrite: false, fog: false, toneMapped: true }));
     dome.name = "DaySkyDome"; dome.renderOrder = -10; dome.frustumCulled = false;
-    dome.onBeforeRender = (_r, _s, cam) => dome.position.copy(cam.position);
+    dome.onBeforeRender = (_r, _s, cam) => dome.position.setFromMatrixPosition(cam.matrixWorld); // world pos — cam.position is local
     scene.add(dome);
     window.__rbSkyDome = dome; // dev diagnostic
+  }
+
+  // Blackout-wave fire sky (WebGL path): a proper animated GLSL ShaderMaterial —
+  // procedural FBM noise fire rolling along the horizon band, drifting ember sparks
+  // and curling smoke, all driven by a time uniform advanced in onBeforeRender (so
+  // it costs exactly nothing while the dome is hidden). Horizon-banded: overhead
+  // stays near-black. Camera-locked, renderOrder -9, BackSide, additive, with the
+  // same opacity flicker the canvas dome had.
+  // ── Blackout fiery sun: ONE canonical direction shared by the fire-dome shader
+  // (sun disc uniform) and applyWaveLighting (directional-light placement), so the
+  // light in the world comes exactly FROM the burning sun you see in the sky.
+  // Low elevation (16° — low enough for long fire-lit shadows, high enough to clear
+  // the DistantSkyline silhouette ring, whose rooftops subtend ~13° at the horizon),
+  // azimuth ~12° — roughly where the golden-hour sun sits (+X), so the blackout reads
+  // as "the sun turned molten", not "a second sun appeared elsewhere".
+  const BLACKOUT_SUN_DIR = new THREE.Vector3(
+    Math.cos(THREE.MathUtils.degToRad(16)) * Math.cos(THREE.MathUtils.degToRad(12)),
+    Math.sin(THREE.MathUtils.degToRad(16)),
+    Math.cos(THREE.MathUtils.degToRad(16)) * Math.sin(THREE.MathUtils.degToRad(12))
+  ).normalize();
+
+  function buildFireSkyDomeShader() {
+    if (scene.getObjectByName("FireSkyDome")) return;
+    const uniforms = {
+      uTime: { value: 0 },
+      uOpacity: { value: 0 },
+      uSunDir: { value: BLACKOUT_SUN_DIR.clone() },
+    };
+    const mat = new THREE.ShaderMaterial({
+      uniforms,
+      side: THREE.BackSide,
+      depthWrite: false,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+      vertexShader: /* glsl */`
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        precision highp float;
+        varying vec3 vDir;
+        uniform float uTime;
+        uniform float uOpacity;
+        uniform vec3 uSunDir;
+
+        // ── hash / value noise / FBM ──
+        float hash21(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          float a = hash21(i);
+          float b = hash21(i + vec2(1.0, 0.0));
+          float c = hash21(i + vec2(0.0, 1.0));
+          float d = hash21(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        }
+        float fbm(vec2 p) {
+          float v = 0.0, a = 0.5;
+          mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+          for (int i = 0; i < 5; i++) {
+            v += a * vnoise(p);
+            p = rot * p * 2.03 + vec2(11.7, 7.3);
+            a *= 0.5;
+          }
+          return v;
+        }
+
+        void main() {
+          // Azimuth wraps seamlessly; elevation 0 = horizon, 1 = zenith.
+          float az = atan(vDir.z, vDir.x); // -PI..PI
+          float el = clamp(vDir.y, -0.2, 1.0);
+          // Wrap-safe horizontal coordinate for the noise field.
+          vec2 cyl = vec2(cos(az), sin(az)) * 3.0;
+
+          // Horizon band: fire lives ON the horizon — fades going up AND going
+          // down. (exp(-el*5.2) alone explodes to ~2.8× at the el=-0.2 clamp,
+          // blowing the whole below-horizon half of the dome out to white
+          // whenever the camera is above rooftop height.)
+          float band = exp(-max(el, 0.0) * 5.2) * exp(min(el, 0.0) * 7.0);
+          float overhead = smoothstep(0.55, 0.15, el); // extra kill above ~33 deg
+
+          // ── Rolling flame licks: FBM advected upward + sideways drift, domain-warped ──
+          vec2 fp = vec2(cyl.x + cyl.y * 0.7, el * 6.0);
+          vec2 warp = vec2(
+            fbm(fp * 1.6 + vec2(uTime * 0.11, -uTime * 0.34)),
+            fbm(fp * 1.6 + vec2(-uTime * 0.07, -uTime * 0.41) + 19.1)
+          );
+          float flame = fbm(fp * 2.2 + warp * 1.7 + vec2(uTime * 0.16, -uTime * 0.85));
+          // Sharpen into licking tongues that decay with elevation.
+          float lick = pow(clamp(flame * 1.35 - el * 1.9 + 0.28, 0.0, 1.0), 2.1);
+
+          // ── Curling smoke: slower, darker FBM layer occluding the glow ──
+          float smoke = fbm(fp * 1.1 + vec2(uTime * 0.05, -uTime * 0.16) + 47.0);
+          float smokeMask = smoothstep(0.35, 0.85, smoke) * smoothstep(0.75, 0.2, el) * 0.65;
+
+          // ── Fire colour ramp (ember red -> orange -> hot yellow core) ──
+          float heat = lick * band;
+          vec3 col = vec3(0.55, 0.05, 0.0) * heat;
+          col += vec3(1.0, 0.35, 0.05) * pow(heat, 1.8) * 1.4;
+          col += vec3(1.0, 0.83, 0.42) * pow(heat, 3.6) * 1.6;
+          // Base distant glow so the horizon reads even between licks.
+          col += vec3(0.5, 0.10, 0.02) * band * (0.35 + 0.25 * fbm(fp + uTime * 0.03));
+          // Smoke eats light.
+          col *= (1.0 - smokeMask);
+
+          // ── Drifting ember sparks: gridded point sparkle rising off the fire ──
+          vec2 ep = vec2(az * 14.0, el * 26.0 + uTime * 0.9); // rise over time
+          vec2 cell = floor(ep);
+          vec2 fpart = fract(ep) - 0.5;
+          float h = hash21(cell);
+          vec2 off = vec2(h - 0.5, fract(h * 57.3) - 0.5) * 0.7;
+          off.x += sin(uTime * (0.5 + h) + h * 6.28) * 0.18; // lateral drift
+          float d = length(fpart - off);
+          float twinkle = 0.55 + 0.45 * sin(uTime * (2.0 + h * 5.0) + h * 40.0);
+          float ember = smoothstep(0.10 + h * 0.06, 0.0, d) * step(0.72, h) * twinkle;
+          ember *= exp(-el * 3.4) * smoothstep(-0.05, 0.06, el);
+          col += vec3(1.0, 0.55 + fract(h * 91.7) * 0.3, 0.15) * ember * 1.3;
+
+          // ── Molten blackout SUN: hot core + FBM-licked corona + wide ember halo,
+          // at uSunDir — the SAME direction the exterior DirectionalLight shines from
+          // during a blackout (see applyWaveLighting), so world lighting matches it.
+          vec3 dir = normalize(vDir);
+          float ang = acos(clamp(dot(dir, uSunDir), -1.0, 1.0)); // radians off sun centre
+          float pulse = 1.0 + 0.10 * sin(uTime * 1.7) + 0.05 * sin(uTime * 4.3 + 1.0);
+          float discR = 0.055 * pulse; // ~3 deg molten core, breathing
+          // Flame tongues licking around the rim: FBM over angle-around-sun + time.
+          float around = atan(dir.y - uSunDir.y, az - atan(uSunDir.z, uSunDir.x));
+          float rimN = fbm(vec2(around * 2.4, uTime * 0.45)) - 0.5;
+          // NOTE: smoothstep edges must be ascending (edge0<edge1 or UB on some GL
+          // drivers) — use 1-smoothstep for "inside disc" masks.
+          float core = 1.0 - smoothstep(discR * 0.55, discR, ang);
+          float corona = 1.0 - smoothstep(discR * 0.85, discR * 3.4 + rimN * 0.09, ang);
+          float flick = 0.85 + 0.15 * fbm(vec2(uTime * 0.9, ang * 8.0));
+          float halo = exp(-ang * 5.5);
+          col += vec3(1.0, 0.93, 0.66) * core * 3.4;                 // white-hot core (only thing that clips to white)
+          col += vec3(1.0, 0.40, 0.07) * corona * corona * 1.2 * flick; // fire corona
+          col += vec3(0.85, 0.20, 0.04) * halo * 0.9;                // ember glow halo
+
+          col *= (1.0 - overhead * 0.0); // band already handles falloff; keep zenith black
+          col *= uOpacity;
+          gl_FragColor = vec4(col, clamp(max(max(col.r, col.g), col.b) * 1.5, 0.0, 1.0) * uOpacity);
+        }
+      `,
+    });
+    mat.toneMapped = false;
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(455, 40, 20), mat);
+    dome.name = "FireSkyDome"; dome.renderOrder = -9; dome.frustumCulled = false;
+    dome.visible = false;
+    let t = 0;
+    dome.onBeforeRender = (_r, _s, cam) => {
+      // cam.position is LOCAL (the camera is a child of pitch/yaw) — use the world
+      // matrix, or the dome sits at the origin and every sky direction (incl. the
+      // blackout sun disc) skews as the player walks away from world centre.
+      dome.position.setFromMatrixPosition(cam.matrixWorld);
+      t += 0.01667; // fixed per-render-tick advance — visual, not physics
+      uniforms.uTime.value = t;
+      const flicker = 0.72 + Math.sin(t * 2.3) * 0.10 + Math.sin(t * 5.1 + 1.4) * 0.06;
+      uniforms.uOpacity.value = Math.max(0, flicker);
+    };
+    scene.add(dome);
+    window.__rbFireSkyDome = dome; // dev diagnostic
   }
 
   // Blackout-wave fire sky: a second camera-locked dome, hidden except during the
@@ -572,6 +791,10 @@ import {
   // trick as the DaySkyDome's camera-follow). One extra draw call while visible.
   function buildFireSkyDome() {
     if (scene.getObjectByName("FireSkyDome")) return;
+    // WebGL: proper animated GLSL fire sky (FBM flame licks + embers + smoke).
+    // WebGPU r166 cannot compile ShaderMaterial (see sanitizeWebGPUMaterials), so it
+    // keeps the original canvas-texture dome below as its fallback path.
+    if (rendererBackend !== "webgpu") { buildFireSkyDomeShader(); return; }
     const w = 1024, h = 512;
     const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
     const ctx = cv.getContext("2d");
@@ -615,6 +838,32 @@ import {
       ctx.fillStyle = `rgba(255,${160 + Math.floor(rng() * 90)},${40 + Math.floor(rng() * 60)},${0.5 + rng() * 0.4})`;
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
     }
+    // Molten sun blob at the SAME direction as BLACKOUT_SUN_DIR (equirect mapping of
+    // three's SphereGeometry: u = (PI - atan2(z, x)) / 2PI, v = 1 - theta/PI), so the
+    // WebGPU fallback matches the GLSL dome and the blackout DirectionalLight angle.
+    {
+      const sunAz = Math.atan2(BLACKOUT_SUN_DIR.z, BLACKOUT_SUN_DIR.x);
+      const sunEl = Math.asin(BLACKOUT_SUN_DIR.y);
+      const su = ((Math.PI - sunAz) / (Math.PI * 2)) % 1;
+      const sv = 1 - (Math.PI / 2 - sunEl) / Math.PI; // v: 0 bottom .. 1 top
+      const px = su * w, py = (1 - sv) * h; // canvas row 0 = v 1 (flipY texture)
+      const degPx = w / 360; // equirect: same px/deg both axes
+      ctx.globalCompositeOperation = "screen";
+      let g = ctx.createRadialGradient(px, py, 0, px, py, 26 * degPx);
+      g.addColorStop(0, "rgba(200,50,12,0.85)");
+      g.addColorStop(1, "rgba(120,20,4,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 26 * degPx, 0, Math.PI * 2); ctx.fill();
+      g = ctx.createRadialGradient(px, py, 0, px, py, 10 * degPx);
+      g.addColorStop(0, "rgba(255,150,40,0.95)");
+      g.addColorStop(0.5, "rgba(255,90,15,0.6)");
+      g.addColorStop(1, "rgba(255,70,10,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 10 * degPx, 0, Math.PI * 2); ctx.fill();
+      g = ctx.createRadialGradient(px, py, 0, px, py, 3.4 * degPx);
+      g.addColorStop(0, "rgba(255,240,190,1)");
+      g.addColorStop(0.6, "rgba(255,220,130,0.9)");
+      g.addColorStop(1, "rgba(255,170,60,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 3.4 * degPx, 0, Math.PI * 2); ctx.fill();
+    }
     ctx.globalCompositeOperation = "source-over";
 
     const tex = new THREE.CanvasTexture(cv);
@@ -633,9 +882,10 @@ import {
     dome.visible = false;
     let t = 0;
     dome.onBeforeRender = (_r, _s, cam) => {
-      dome.position.copy(cam.position);
+      dome.position.setFromMatrixPosition(cam.matrixWorld); // world pos — cam.position is local
       t += 0.01667; // fixed per-render-tick advance — flicker/scroll are visual, not physics
-      tex.offset.x = (t * 0.006) % 1; // slow eastward drift of the fire clouds
+      // No UV scroll any more: the painted sun must stay put at BLACKOUT_SUN_DIR so
+      // the directional light keeps pointing at it (flicker below still animates).
       const flicker = 0.72 + Math.sin(t * 2.3) * 0.10 + Math.sin(t * 5.1 + 1.4) * 0.06;
       mat.opacity = Math.max(0, flicker);
     };
@@ -833,7 +1083,7 @@ import {
   function refreshModelEditorRoots(nextState = modelEditorState) {
     modelEditorState = nextState || loadModelEditorState();
     for (const root of modelEditorRoots) {
-      applyModelEditorTransform(root, root.userData.modelEditorKey, modelEditorState);
+      applyModelEditorTransform(root, (root as any).userData.modelEditorKey, modelEditorState);
     }
   }
 
@@ -854,7 +1104,7 @@ import {
   scene.add(yaw);
 
   const keys = new Set();
-  const mouse = { locked: false, down: false, aiming: false };
+  const mouse: any = { locked: false, down: false, aiming: false };
   // Touch input state (mobile). move = analog joystick vector; look is applied
   // directly to yaw/pitch by the touch handlers. sprint is a latch toggle.
   const isTouchDevice = (("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0)
@@ -920,6 +1170,7 @@ import {
   // Reload staging: gun-in-left-hand grip anchor + right-hand fresh-clip transit.
   const reloadGripTmp = new THREE.Vector3();
   const reloadWellTmp = new THREE.Vector3();
+  const reloadClipStartTmp = new THREE.Vector3();
   const reloadClipScaleTmp = new THREE.Vector3();
   const reloadClipQuatTmp = new THREE.Quaternion();
   const enemyHitCenterTmp = new THREE.Vector3();
@@ -1020,9 +1271,9 @@ import {
   let SIEGE_DRONE_WALK_FBX = null;
   let ANGEL_DRONE_MATERIALS = null;
   let PLAYER_CHARACTER_FBX = null;
-  const PLAYER_CHARACTER_ANIMS = {};
+  const PLAYER_CHARACTER_ANIMS: Record<string, any> = {};
   let ZOMBIE_CHARACTER_GLB = null;       // shared base scene; per-enemy clones via SkeletonUtils
-  const ZOMBIE_CHARACTER_ANIMS = {};     // { idle, walk, run, attack, scream, crawl, runCrawl, dying, death }
+  const ZOMBIE_CHARACTER_ANIMS: Record<string, any> = {};     // { idle, walk, run, attack, scream, crawl, runCrawl, dying, death }
   const SHOTGUN_PELLET_PATTERN = [
     [0.0,   0.0  ],
     [0.0,  -0.62 ],
@@ -1038,7 +1289,7 @@ import {
     [-1.05,  0.0  ],
   ];
 
-  const player = {
+  const player: any = {
     radius: 0.32,
     hp: 100,
     maxHp: 100,
@@ -1071,16 +1322,21 @@ import {
     shotsFired: 0,
     shotsHit: 0,
     xp: 0,
-    // Exterior perk-machine buffs (see createPerkMachine) — permanent for the run,
+    // Statue perk-machine buffs (see loadWorldLandmarks/tryBuyPerk) — permanent for the run,
     // reset in resetPlayer.
     perkDamageMul: 1,
     perkDamageResist: 0,
     perkTier: 0,
+    // Weapon progression: the run starts with ONLY the pistol; every other gun is
+    // acquired from the exterior mystery box (see finishMysteryBoxRoll). Weapon
+    // switching (digit keys / touch) is gated on this set. Per-player-local in coop.
+    // Populated right after `currentGun` is chosen (default pistol).
+    ownedWeapons: new Set(),
   };
   // ── Developer Engine: player overrides (idempotent, resets from base) ───────
   const PLAYER_TUNABLES = ["radius", "hp", "maxHp", "speed", "sprintSpeed",
     "maxStamina", "staminaDrain", "staminaRegen"];
-  const PLAYER_BASE = {}; for (const k of PLAYER_TUNABLES) PLAYER_BASE[k] = player[k];
+  const PLAYER_BASE: Record<string, any> = {}; for (const k of PLAYER_TUNABLES) PLAYER_BASE[k] = player[k];
   const PLAYER_FLAG_BASE = {
     unlimitedHealth: player.unlimitedHealth,
     unlimitedSprint: player.unlimitedSprint,
@@ -1109,7 +1365,7 @@ import {
   const PVP_RESPAWN_SECONDS = 5;
   const COOP_RESPAWN_SECONDS = 10;
 
-  const thirdPerson = {
+  const thirdPerson: any = {
     enabled: true, // FP removed — third-person only from the first frame
     ready: false,
     root: null,
@@ -1142,48 +1398,76 @@ import {
     aimOffsets: [],       // procedural quaternions applied last frame, removed before mixer writes
     firePunch: 0,         // spring displacement for upward arm kick on fire
     firePunchVel: 0,
+    equip: 0,             // 1 → 0 across the equip lower/raise on weapon switch
+    equipTime: 0.3,       // duration of the current equip (per-gun spec.equipTime)
+    gunLag: 0,            // rotational muzzle-lag spring (heavy guns trail turns)
+    gunLagVel: 0,
+    prevYawAngle: null,   // last-frame yaw, for the muzzle-lag spring input
   };
 
-  let currentGun = (devHas("player") && ["rifle", "shotgun", "sniper"].includes(DEV.player.startingWeapon))
+  // Starting loadout is the PISTOL — better guns come from the exterior mystery box.
+  let currentGun: GunType = (devHas("player") && Object.values(GUNS).includes(DEV.player.startingWeapon))
     ? DEV.player.startingWeapon
-    : GUNS.RIFLE;
+    : GUNS.PISTOL;
   let gunState = createGunState(currentGun);
-  const allGuns = {
-    [GUNS.RIFLE]: gunState,
-    [GUNS.SHOTGUN]: createGunState(GUNS.SHOTGUN),
-    [GUNS.SNIPER]: createGunState(GUNS.SNIPER),
-  };
+  const allGuns: Record<string, any> = {};
   const MAX_PACK_LEVEL = 7;
-  const gunUpgradeLevels = {
-    [GUNS.RIFLE]: 0,
-    [GUNS.SHOTGUN]: 0,
-    [GUNS.SNIPER]: 0,
-  };
-  const packState = {
+  const gunUpgradeLevels: Record<string, any> = {};
+  for (const gunType of Object.values(GUNS)) {
+    allGuns[gunType] = gunType === currentGun ? gunState : createGunState(gunType);
+    gunUpgradeLevels[gunType] = 0;
+  }
+  // Weapon progression helpers. The owned set starts as the starter gun only;
+  // the mystery box adds more over the run. resetPlayer() re-seeds it to the
+  // starter so each run is a fresh progression.
+  const STARTER_GUN = GUNS.PISTOL;
+  function ownsWeapon(gunType) { return player.ownedWeapons.has(gunType); }
+  function grantWeapon(gunType) { if (GUN_SPECS[gunType]) player.ownedWeapons.add(gunType); }
+  function resetOwnedWeapons() {
+    player.ownedWeapons.clear();
+    grantWeapon(STARTER_GUN);
+    // If a dev override forces a different starting weapon, keep it playable.
+    if (currentGun && currentGun !== STARTER_GUN) grantWeapon(currentGun);
+  }
+  resetOwnedWeapons();
+  const packState: any = {
     station: null,
     prompt: "",
     active: false,
   };
-  // ── Exterior interactables (wall-buy crates, perk machine, horde beacon) ────
-  // All three follow the Pack-a-Punch pattern exactly: a state object, a
-  // createX() builder called once at boot, an updateX(dt) each frame that
-  // computes range + prompt text, and tryX() gated on state.active + player.xp.
-  // Positioned in the clear centre lane (x≈0, matching the road's yellow centre
-  // line) so they sit clear of the flanking buildings/parked cars at every z —
-  // see exterior_map.js CAR_SPOTS (x=±28) and the building footprints (x beyond ±43).
-  const CRATE_DEFS = [
-    { gun: GUNS.SHOTGUN, cost: 260, x: -10, z: 140, label: "COMBAT SHOTGUN" },
-    { gun: GUNS.SNIPER,  cost: 420, x: 10,  z: 140, label: "PRECISION SNIPER" },
-  ];
-  const crateStations = []; // { def, root, active, prompt }
+  // ── Exterior interactables (statue perk machine, car alarms) ────────────────
+  // Both follow the Pack-a-Punch pattern: a state object, an updateX(dt) each
+  // frame that computes range + prompt text, and tryX() gated on state.active.
+  // The perk machine IS the plaza's landmark statue (modules/landmarks.js,
+  // 0,175) — loadWorldLandmarks anchors perkMachineState.station to it.
   const PERK_DEFS = [
-    { id: "overcharge", name: "OVERCHARGE",  cost: 350, desc: "+30% WEAPON DAMAGE" },
-    { id: "vitality",   name: "VITALITY",    cost: 550, desc: "+50 MAX HEALTH" },
-    { id: "aegis",      name: "AEGIS",       cost: 850, desc: "-25% DAMAGE TAKEN" },
+    { id: "overcharge", name: "OVERCHARGE",  cost: 350, desc: "+30% WEAPON DAMAGE", initial: "O", color: "#ffb020" },
+    { id: "vitality",   name: "VITALITY",    cost: 550, desc: "+50 MAX HEALTH",     initial: "V", color: "#5eff8a" },
+    { id: "aegis",      name: "AEGIS",       cost: 850, desc: "-25% DAMAGE TAKEN",  initial: "A", color: "#22d3ee" },
   ];
-  const perkMachineState = { station: null, active: false, prompt: "" };
-  const HORDE_BEACON_COOLDOWN = 55;
-  const beaconState = { station: null, active: false, prompt: "", cooldown: 0 };
+  const perkMachineState: any = { station: null, active: false, prompt: "", pulseMats: null };
+  // Mystery box (CoD-zombies style): glowing chest in the exterior at (10, 140) —
+  // where the old wall-buy crates were. KeyE via tryInteract, costs XP; a random
+  // weapon rises from the box over ~3 s (emissive/additive shimmer only — NO real
+  // lights), then the player receives it. ~10% teddy-bear dud refunds half.
+  const MYSTERY_BOX_COST = 475;
+  const MYSTERY_BOX_TEDDY_CHANCE = 0.10;
+  const MYSTERY_BOX_RISE_SECONDS = 3.0;
+  const MYSTERY_BOX_HOLD_SECONDS = 0.7;
+  const mysteryBoxState: any = {
+    station: null, lid: null, active: false, prompt: "",
+    rolling: false, rollT: 0, resultGun: null, teddy: false, visualOnly: false,
+    displayRig: null, displayCache: new Map(), teddyMesh: null,
+    shimmer: null, glowMats: [], lidAngle: 0, lidVel: 0,
+    beam: null, motes: [], qMark: null, flashPulse: 0,
+  };
+  // Car alarms: KeyE near a parked car sets it screaming for CAR_ALARM_DURATION s.
+  // While it screams every enemy brain steers toward the global soundLure instead
+  // of the player. Cars register themselves via window.__extCarAlarms (exterior_map.js).
+  const CAR_ALARM_DURATION = 10;
+  const CAR_ALARM_COOLDOWN = 30;
+  const carAlarmState = { nearCar: null, active: false, prompt: "", ringing: null, ringUntil: 0 };
+  const soundLure = { x: 0, z: 0, until: 0 }; // performance.now()/1000 timestamp
   const firstPersonWeaponCache = new Map();
   const thirdPersonWeaponCache = new Map();
   const loadoutPreviews = [];
@@ -1194,7 +1478,7 @@ import {
   // being constructed and every shader is still linking — which reads as a freeze.
   let bootComplete = false;
 
-  const game = {
+  const game: any = {
     state: "menu",
     wave: 1,
     killed: 0,
@@ -1215,7 +1499,9 @@ import {
 
   const savedSettings = loadSettings();
   const validLoadouts = new Set(Object.values(GUNS));
-  let selectedLoadout = validLoadouts.has(savedSettings?.loadout) ? savedSettings.loadout : GUNS.RIFLE;
+  // Progression: the loadout is always the starter pistol — every other gun is
+  // acquired in-run from the mystery box, so it can no longer be picked here.
+  let selectedLoadout = STARTER_GUN;
   // 80s retro dream camera aesthetic:
   // - Lifted blacks (faded, washed-out like old VHS tape)
   // - Warm peach/magenta colour cast
@@ -1367,7 +1653,7 @@ import {
       }
     `,
   };
-  const cinematicState = {
+  const cinematicState: any = {
     // Default OFF for performance: the cinematic grade runs 3–4 full-screen shader
     // passes (RenderPass + grade + chroma + output) every frame — a big fill cost
     // on weaker GPUs. Now opt-in: only on if the player explicitly enabled it
@@ -1565,12 +1851,13 @@ import {
     setCommandPromptVisible(true);
     if (!commandPrompt.history?.childElementCount) {
       writeCommandPromptLine("COMMAND PROMPT READY");
-      writeCommandPromptLine("Use wave:[n] to jump to a wave.");
+      writeCommandPromptLine("wave 10  — jump to a wave (also: wave:10, wave:[10])");
     }
   }
 
   function parseWaveCommand(rawValue) {
-    const match = rawValue.trim().match(/^wave\s*:\s*\[?\s*(\d+)\s*\]?$/i);
+    // Forgiving syntax: "wave 10", "wave10", "wave:10", "wave:[10]" all work.
+    const match = rawValue.trim().match(/^wave\s*:?\s*\[?\s*(\d+)\s*\]?$/i);
     if (!match) return null;
     const waveNumber = Number.parseInt(match[1], 10);
     return Number.isFinite(waveNumber) && waveNumber >= 1 ? waveNumber : null;
@@ -1591,7 +1878,7 @@ import {
     const raw = commandPrompt.input?.value || "";
     const trimmed = raw.trim();
     if (!trimmed) {
-      writeCommandPromptLine("Enter a command like wave:[10]", "error");
+      writeCommandPromptLine("Enter a command like: wave 10", "error");
       return;
     }
 
@@ -1767,7 +2054,7 @@ import {
   applyCinematicSettings();
   applyRenderScale();
 
-  function setCinematicEnabled(enabled, options = {}) {
+  function setCinematicEnabled(enabled, options: any = {}) {
     cinematicState.enabled = !!enabled;
     applyCinematicSettings();
     if (options.persist) saveSettings({ cinematic: cinematicState.enabled });
@@ -2066,11 +2353,8 @@ import {
 
   const impactParticlePool = [];
   const MAX_ACTIVE_IMPACT_PARTICLES = 36;
-  const tracerPool = {
-    [GUNS.RIFLE]: [],
-    [GUNS.SHOTGUN]: [],
-    [GUNS.SNIPER]: [],
-  };
+  const tracerPool: Record<string, any> = {};
+  for (const gt of Object.values(GUNS)) tracerPool[gt] = []; // one pool per roster gun
   const bulletHolePool = [];
   const activeBulletHoles = [];
   const MAX_ACTIVE_BULLET_HOLES = 48;
@@ -2105,6 +2389,13 @@ import {
     [GUNS.RIFLE]:  new THREE.MeshBasicMaterial({ color: 0xfff0cc, transparent: true, opacity: 0.10, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
     [GUNS.SHOTGUN]:new THREE.MeshBasicMaterial({ color: 0xffb870, transparent: true, opacity: 0.08, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
     [GUNS.SNIPER]: new THREE.MeshBasicMaterial({ color: 0xe8f8ff, transparent: true, opacity: 0.13, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.PISTOL]: new THREE.MeshBasicMaterial({ color: 0xffe6b8, transparent: true, opacity: 0.09, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.SMG]:    new THREE.MeshBasicMaterial({ color: 0xfff0cc, transparent: true, opacity: 0.09, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.LMG]:    new THREE.MeshBasicMaterial({ color: 0xffdca0, transparent: true, opacity: 0.11, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.DMR]:    new THREE.MeshBasicMaterial({ color: 0xf2f8ff, transparent: true, opacity: 0.12, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.AKIMBO]: new THREE.MeshBasicMaterial({ color: 0xffe6b8, transparent: true, opacity: 0.09, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.RAILGUN]:new THREE.MeshBasicMaterial({ color: 0xa8f0ff, transparent: true, opacity: 0.16, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
+    [GUNS.FLAK]:   new THREE.MeshBasicMaterial({ color: 0xffb870, transparent: true, opacity: 0.08, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
   };
   const tracerGeometry = new THREE.CylinderGeometry(1, 0.08, 1, 12, 8, true);
   const LIGHTNING_POOL_SIZE = 12;
@@ -2514,7 +2805,7 @@ function drawLightningArc(ctx, cx, cy, innerR, outerR, angle, seed, color, width
   return { charge, beam, impact };
 })();
 
-function createAnimatedEnergySprite(sheet, color = 0xffffff, scale = 1, opacity = 1, options = {}) {
+function createAnimatedEnergySprite(sheet, color = 0xffffff, scale = 1, opacity = 1, options: any = {}) {
   const texture = sheet.texture.clone();
 
   texture.wrapS = THREE.RepeatWrapping;
@@ -3030,7 +3321,7 @@ function checkoutImpactParticle() {
     const mesh = new THREE.Mesh(impactGeometry, impactMaterials[0]);
     mesh.visible = true;
     scene.add(mesh);
-    return { mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 };
+    return { mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 } as any;
   }
 
   function recycleImpactParticle(particle) {
@@ -3271,7 +3562,7 @@ function createLightningEffect() {
   // expand-and-vanish flash) or "fade" (gentle fade-out). Callers may mutate
   // ring.radius / ring.mesh.position each frame (e.g. the Cherub's shrinking
   // sanctuary) — the update loop re-applies them.
-  function spawnTelegraphRing(x, z, radius, color, chargeDur, opts = {}) {
+  function spawnTelegraphRing(x, z, radius, color, chargeDur, opts: any = {}) {
     const ring = telegraphRingPool.length ? telegraphRingPool.pop() : createTelegraphRing();
     ring.mesh.visible = true;
     ring.mesh.position.set(x, opts.y ?? 0.06, z);
@@ -3516,7 +3807,7 @@ function createLightningEffect() {
     return target.set(Math.cos(theta) * radius, Math.sin(theta) * radius);
   }
 
-  function spawnBulletHole(pos, normal, gunType = GUNS.RIFLE) {
+  function spawnBulletHole(pos, normal, gunType: GunType = GUNS.RIFLE) {
     if (activeBulletHoles.length >= MAX_ACTIVE_BULLET_HOLES) {
       recycleBulletHole(activeBulletHoles.shift());
     }
@@ -3599,7 +3890,7 @@ function createLightningEffect() {
     return fallback;
   }
 
-  function sanitizeWebGPUMaterials(root = scene) {
+  function sanitizeWebGPUMaterials(root: any = scene) {
     if (rendererBackend !== "webgpu" || !root?.traverse) return 0;
     let replaced = 0;
     root.traverse(obj => {
@@ -3739,7 +4030,7 @@ function createLightningEffect() {
     // the dome mesh is hidden (pure visibility toggle on a mesh, so no shader
     // relink — see the light-count invariant) and the clear colour + fog go black.
     if (scene.fog) {
-      scene.fog.density = shouldDarken ? 0.011 : 0.0042;
+      (scene.fog as any).density = shouldDarken ? 0.011 : 0.0042;
       scene.fog.color.setHex(shouldDarken ? 0x05060a : 0xd8c4a8);
     }
     const skyDome = scene.getObjectByName("DaySkyDome");
@@ -3750,28 +4041,47 @@ function createLightningEffect() {
     if (shouldDarken) buildFireSkyDome();
     const fireDome = scene.getObjectByName("FireSkyDome");
     if (fireDome) fireDome.visible = shouldDarken;
-    if (scene.background && scene.background.isColor) scene.background.setHex(shouldDarken ? 0x000000 : 0xd8c2a4);
+    // The distant-skyline silhouette ring is unlit — during a blackout it is a solid
+    // black wall that buries the burning horizon AND the fiery sun disc (its rooftops
+    // subtend up to ~25° of elevation). Hide it while the world burns; the fire dome
+    // reads as the city skyline instead. (Mesh visibility toggle — fine; only LIGHT
+    // visibility is locked by the shader-cache invariant.)
+    const skyline = scene.getObjectByName("DistantSkyline");
+    if (skyline) skyline.visible = !shouldDarken;
+    if (scene.background && (scene.background as any).isColor) (scene.background as any).setHex(shouldDarken ? 0x000000 : 0xd8c2a4);
     scene.environmentIntensity = shouldDarken ? 0.10 : 0.58; // starve the IBL so the dark reads
     // No sky = no sun. Drop the exterior key/fill so the world goes truly dark
     // instead of "daylight under a black ceiling" (intensity change only — never
     // visibility, per the light-count shader-cache invariant).
     const extSun = window.__extSun;
     if (extSun) {
-      extSun.intensity = (extSun.userData.baseIntensity ?? extSun.intensity) * (shouldDarken ? 0.10 : 1);
-      // The golden-hour sun is gone during a blackout — the only sky light is the
-      // burning horizon. Retint the key to ember red and drop it to the horizon so
-      // the residual directional light reads as fire glow, not sunlight. Color +
-      // position changes only (never visibility, per the light-count invariant).
+      // Blackout: the ONLY sky light is the burning horizon, so the key light must
+      // come exactly FROM the fiery sun rendered by the fire dome. Same canonical
+      // direction (BLACKOUT_SUN_DIR) feeds the dome's uSunDir uniform and this
+      // placement, measured from the light's target. Intensity 0.32 (was 0.10) so
+      // the fire-sun direction visibly reads as rim light + shadows in the world.
+      // Color + position + intensity changes only (never visibility, per the
+      // light-count shader-cache invariant).
+      extSun.intensity = (extSun.userData.baseIntensity ?? extSun.intensity) * (shouldDarken ? 0.32 : 1);
       if (!extSun.userData.baseColorHex) extSun.userData.baseColorHex = extSun.color.getHex();
       if (!extSun.userData.basePosition) extSun.userData.basePosition = extSun.position.clone();
       if (shouldDarken) {
         extSun.color.setHex(0xff4a1e);
-        const bp = extSun.userData.basePosition;
-        extSun.position.set(bp.x, 18, bp.z); // near-horizon: long fire-lit rims
+        const t = extSun.target.position;
+        extSun.position.set(
+          t.x + BLACKOUT_SUN_DIR.x * 260,
+          t.y + BLACKOUT_SUN_DIR.y * 260,
+          t.z + BLACKOUT_SUN_DIR.z * 260
+        );
       } else {
         extSun.color.setHex(extSun.userData.baseColorHex);
         extSun.position.copy(extSun.userData.basePosition);
       }
+      // Sun moved → refit the shadow frustum to the world from the new angle and
+      // re-render the shadow map (needed on the low-end static-bake path; harmless
+      // when shadowMap.autoUpdate is on).
+      window.__extFitSunShadow?.();
+      if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
     }
     const extHemi = window.__extHemi;
     if (extHemi) {
@@ -3791,14 +4101,18 @@ function createLightningEffect() {
     if (announce) addKillFeed(shouldDarken ? "BLACKOUT WAVE - CEILING LIGHTS OFF" : "ENVIRONMENT LIGHTS RESTORED");
   }
   refreshEnvironmentLightRegistry();
-  const dirLight = scene.children.find(c => c instanceof THREE.DirectionalLight);
-  if (dirLight?.shadow) dirLight.shadow.mapSize.set(512, 512);
-    if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+  // (Removed: a stray `dirLight.shadow.mapSize.set(512,512)` on the first
+  // DirectionalLight found. It hit the interior ceiling-fill light — which doesn't
+  // cast — so it did nothing useful, and it was a trap waiting to clobber a real
+  // shadow caster's resolution if scene-children order ever changed.)
+  if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
 
   // Flashlight: exact copy of gunFlash — same PointLight type, same camera-child parent,
   // same position, distance, decay. Only difference: white color + higher intensity.
   // Critically: do NOT toggle .visible (gunFlash never does — intensity=0 is how it turns off).
-  const flashlight = new THREE.PointLight(0xe8f4ff, 0, 28, 1.5);
+  // Long throw: distance 90 with gentle decay so the beam actually reaches across
+  // rooms / down the street instead of pooling around the player (was 28 / 1.5).
+  const flashlight = new THREE.PointLight(0xe8f4ff, 0, 90, 1.1);
   flashlight.position.set(0.12, -0.05, -0.45);
   flashlight.castShadow = false;
   flashlight.name = "PlayerFlashlightBeam";
@@ -3819,7 +4133,7 @@ function createLightningEffect() {
   gunFlash.position.set(0.12, -0.05, -0.45);
   camera.add(gunFlash);
 
-  const lightingState = {
+  const lightingState: any = {
     flashlightOn: false,
     shootFlash: 0,
     lightningFlash: 0,
@@ -3838,7 +4152,7 @@ function createLightningEffect() {
     lensGlow.visible = false;
   }
 
-  function addBox(parent, size, pos, mat, rot = {}) {
+  function addBox(parent, size, pos, mat, rot: any = {}) {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), mat);
     mesh.position.set(pos.x, pos.y, pos.z);
     mesh.rotation.set(rot.x || 0, rot.y || 0, rot.z || 0);
@@ -3912,6 +4226,34 @@ function createLightningEffect() {
         right: { pos: { x: -0.1, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
         left: { pos: { x: 0.12, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
+      [GUNS.PISTOL]: {
+        right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.0, y: -0.26, z: 0.04 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.SMG]: {
+        right: { pos: { x: -0.08, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.22, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.LMG]: {
+        right: { pos: { x: -0.12, y: -0.26, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.4, y: -0.14, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.DMR]: {
+        right: { pos: { x: -0.1, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
+        left: { pos: { x: 0.3, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.AKIMBO]: {
+        right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.02, y: -0.24, z: 0.04 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.RAILGUN]: {
+        right: { pos: { x: -0.1, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
+        left: { pos: { x: 0.34, y: -0.14, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
+      [GUNS.FLAK]: {
+        right: { pos: { x: -0.08, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.34, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+      },
     };
     const cfg = layout[gunType] || layout[GUNS.RIFLE];
 
@@ -3928,7 +4270,7 @@ function createLightningEffect() {
     gun.userData.fpHands = { left, right };
   }
 
-  function createWeaponViewModel(gunType = GUNS.RIFLE, parent = camera) {
+  function createWeaponViewModel(gunType: GunType = GUNS.RIFLE, parent: any = camera) {
     const gun = new THREE.Group();
     parent.add(gun);
     const firstPersonModel = parent === camera;
@@ -3954,6 +4296,227 @@ function createLightningEffect() {
       m.userData.baseEmissiveIntensity = m.emissiveIntensity;
       m.userData.baseMetalness = m.metalness;
       m.userData.baseRoughness = m.roughness;
+    }
+
+    // Shared muzzle rig builder for the mystery-box roster (same sprite/cone/glow
+    // pattern as the three original guns — no lights, additive sprites only).
+    function buildMuzzleRig(mx, my, color, flashScale, coneR, coneLen, glowR, tips?) {
+      const muzzle = new THREE.Object3D();
+      muzzle.intensity = 0;
+      muzzle.position.set(mx, my, 0);
+      gun.add(muzzle);
+      const flash = createMuzzleFlash(color, flashScale);
+      flash.position.set(0.12, 0.0, 0.0);
+      muzzle.add(flash);
+      const coneMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: color, emissiveIntensity: 0, roughness: 0.12, metalness: 0, transparent: true, toneMapped: false });
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(coneR, coneLen, 10), coneMat);
+      cone.rotation.z = -Math.PI * 0.5;
+      cone.position.copy(flash.position);
+      cone.visible = false;
+      muzzle.add(cone);
+      const glowMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0, roughness: 0.08, metalness: 0.0, transparent: true });
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(glowR, 8, 6), glowMat);
+      glow.position.copy(flash.position);
+      glow.visible = false;
+      muzzle.add(glow);
+      const flash3d = createPhysicalMuzzleFlash(color, 0.26, coneR * 1.05, glowR * 1.05);
+      flash3d.position.copy(flash.position);
+      muzzle.add(flash3d);
+      muzzle.userData.flashCone = cone;
+      muzzle.userData.flashGlow = glow;
+      muzzle.userData.flash3d = flash3d;
+      muzzle.userData.barrelTips = tips || [new THREE.Vector3(0.14, 0.0, 0.0)];
+      return { muzzle, flash };
+    }
+
+    if (gunType === GUNS.PISTOL) {
+      // ── Service Pistol — compact slide-over-frame silhouette ─────────────────
+      const receiver = addBox(gun, { x: 0.34, y: 0.11, z: 0.1 }, { x: 0.05, y: 0.03, z: 0 }, bodyMat); // slide
+      const slide = addBox(gun, { x: 0.3, y: 0.035, z: 0.104 }, { x: 0.05, y: 0.095, z: 0 }, darkMat); // slide top serrations
+      for (let i = 0; i < 4; i++) addBox(gun, { x: 0.01, y: 0.05, z: 0.106 }, { x: -0.06 + i * 0.03, y: 0.05, z: 0 }, edgeMat);
+      addBox(gun, { x: 0.3, y: 0.06, z: 0.09 }, { x: 0.04, y: -0.04, z: 0 }, darkMat); // frame
+      addCyl(gun, 0.02, 0.02, 0.12, 8, { x: 0.26, y: 0.03, z: 0 }, { z: Math.PI * 0.5 }, darkMat); // barrel stub
+      addBox(gun, { x: 0.09, y: 0.02, z: 0.05 }, { x: 0.14, y: -0.085, z: 0 }, accentMat); // rail
+      const mag = addBox(gun, { x: 0.07, y: 0.2, z: 0.075 }, { x: -0.07, y: -0.17, z: 0 }, darkMat, { z: -0.16 }); // grip/mag
+      addBox(gun, { x: 0.075, y: 0.03, z: 0.082 }, { x: -0.095, y: -0.27, z: 0 }, brassMat, { z: -0.16 }); // baseplate
+      const trigger = addBox(gun, { x: 0.012, y: 0.045, z: 0.012 }, { x: 0.045, y: -0.085, z: 0 }, accentMat);
+      addBox(gun, { x: 0.1, y: 0.04, z: 0.012 }, { x: 0.05, y: -0.075, z: 0.045 }, darkMat, { z: 0.12 }); // trigger guard
+      addBox(gun, { x: 0.02, y: 0.03, z: 0.012 }, { x: 0.19, y: 0.11, z: 0 }, accentMat); // front sight
+      addBox(gun, { x: 0.02, y: 0.028, z: 0.05 }, { x: -0.1, y: 0.11, z: 0 }, darkMat); // rear sight
+      const chamberGlow = addBox(gun, { x: 0.06, y: 0.012, z: 0.012 }, { x: 0.1, y: 0.075, z: -0.054 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.PISTOL);
+      const { muzzle, flash } = buildMuzzleRig(0.36, 0.045, 0xffcf7a, 0.3, 0.05, 0.16, 0.034);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.SMG) {
+      // ── Hornet SMG — stubby body, side-folded stock, long straight mag ──────
+      const receiver = addBox(gun, { x: 0.42, y: 0.15, z: 0.13 }, { x: 0.04, y: 0.0, z: 0 }, bodyMat);
+      addBox(gun, { x: 0.38, y: 0.024, z: 0.06 }, { x: 0.04, y: 0.085, z: 0 }, darkMat); // top rail
+      addRailTeeth(gun, 8, -0.12, 0.05, 0.098, 0, edgeMat, { x: 0.024, y: 0.02, z: 0.07 });
+      addBox(gun, { x: 0.2, y: 0.1, z: 0.13 }, { x: 0.32, y: -0.005, z: 0 }, rubberMat); // stub handguard
+      addAccentGlow(gun, 0.18, { x: 0.32, y: 0.04, z: 0.078 }, accentMat);
+      addAccentGlow(gun, 0.18, { x: 0.32, y: 0.04, z: -0.078 }, accentMat);
+      addCyl(gun, 0.024, 0.024, 0.26, 10, { x: 0.5, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, darkMat); // short barrel
+      addCyl(gun, 0.036, 0.036, 0.14, 10, { x: 0.56, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, accentMat); // suppressor can
+      addBox(gun, { x: 0.085, y: 0.24, z: 0.12 }, { x: -0.1, y: -0.2, z: 0 }, rubberMat, { z: -0.18 }); // grip
+      const mag = addBox(gun, { x: 0.075, y: 0.32, z: 0.06 }, { x: 0.1, y: -0.24, z: 0 }, darkMat, { z: -0.04 }); // long stick mag
+      addBox(gun, { x: 0.08, y: 0.026, z: 0.068 }, { x: 0.1, y: -0.4, z: 0 }, accentMat, { z: -0.04 });
+      const trigger = addBox(gun, { x: 0.012, y: 0.05, z: 0.012 }, { x: 0.02, y: -0.11, z: 0 }, accentMat);
+      addBox(gun, { x: 0.11, y: 0.045, z: 0.012 }, { x: 0.03, y: -0.09, z: 0.045 }, darkMat, { z: 0.12 });
+      // Folded wire stock along the left side
+      addBox(gun, { x: 0.34, y: 0.02, z: 0.02 }, { x: -0.22, y: 0.03, z: 0.08 }, edgeMat);
+      addBox(gun, { x: 0.02, y: 0.1, z: 0.02 }, { x: -0.38, y: -0.02, z: 0.08 }, edgeMat);
+      const slide = addBox(gun, { x: 0.05, y: 0.024, z: 0.05 }, { x: -0.05, y: 0.055, z: -0.08 }, darkMat); // charging handle
+      const chamberGlow = addBox(gun, { x: 0.07, y: 0.012, z: 0.012 }, { x: 0.12, y: 0.07, z: -0.068 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.SMG);
+      const { muzzle, flash } = buildMuzzleRig(0.66, 0.02, 0xffc86a, 0.3, 0.05, 0.18, 0.036);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.LMG) {
+      // ── Bastion LMG — heavy receiver, drum, thick barrel + carry handle ─────
+      const receiver = addBox(gun, { x: 0.62, y: 0.2, z: 0.18 }, { x: 0.0, y: 0.0, z: 0 }, bodyMat);
+      addBox(gun, { x: 0.5, y: 0.026, z: 0.07 }, { x: 0.0, y: 0.115, z: 0 }, darkMat); // top rail
+      addRailTeeth(gun, 10, -0.2, 0.06, 0.128, 0, edgeMat, { x: 0.028, y: 0.022, z: 0.08 });
+      addBox(gun, { x: 0.2, y: 0.05, z: 0.03 }, { x: -0.05, y: 0.18, z: 0 }, darkMat); // carry handle
+      addBox(gun, { x: 0.02, y: 0.05, z: 0.03 }, { x: -0.15, y: 0.15, z: 0 }, darkMat);
+      addBox(gun, { x: 0.02, y: 0.05, z: 0.03 }, { x: 0.05, y: 0.15, z: 0 }, darkMat);
+      addBox(gun, { x: 0.34, y: 0.12, z: 0.16 }, { x: 0.42, y: 0.0, z: 0 }, darkMat); // handguard
+      for (let i = 0; i < 4; i++) addBox(gun, { x: 0.03, y: 0.13, z: 0.014 }, { x: 0.32 + i * 0.08, y: 0.0, z: 0.086 }, edgeMat);
+      addCyl(gun, 0.036, 0.036, 0.6, 10, { x: 0.78, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, darkMat); // thick barrel
+      addCyl(gun, 0.052, 0.046, 0.1, 10, { x: 1.06, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, accentMat); // brake
+      const mag = addCyl(gun, 0.13, 0.13, 0.09, 14, { x: 0.05, y: -0.19, z: 0 }, { x: Math.PI * 0.5 }, darkMat); // drum
+      addCyl(gun, 0.09, 0.09, 0.096, 14, { x: 0.05, y: -0.19, z: 0 }, { x: Math.PI * 0.5 }, brassMat);
+      addBox(gun, { x: 0.09, y: 0.26, z: 0.13 }, { x: -0.24, y: -0.2, z: 0 }, rubberMat, { z: -0.2 }); // grip
+      const trigger = addBox(gun, { x: 0.013, y: 0.055, z: 0.013 }, { x: -0.13, y: -0.12, z: 0 }, accentMat);
+      addBox(gun, { x: 0.26, y: 0.09, z: 0.14 }, { x: -0.48, y: 0.0, z: 0 }, bodyMat); // stock
+      addBox(gun, { x: 0.07, y: 0.17, z: 0.13 }, { x: -0.62, y: -0.02, z: 0 }, rubberMat); // pad
+      // Folded bipod
+      addBox(gun, { x: 0.01, y: 0.2, z: 0.01 }, { x: 0.72, y: -0.1, z: 0.05 }, darkMat, { z: 0.28 });
+      addBox(gun, { x: 0.01, y: 0.2, z: 0.01 }, { x: 0.72, y: -0.1, z: -0.05 }, darkMat, { z: -0.28 });
+      const slide = addBox(gun, { x: 0.06, y: 0.026, z: 0.08 }, { x: -0.1, y: 0.06, z: -0.11 }, darkMat);
+      const chamberGlow = addBox(gun, { x: 0.09, y: 0.012, z: 0.014 }, { x: 0.14, y: 0.09, z: -0.094 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.LMG);
+      const { muzzle, flash } = buildMuzzleRig(1.13, 0.02, 0xffc06a, 0.4, 0.07, 0.22, 0.05);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.DMR) {
+      // ── Verdict DMR — long slab receiver, mid scope, skeleton stock ─────────
+      const receiver = addBox(gun, { x: 0.6, y: 0.15, z: 0.14 }, { x: 0.05, y: 0.0, z: 0 }, bodyMat);
+      addRailTeeth(gun, 11, -0.16, 0.05, 0.088, 0, edgeMat, { x: 0.026, y: 0.018, z: 0.07 });
+      addBox(gun, { x: 0.34, y: 0.1, z: 0.13 }, { x: 0.45, y: -0.005, z: 0 }, darkMat); // handguard
+      addAccentGlow(gun, 0.3, { x: 0.45, y: 0.045, z: 0.078 }, accentMat);
+      addAccentGlow(gun, 0.3, { x: 0.45, y: 0.045, z: -0.078 }, accentMat);
+      addCyl(gun, 0.024, 0.024, 0.6, 10, { x: 0.83, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, darkMat); // barrel
+      addCyl(gun, 0.036, 0.032, 0.09, 10, { x: 1.11, y: 0.02, z: 0 }, { z: Math.PI * 0.5 }, accentMat); // brake
+      const mag = addBox(gun, { x: 0.085, y: 0.2, z: 0.065 }, { x: 0.1, y: -0.17, z: 0 }, darkMat, { z: -0.08 });
+      addBox(gun, { x: 0.09, y: 0.025, z: 0.072 }, { x: 0.1, y: -0.275, z: 0 }, brassMat, { z: -0.08 });
+      addBox(gun, { x: 0.085, y: 0.24, z: 0.12 }, { x: -0.12, y: -0.18, z: 0 }, rubberMat, { z: -0.2 }); // grip
+      const trigger = addBox(gun, { x: 0.012, y: 0.055, z: 0.012 }, { x: -0.01, y: -0.11, z: 0 }, accentMat);
+      // Skeleton stock
+      addBox(gun, { x: 0.3, y: 0.03, z: 0.1 }, { x: -0.42, y: 0.05, z: 0 }, bodyMat);
+      addBox(gun, { x: 0.3, y: 0.03, z: 0.1 }, { x: -0.42, y: -0.08, z: 0 }, bodyMat);
+      addBox(gun, { x: 0.05, y: 0.18, z: 0.11 }, { x: -0.58, y: -0.02, z: 0 }, rubberMat);
+      // Mid-power scope
+      addCyl(gun, 0.042, 0.042, 0.34, 12, { x: 0.1, y: 0.15, z: 0 }, { z: Math.PI * 0.5 }, darkMat);
+      addCyl(gun, 0.05, 0.046, 0.05, 12, { x: 0.27, y: 0.15, z: 0 }, { z: Math.PI * 0.5 }, lensMat);
+      addCyl(gun, 0.038, 0.035, 0.045, 12, { x: -0.07, y: 0.15, z: 0 }, { z: Math.PI * 0.5 }, lensMat);
+      addCyl(gun, 0.05, 0.05, 0.022, 10, { x: 0.02, y: 0.15, z: 0 }, { z: Math.PI * 0.5 }, accentMat);
+      addCyl(gun, 0.05, 0.05, 0.022, 10, { x: 0.18, y: 0.15, z: 0 }, { z: Math.PI * 0.5 }, accentMat);
+      const slide = addBox(gun, { x: 0.05, y: 0.022, z: 0.09 }, { x: -0.04, y: 0.06, z: -0.1 }, darkMat);
+      const chamberGlow = addBox(gun, { x: 0.08, y: 0.012, z: 0.014 }, { x: 0.16, y: 0.075, z: -0.074 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.DMR);
+      const { muzzle, flash } = buildMuzzleRig(1.17, 0.03, 0xffd97a, 0.3, 0.05, 0.22, 0.038);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.AKIMBO) {
+      // ── Gemini Machine Pistol — oversized pistol w/ compensator + brace ─────
+      const receiver = addBox(gun, { x: 0.38, y: 0.12, z: 0.11 }, { x: 0.05, y: 0.03, z: 0 }, bodyMat);
+      const slide = addBox(gun, { x: 0.34, y: 0.04, z: 0.114 }, { x: 0.05, y: 0.1, z: 0 }, darkMat);
+      for (let i = 0; i < 5; i++) addBox(gun, { x: 0.01, y: 0.055, z: 0.116 }, { x: -0.08 + i * 0.028, y: 0.055, z: 0 }, edgeMat);
+      addCyl(gun, 0.022, 0.022, 0.16, 8, { x: 0.28, y: 0.04, z: 0 }, { z: Math.PI * 0.5 }, darkMat);
+      // Vented compensator
+      addBox(gun, { x: 0.1, y: 0.09, z: 0.1 }, { x: 0.32, y: 0.045, z: 0 }, accentMat);
+      addBox(gun, { x: 0.012, y: 0.1, z: 0.06 }, { x: 0.35, y: 0.05, z: 0 }, edgeMat);
+      const mag = addBox(gun, { x: 0.075, y: 0.28, z: 0.08 }, { x: -0.08, y: -0.2, z: 0 }, darkMat, { z: -0.14 }); // extended mag
+      addBox(gun, { x: 0.08, y: 0.03, z: 0.088 }, { x: -0.12, y: -0.34, z: 0 }, warningMat, { z: -0.14 });
+      const trigger = addBox(gun, { x: 0.012, y: 0.05, z: 0.012 }, { x: 0.05, y: -0.09, z: 0 }, accentMat);
+      addBox(gun, { x: 0.11, y: 0.045, z: 0.012 }, { x: 0.06, y: -0.08, z: 0.048 }, darkMat, { z: 0.12 });
+      // Folded brace at rear
+      addBox(gun, { x: 0.2, y: 0.026, z: 0.026 }, { x: -0.24, y: 0.05, z: 0.07 }, edgeMat);
+      addBox(gun, { x: 0.05, y: 0.09, z: 0.026 }, { x: -0.33, y: 0.0, z: 0.07 }, darkMat);
+      addBox(gun, { x: 0.022, y: 0.032, z: 0.012 }, { x: 0.2, y: 0.13, z: 0 }, warningMat); // hi-vis front sight
+      addBox(gun, { x: 0.022, y: 0.03, z: 0.05 }, { x: -0.12, y: 0.125, z: 0 }, darkMat);
+      const chamberGlow = addBox(gun, { x: 0.06, y: 0.012, z: 0.012 }, { x: 0.1, y: 0.08, z: -0.06 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.AKIMBO);
+      const { muzzle, flash } = buildMuzzleRig(0.4, 0.05, 0xffc86a, 0.32, 0.052, 0.16, 0.036);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.RAILGUN) {
+      // ── Lancer Railgun — twin rails, coil rings, glowing core ───────────────
+      const receiver = addBox(gun, { x: 0.6, y: 0.18, z: 0.16 }, { x: -0.02, y: 0.0, z: 0 }, bodyMat);
+      // Twin accelerator rails
+      addBox(gun, { x: 0.9, y: 0.035, z: 0.035 }, { x: 0.62, y: 0.055, z: 0.045 }, edgeMat);
+      addBox(gun, { x: 0.9, y: 0.035, z: 0.035 }, { x: 0.62, y: 0.055, z: -0.045 }, edgeMat);
+      addBox(gun, { x: 0.9, y: 0.02, z: 0.02 }, { x: 0.62, y: -0.01, z: 0 }, darkMat); // lower spine
+      // Energy core between the rails (uses lens material — emissive cyan)
+      addBox(gun, { x: 0.78, y: 0.028, z: 0.05 }, { x: 0.58, y: 0.055, z: 0 }, lensMat);
+      // Coil rings along the rails
+      for (let i = 0; i < 5; i++) addCyl(gun, 0.075, 0.075, 0.028, 12, { x: 0.3 + i * 0.18, y: 0.045, z: 0 }, { z: Math.PI * 0.5 }, i % 2 ? accentMat : darkMat);
+      addCyl(gun, 0.05, 0.09, 0.08, 12, { x: 1.1, y: 0.05, z: 0 }, { z: Math.PI * 0.5 }, accentMat); // flared emitter
+      // Capacitor bank underside
+      addBox(gun, { x: 0.3, y: 0.1, z: 0.14 }, { x: 0.24, y: -0.1, z: 0 }, darkMat);
+      addAccentGlow(gun, 0.26, { x: 0.24, y: -0.155, z: 0.06 }, lensMat);
+      const mag = addBox(gun, { x: 0.12, y: 0.14, z: 0.09 }, { x: -0.06, y: -0.15, z: 0 }, brassMat); // fuel cell
+      addBox(gun, { x: 0.085, y: 0.24, z: 0.12 }, { x: -0.24, y: -0.18, z: 0 }, rubberMat, { z: -0.2 }); // grip
+      const trigger = addBox(gun, { x: 0.012, y: 0.055, z: 0.012 }, { x: -0.13, y: -0.11, z: 0 }, accentMat);
+      addBox(gun, { x: 0.24, y: 0.1, z: 0.13 }, { x: -0.44, y: 0.0, z: 0 }, bodyMat); // stock
+      addBox(gun, { x: 0.06, y: 0.16, z: 0.12 }, { x: -0.58, y: -0.02, z: 0 }, rubberMat);
+      // Holo sight block
+      addBox(gun, { x: 0.14, y: 0.06, z: 0.07 }, { x: -0.1, y: 0.14, z: 0 }, darkMat);
+      addBox(gun, { x: 0.02, y: 0.05, z: 0.05 }, { x: -0.04, y: 0.17, z: 0 }, lensMat);
+      const slide = addBox(gun, { x: 0.05, y: 0.024, z: 0.07 }, { x: -0.16, y: 0.07, z: -0.1 }, darkMat);
+      const chamberGlow = addBox(gun, { x: 0.1, y: 0.014, z: 0.016 }, { x: 0.05, y: 0.095, z: -0.084 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.RAILGUN);
+      const { muzzle, flash } = buildMuzzleRig(1.16, 0.05, 0x7ae8ff, 0.34, 0.05, 0.3, 0.042);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
+    }
+
+    if (gunType === GUNS.FLAK) {
+      // ── Mauler Auto-Shotgun — drum-fed bullpup scattergun ───────────────────
+      const receiver = addBox(gun, { x: 0.66, y: 0.19, z: 0.17 }, { x: -0.06, y: 0.0, z: 0 }, bodyMat);
+      addBox(gun, { x: 0.5, y: 0.024, z: 0.06 }, { x: -0.02, y: 0.107, z: 0 }, darkMat); // rail
+      addRailTeeth(gun, 8, -0.22, 0.055, 0.12, 0, edgeMat, { x: 0.028, y: 0.02, z: 0.072 });
+      addCyl(gun, 0.045, 0.045, 0.42, 10, { x: 0.44, y: 0.03, z: 0 }, { z: Math.PI * 0.5 }, darkMat); // fat barrel
+      // Perforated heat shroud
+      addCyl(gun, 0.06, 0.06, 0.3, 10, { x: 0.4, y: 0.03, z: 0 }, { z: Math.PI * 0.5 }, edgeMat);
+      for (let i = 0; i < 4; i++) addBox(gun, { x: 0.05, y: 0.016, z: 0.13 }, { x: 0.3 + i * 0.07, y: 0.095, z: 0 }, darkMat);
+      addCyl(gun, 0.075, 0.06, 0.07, 10, { x: 0.66, y: 0.03, z: 0 }, { z: Math.PI * 0.5 }, warningMat); // muzzle bell
+      const mag = addCyl(gun, 0.115, 0.115, 0.085, 14, { x: -0.02, y: -0.17, z: 0 }, { x: Math.PI * 0.5 }, darkMat); // shell drum
+      addCyl(gun, 0.08, 0.08, 0.09, 14, { x: -0.02, y: -0.17, z: 0 }, { x: Math.PI * 0.5 }, warningMat);
+      addBox(gun, { x: 0.085, y: 0.24, z: 0.13 }, { x: 0.16, y: -0.19, z: 0 }, rubberMat, { z: -0.22 }); // forward grip (bullpup)
+      const trigger = addBox(gun, { x: 0.013, y: 0.055, z: 0.013 }, { x: 0.26, y: -0.1, z: 0 }, warningMat);
+      addBox(gun, { x: 0.13, y: 0.05, z: 0.012 }, { x: 0.25, y: -0.09, z: 0.05 }, darkMat, { z: 0.12 });
+      addBox(gun, { x: 0.16, y: 0.17, z: 0.15 }, { x: -0.44, y: -0.01, z: 0 }, rubberMat); // butt pad (bullpup rear)
+      // Shell carrier on top rear
+      for (let i = 0; i < 3; i++) addCyl(gun, 0.02, 0.02, 0.1, 6, { x: -0.28 + i * 0.06, y: 0.13, z: 0 }, { x: Math.PI * 0.5 }, brassMat);
+      addBox(gun, { x: 0.02, y: 0.03, z: 0.012 }, { x: 0.5, y: 0.12, z: 0 }, accentMat); // bead
+      const slide = addBox(gun, { x: 0.06, y: 0.026, z: 0.07 }, { x: -0.12, y: 0.06, z: -0.11 }, darkMat);
+      const chamberGlow = addBox(gun, { x: 0.09, y: 0.014, z: 0.014 }, { x: -0.02, y: 0.085, z: -0.09 }, warningMat);
+      chamberGlow.visible = false;
+      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.FLAK);
+      const { muzzle, flash } = buildMuzzleRig(0.72, 0.03, 0xffbf5a, 0.46, 0.08, 0.24, 0.055);
+      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
     if (gunType === GUNS.RIFLE) {
@@ -4224,6 +4787,9 @@ function createLightningEffect() {
       { gunType: GUNS.RIFLE, canvas: document.getElementById("loadout-preview-rifle"), yaw: -0.35 },
       { gunType: GUNS.SHOTGUN, canvas: document.getElementById("loadout-preview-shotgun"), yaw: -0.18 },
       { gunType: GUNS.SNIPER, canvas: document.getElementById("loadout-preview-sniper"), yaw: -0.48 },
+      // Only the starter pistol gets a live 3D preview; the other mystery-box guns
+      // use static emblems (each preview costs a WebGL context — browsers cap ~16).
+      { gunType: GUNS.PISTOL, canvas: document.getElementById("loadout-preview-pistol"), yaw: -0.3 },
     ];
 
     for (const config of previewConfigs) {
@@ -4324,14 +4890,17 @@ function createLightningEffect() {
     const reloadDuration = state?.reloadTime || spec.reloadTime;
     return {
       recoil: spec.recoil,
-      muzzleFlashDuration: gunType === GUNS.SNIPER ? 0.075 : gunType === GUNS.SHOTGUN ? 0.105 : 0.08,
+      muzzleFlashDuration: Number.isFinite(spec.muzzleFlashTime)
+        ? spec.muzzleFlashTime
+        : (gunType === GUNS.SNIPER ? 0.075 : gunType === GUNS.SHOTGUN ? 0.105 : 0.08),
+      equipTime: Number.isFinite(spec.equipTime) ? spec.equipTime : 0.3,
       reloadDuration,
       dropPhase: reloadDuration * 0.25,
       swapPhase: reloadDuration * 0.55,
     };
   }
 
-  function initializeWeaponAnimation(gunType = GUNS.RIFLE) {
+  function initializeWeaponAnimation(gunType: GunType = GUNS.RIFLE) {
     return {
       basePos: null,
       baseRot: null,
@@ -4377,7 +4946,7 @@ function createLightningEffect() {
 
   function captureWeaponRigPartBases(weaponRig, key = "animBase") {
     if (!weaponRig?.animParts) return;
-    for (const part of Object.values(weaponRig.animParts)) {
+    for (const part of Object.values(weaponRig.animParts) as any[]) {
       if (!part || part.userData[key]) continue;
       part.userData[key] = {
         position: part.position.clone(),
@@ -4390,7 +4959,7 @@ function createLightningEffect() {
 
   function restoreWeaponRigAnimParts(weaponRig, key = "animBase") {
     if (!weaponRig?.animParts) return;
-    for (const part of Object.values(weaponRig.animParts)) {
+    for (const part of Object.values(weaponRig.animParts) as any[]) {
       const base = part?.userData?.[key];
       if (!base) continue;
       part.position.copy(base.position);
@@ -4400,15 +4969,23 @@ function createLightningEffect() {
     }
   }
 
-  function applyWeaponDesignAnimation(weaponRig, gunType, opts = {}) {
+  function applyWeaponDesignAnimation(weaponRig, gunType, opts: any = {}) {
     const parts = weaponRig?.animParts;
     if (!parts) return;
+    const spec = GUN_SPECS[gunType] || ({} as any);
     const clamp01 = v => Math.max(0, Math.min(1, v || 0));
     const firePull = clamp01(Math.max(opts.shotT || 0, (opts.slideKick || 0) * 3.2, (opts.kick || 0) * 0.22));
     const reloadT = clamp01(opts.reloadT || 0);
     const reloadActive = Boolean(opts.reloadActive);
     const reloadPulse = reloadActive ? Math.sin(reloadT * Math.PI) : 0;
     const actionRack = clamp01(opts.actionRack || 0);
+    // Fire-cycle progress: 0 right at the shot → 1 when the gun is ready again.
+    // Keyed off fireCooldown/fireRate, so slow guns get long mechanical cycles
+    // (railgun re-arms over 1.45s) and fast guns a quick flutter — for free.
+    const firing = Boolean(opts.firing) && !reloadActive;
+    const cycle = firing ? clamp01(opts.cycleT == null ? 1 : opts.cycleT) : 1;
+    const cyclePulse = firing ? Math.sin(Math.min(1, cycle / 0.85) * Math.PI) : 0;
+    const fireStyle = spec.fireCycle || "rifle";
 
     if (parts.trigger) {
       parts.trigger.position.x -= firePull * 0.014;
@@ -4432,6 +5009,67 @@ function createLightningEffect() {
       parts.boltKnob.position.x -= boltTravel;
       parts.boltKnob.position.y += actionRack * 0.035;
       parts.boltKnob.rotation.z -= actionRack * 0.65;
+    }
+
+    // ── Per-gun mechanical fire cycles (shared FP+TP: both callers restore the
+    // slide/mag/animParts to their captured bases each frame, so everything
+    // here is additive and never accumulates) ────────────────────────────────
+    const slide = weaponRig.slide;
+    if (slide) {
+      if (fireStyle === "slide" || fireStyle === "rattle") {
+        // Sharp blowback: full rearward travel in the first quarter of the
+        // cycle, returned to battery by ~70% (SMG-class = smaller, faster).
+        const blow = firing ? (cycle < 0.25 ? cycle / 0.25 : Math.max(0, 1 - (cycle - 0.25) / 0.45)) : 0;
+        slide.position.x -= blow * (fireStyle === "rattle" ? 0.045 : 0.095);
+        // High-rate bolt flutter while the trigger is held.
+        if (fireStyle === "rattle" && firing) slide.position.x -= Math.abs(Math.sin(performance.now() * 0.09)) * 0.018;
+        // Pistol slide locks back on an empty magazine.
+        if (fireStyle === "slide" && opts.magEmpty && !reloadActive) slide.position.x -= 0.07;
+      } else if (fireStyle === "pump") {
+        // Pump/cycling shroud: back then forward across the shot interval
+        // (FLAK auto-cycles a shorter throw, faster-feeling stroke).
+        slide.position.x -= cyclePulse * (gunType === GUNS.SHOTGUN ? 0.2 : 0.12);
+      } else if (fireStyle === "bolt") {
+        // Crisp bolt kick: fast rearward snap, slower controlled return.
+        const boltT = firing ? (cycle < 0.18 ? cycle / 0.18 : Math.max(0, 1 - (cycle - 0.18) / 0.55)) : 0;
+        slide.position.x -= boltT * 0.16;
+        slide.position.y += boltT * 0.02;
+      } else if (fireStyle === "drum") {
+        // Heavy bolt shudder while the belt/drum feeds.
+        if (firing) slide.position.x -= Math.abs(Math.sin(performance.now() * 0.055)) * 0.02;
+        slide.position.x -= firePull * 0.03;
+      }
+    }
+
+    // Drum-fed guns: the drum advances one eased notch per round fired
+    // (rotation about the drum's own axis; base restored each frame upstream).
+    if (spec.reloadStyle === "drum" && weaponRig.mag && Number.isFinite(opts.magCount)) {
+      const notchTarget = reloadActive ? 0 : ((opts.magSize || 0) - opts.magCount) * 0.22;
+      const ud = weaponRig.mag.userData;
+      ud.drumSpin = (ud.drumSpin || 0) + (notchTarget - (ud.drumSpin || 0)) * 0.22;
+      weaponRig.mag.rotation.y += ud.drumSpin;
+    }
+
+    // DMR-class brass ejection puff: the ejection-port glow flashes and kicks
+    // up/back right as the bolt opens. Uniform + transform changes only — no
+    // new materials, no lights (there is no pooled brass system to reuse).
+    if (fireStyle === "bolt" && parts.chamberGlow && firing && cycle < 0.4) {
+      const puff = Math.sin(clamp01(cycle / 0.4) * Math.PI);
+      parts.chamberGlow.visible = true;
+      parts.chamberGlow.position.y += puff * 0.03;
+      parts.chamberGlow.position.z -= puff * 0.025;
+      parts.chamberGlow.scale.set(1 + puff * 0.6, 1 + puff * 1.6, 1 + puff * 1.6);
+      if (parts.chamberGlow.material?.emissive) parts.chamberGlow.material.emissiveIntensity = 0.45 + puff * 1.8;
+    }
+
+    // Railgun coil: charge-up wind — the chamber glow ramps back to full as the
+    // coils re-arm across the long fire delay, then flares on the shot itself.
+    // emissiveIntensity/scale only (uniform changes — shader-cache safe).
+    if (fireStyle === "coil" && parts.chamberGlow) {
+      const charge = reloadActive ? reloadPulse * 0.4 : firing ? cycle : (opts.magEmpty ? 0.1 : 1);
+      parts.chamberGlow.visible = charge > 0.03;
+      parts.chamberGlow.scale.set(1 + charge * 0.35, 1 + charge * 1.1, 1 + charge * 1.1);
+      if (parts.chamberGlow.material?.emissive) parts.chamberGlow.material.emissiveIntensity = 0.2 + charge * 1.7 + (opts.shotT || 0) * 2.4;
     }
 
     if (reloadActive && parts.trigger) {
@@ -4693,8 +5331,38 @@ function createLightningEffect() {
     setHeadBoneHidden(unifiedFp);
   }
 
+  // Locomotion clips that are UNARMED Mixamo animations (arms swing at the sides).
+  // Their arm/hand/shoulder tracks are stripped at action-build time and replaced by
+  // the looping upper-body rifle-carry layer (thirdPerson.carryAction) so the gun —
+  // which is anchored to the hand midpoint in updateThirdPersonWeaponPose — stays
+  // held instead of collapsing to the body's midline while walking.
+  const TP_UNARMED_ACTIONS = new Set([
+    "walk", "walkBack", "startWalk", "stopWalk", "startWalkBack", "stopWalkBack",
+    "strafe", "strafeAlt", "sprint", "sprintLeft", "sprintRight", "runBack",
+    "jumpForward", "jumpBack", "jumpNeutral",
+  ]);
+  const TP_UPPER_BODY_TRACK_RE = /arm|hand|shoulder|clavicle/i;
+  function isUpperBodyTrack(track) {
+    return TP_UPPER_BODY_TRACK_RE.test(getAnimationTrackNodeName(track.name) || "");
+  }
+  // Fraction of the original unarmed arm-swing blended back UNDER the rifle-carry
+  // layer while moving (0 = frozen carry pose, 1 = full unarmed swing). Kept low so
+  // hands stay on the gun (walk-gun-pose spec: span > 0.2) but arms look alive.
+  const TP_ARM_SWING_BLEND = 0.18;
+
   function setThirdPersonAction(name, fade = 0.14) {
     const action = thirdPerson.actions[name] || thirdPerson.actions.idle;
+    // Rifle-carry upper-body layer engages only while an arm-stripped clip drives
+    // the body (weight is smoothed per-frame in updateThirdPersonAnimation).
+    thirdPerson.carryTarget = (TP_UNARMED_ACTIONS.has(name) && thirdPerson.actions[name]) ? 1 : 0;
+    // Matching arms-only swing layer for the active locomotion clip (blended under
+    // the carry layer at TP_ARM_SWING_BLEND so the arms keep organic motion).
+    const nextSwing = (thirdPerson.carryTarget && thirdPerson.armSwingActions?.[name]) || null;
+    if (nextSwing !== thirdPerson.armSwingActive) {
+      if (thirdPerson.armSwingActive) thirdPerson.armSwingActive.setEffectiveWeight(0);
+      if (nextSwing) { nextSwing.reset(); nextSwing.play(); nextSwing.setEffectiveWeight(0); }
+      thirdPerson.armSwingActive = nextSwing;
+    }
     if (!action || action === thirdPerson.activeAction) return;
     action.enabled = true;
     action.reset();
@@ -4707,6 +5375,8 @@ function createLightningEffect() {
 
   function prepareThirdPersonActions(model) {
     thirdPerson.actions = {};
+    thirdPerson.armSwingActions = {};
+    thirdPerson.armSwingActive = null;
     thirdPerson.mixer = new THREE.AnimationMixer(model);
 
     const ONCE = new Set(["fire", "reload", "jump", "jumpRifle", "jumpNeutral", "jumpForward", "jumpBack", "startWalk", "stopWalk", "startWalkBack", "stopWalkBack", "death"]);
@@ -4737,13 +5407,56 @@ function createLightningEffect() {
 
     for (const [name, rawClip] of Object.entries(source)) {
       if (!rawClip) continue;
-      const clip = makeInPlaceClipForModel(rawClip, model);
+      let clip = makeInPlaceClipForModel(rawClip, model);
       if (!clip.tracks.length) continue;
+      // Unarmed locomotion: drop the swinging arm/hand/shoulder tracks — the
+      // upper-body rifle-carry layer below poses the arms instead, so the gun
+      // (anchored to the hand midpoint) stays held while walking/sprinting.
+      if (TP_UNARMED_ACTIONS.has(name)) {
+        const legTracks = clip.tracks.filter(t => !isUpperBodyTrack(t));
+        const armTracks = clip.tracks.filter(isUpperBodyTrack);
+        if (legTracks.length && legTracks.length !== clip.tracks.length) {
+          // Keep the ORIGINAL arm swing as its own arms-only action so a fraction
+          // of it can be blended back under the carry layer (organic motion).
+          if (armTracks.length) {
+            const swingClip = new THREE.AnimationClip(`${clip.name}_armswing`, clip.duration, armTracks);
+            const swing = thirdPerson.mixer.clipAction(swingClip);
+            swing.loop = ONCE.has(name) ? THREE.LoopOnce : THREE.LoopRepeat;
+            swing.clampWhenFinished = ONCE.has(name);
+            swing.enabled = true;
+            swing.setEffectiveWeight(0);
+            thirdPerson.armSwingActions[name] = swing;
+          }
+          clip = new THREE.AnimationClip(`${clip.name}_legs`, clip.duration, legTracks);
+        }
+      }
       const action = thirdPerson.mixer.clipAction(clip);
       action.loop = ONCE.has(name) ? THREE.LoopOnce : THREE.LoopRepeat;
       action.clampWhenFinished = ONCE.has(name);
       action.enabled = true;
       thirdPerson.actions[name] = action;
+    }
+
+    // Upper-body rifle-carry layer: the idle clip ("Rifle Aiming Idle") filtered to
+    // arm/hand/shoulder tracks only, always playing; its weight fades in only while
+    // an arm-stripped locomotion action is active (see setThirdPersonAction +
+    // updateThirdPersonAnimation). Full-body clips (fire/reload/rifle jump/idle)
+    // keep exclusive arm control because the layer's weight is 0 then.
+    thirdPerson.carryAction = null;
+    thirdPerson.carryWeight = 0;
+    thirdPerson.carryTarget = 0;
+    if (PLAYER_CHARACTER_ANIMS.idle) {
+      const idleClip = makeInPlaceClipForModel(PLAYER_CHARACTER_ANIMS.idle, model);
+      const upperTracks = idleClip.tracks.filter(isUpperBodyTrack);
+      if (upperTracks.length) {
+        const carryClip = new THREE.AnimationClip("rifleCarryUpper", idleClip.duration, upperTracks);
+        const carry = thirdPerson.mixer.clipAction(carryClip);
+        carry.loop = THREE.LoopRepeat;
+        carry.enabled = true;
+        carry.setEffectiveWeight(0);
+        carry.play();
+        thirdPerson.carryAction = carry;
+      }
     }
   }
 
@@ -4778,7 +5491,9 @@ function createLightningEffect() {
 
     model.traverse(obj => {
       if (!obj.isMesh) return;
-      obj.castShadow = false;
+      // Player casts a real sun shadow (shadowMap.autoUpdate is on outside low-end
+      // mode). receiveShadow stays off: self-shadowing a skinned rig invites acne.
+      obj.castShadow = !lowEndMode;
       obj.receiveShadow = false;
       obj.frustumCulled = false;
     });
@@ -4922,8 +5637,34 @@ function createLightningEffect() {
     const blend = thirdPerson.aimBlend;
     const punch = clamp(thirdPerson.firePunch, -0.34, 0.22);
 
-    // Nothing to do if fully lowered and no punch residue
-    if (blend < 0.005 && Math.abs(punch) < 0.001) return;
+    // Knife melee: procedural right-arm swing over the 0.34 s melee window
+    // (same upper-body override technique as the carry/aim layers — code-driven
+    // bone rotation on top of the mixer, removed next frame via aimOffsets).
+    const meleeT = player.meleeTimer > 0 ? 1 - player.meleeTimer / 0.34 : 0;
+    const meleeSwing = meleeT > 0 ? Math.sin(meleeT * Math.PI) : 0;
+
+    // Gait-synced carry sway: while the rifle-carry layer holds the arms during
+    // locomotion, pump the gun gently with each step (phase from the active
+    // locomotion action's normalized time, 2 steps per loop). Gain follows
+    // carryWeight so it fades with the layer, and drops while aiming/firing so
+    // it never fights ADS or recoil. Purely additive via applyWorldPitchToBone,
+    // so it is removed next frame like every other aim offset.
+    let swayUpper = 0, swayFore = 0, swaySpine = 0;
+    const carryW = thirdPerson.carryWeight || 0;
+    const act = thirdPerson.activeAction;
+    if (!unifiedFp && carryW > 0.02 && act) {
+      const clip = act.getClip?.();
+      const dur = clip?.duration || 1;
+      const phase = (act.time / dur) * Math.PI * 2 * 2; // 2 steps per locomotion loop
+      const amp = thirdPerson.lastMove?.sprinting ? 0.085 : 0.05;
+      const gain = carryW * (1 - blend * 0.75);
+      swayUpper = Math.sin(phase) * amp * gain;
+      swayFore  = Math.sin(phase - 0.6) * amp * 0.55 * gain;   // forearm lags slightly
+      swaySpine = Math.sin(phase + 0.5) * amp * 0.35 * gain;   // torso slightly leads
+    }
+
+    // Nothing to do if fully lowered and no punch residue or sway
+    if (blend < 0.005 && Math.abs(punch) < 0.001 && meleeSwing < 0.001 && Math.abs(swayUpper) < 0.0005 && Math.abs(swaySpine) < 0.0005) return;
 
     const camPitch = clamp(pitch.rotation.x, -0.92, 0.92); // negative = looking up, positive = looking down
 
@@ -4947,20 +5688,58 @@ function createLightningEffect() {
     const upperHi = unifiedFp ?  0.30 :  0.38;
     const foreLim = unifiedFp ?  0.20 :  0.28;
     const upperArmAngle = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
-                          + punch * PUNCH_ARM_FACTOR, upperLo, upperHi);
+                          + punch * PUNCH_ARM_FACTOR + swayUpper, upperLo, upperHi);
     const foreArmAngle  = clamp(camPitch * FOREARM_PITCH_FACTOR * blend
-                          + punch * PUNCH_FOREARM_FACTOR, -foreLim, foreLim);
+                          + punch * PUNCH_FOREARM_FACTOR + swayFore, -foreLim, foreLim);
     const spineAngle    = clamp(camPitch * SPINE_PITCH_FACTOR * blend
-                          + punch * PUNCH_SPINE_FACTOR, -0.16, 0.16);
+                          + punch * PUNCH_SPINE_FACTOR + swaySpine, -0.16, 0.16);
 
     // Spine leans into the aim direction
     applyWorldPitchToBone(b.spine,         spineAngle);
-    // Both upper arms raise/lower together (two-handed rifle grip)
-    applyWorldPitchToBone(b.rightUpperArm, upperArmAngle);
-    applyWorldPitchToBone(b.leftUpperArm,  upperArmAngle);
-    // Forearms add a smaller follow-through so the elbow doesn't look locked
-    applyWorldPitchToBone(b.rightForeArm,  foreArmAngle);
-    applyWorldPitchToBone(b.leftForeArm,   foreArmAngle);
+
+    // Per-gun grip style. A two-handed weapon raises/punches BOTH arms together
+    // (rifle grip). A one-handed weapon (pistol) drives the RIGHT arm normally but
+    // the LEFT (support) hand stays lower/tucked and takes only a fraction of the
+    // fire punch — otherwise the symmetric punch jerks both arms up on every shot,
+    // which reads as a flail on a handgun. See GUN_SPECS[...].gripStyle.
+    const oneHand = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
+    if (oneHand) {
+      // Right arm: full raise, but a slightly softer punch than a rifle.
+      const rightUpper = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
+                          + punch * PUNCH_ARM_FACTOR * 0.7 + swayUpper, upperLo, upperHi);
+      const rightFore  = clamp(camPitch * FOREARM_PITCH_FACTOR * blend
+                          + punch * PUNCH_FOREARM_FACTOR * 0.7 + swayFore, -foreLim, foreLim);
+      // Left (support) arm: tucked clearly LOWER than the firing arm. Note the
+      // sign convention (measured, not assumed): ARM_RAISE_BIAS pulls the arms
+      // DOWN from the clip's raised aiming pose, so the support arm needs MORE
+      // bias (1.6×), not less — scaling it down leaves the hand floating at
+      // rifle-foregrip height with nothing to hold. Takes only a sliver of the
+      // punch → no outward splay on fire.
+      const leftUpper = clamp((ARM_RAISE_BIAS * 1.6 + camPitch * UPPER_ARM_PITCH_FACTOR * 0.5) * blend
+                          + punch * PUNCH_ARM_FACTOR * 0.15 + swayUpper * 0.5, upperLo, upperHi);
+      const leftFore  = clamp(camPitch * FOREARM_PITCH_FACTOR * 0.5 * blend
+                          + punch * PUNCH_FOREARM_FACTOR * 0.25 + swayFore * 0.5, -foreLim, foreLim);
+      applyWorldPitchToBone(b.rightUpperArm, rightUpper);
+      applyWorldPitchToBone(b.leftUpperArm,  leftUpper);
+      applyWorldPitchToBone(b.rightForeArm,  rightFore);
+      applyWorldPitchToBone(b.leftForeArm,   leftFore);
+    } else {
+      // Both upper arms raise/lower together (two-handed rifle grip)
+      applyWorldPitchToBone(b.rightUpperArm, upperArmAngle);
+      applyWorldPitchToBone(b.leftUpperArm,  upperArmAngle);
+      // Forearms add a smaller follow-through so the elbow doesn't look locked
+      applyWorldPitchToBone(b.rightForeArm,  foreArmAngle);
+      applyWorldPitchToBone(b.leftForeArm,   foreArmAngle);
+    }
+
+    // Knife swing layered on the RIGHT arm only: wind-up raises the arm, then the
+    // chop drives it down and across. Skipped in unified FP (tight clamps there).
+    if (meleeSwing > 0.001 && !unifiedFp) {
+      const windup = Math.sin(Math.min(1, meleeT / 0.45) * Math.PI * 0.5);
+      const chop = meleeT > 0.45 ? Math.sin(((meleeT - 0.45) / 0.55) * Math.PI) : 0;
+      applyWorldPitchToBone(b.rightUpperArm, -0.85 * windup + 1.15 * chop);
+      applyWorldPitchToBone(b.rightForeArm,  -0.42 * windup + 0.55 * chop);
+    }
   }
 
   // A detached "fresh clip" the right hand carries into the mag well during reload.
@@ -4988,16 +5767,31 @@ function createLightningEffect() {
   // hidden while the RIGHT hand brings a fresh clip up to the well; on seat the clip
   // hides and the gun's mag reappears seated (existing magSeat pulse). Timing is keyed
   // off reloadT so it stays in lock-step with the character's reload animation clip.
+  // Per-reloadStyle staging for the fresh-clip transit. All keys are fractions
+  // of reloadT, so every gun's staging auto-scales to its own reloadTime.
+  //  show0/1 = clip visible window, hide0/1 = gun's own mag hidden window
+  //  (null = mag never hidden, e.g. shell loaders), t0/span = travel timing,
+  //  arc = lift height, reps = repeated hand→receiver inserts, from = start
+  //  point ("hand" = right hand, "low" = heaved from the hip, "top" = above/behind).
+  const RELOAD_CLIP_STYLES = {
+    mag:     { show0: 0.16, show1: 0.58, hide0: 0.30, hide1: 0.56, t0: 0.20, span: 0.34, arc: 0.05, reps: 1, from: "hand" },
+    drum:    { show0: 0.14, show1: 0.62, hide0: 0.26, hide1: 0.60, t0: 0.18, span: 0.40, arc: 0.16, reps: 1, from: "low" },
+    shells:  { show0: 0.15, show1: 0.78, hide0: null, hide1: null, t0: 0.15, span: 0.63, arc: 0.06, reps: 3, from: "hand" },
+    topLoad: { show0: 0.16, show1: 0.60, hide0: 0.30, hide1: 0.58, t0: 0.20, span: 0.36, arc: 0.12, reps: 1, from: "top" },
+  };
+
   function updateThirdPersonReloadClip(reloadActive, reloadT, rightHandTmp, easeReload) {
     const clip = ensureReloadClip();
     const mag = thirdPerson.weapon?.mag;
     if (!clip || !mag) return;
+    const st = RELOAD_CLIP_STYLES[GUN_SPECS[currentGun]?.reloadStyle] || RELOAD_CLIP_STYLES.mag;
 
-    // Gun's own mag: visible while ejecting (dropping out), hidden mid-transit, then
-    // visible again once the fresh clip has seated.
-    mag.visible = !(reloadActive && reloadT > 0.30 && reloadT < 0.56);
+    // Gun's own mag/drum: visible while ejecting (dropping out), hidden mid-transit,
+    // then visible again once the fresh clip/drum has seated. Shell-by-shell guns
+    // keep their (tube) mag seated the whole time.
+    mag.visible = !(reloadActive && st.hide0 !== null && reloadT > st.hide0 && reloadT < st.hide1);
 
-    const show = reloadActive && reloadT > 0.16 && reloadT < 0.58;
+    const show = reloadActive && reloadT > st.show0 && reloadT < st.show1;
     clip.visible = show;
     if (!show) return;
 
@@ -5010,11 +5804,24 @@ function createLightningEffect() {
     mag.getWorldQuaternion(reloadClipQuatTmp);
     mag.getWorldScale(reloadClipScaleTmp);
 
-    // Travel from the right hand (fetch) up into the well across the insert window.
-    const travel = easeReload((reloadT - 0.20) / 0.34);
-    clip.position.copy(rightHandTmp).lerp(reloadWellTmp, travel);
-    // A small arc so the clip rises into the well rather than sliding flat.
-    clip.position.y += Math.sin(Math.min(1, Math.max(0, travel)) * Math.PI) * 0.05 * (1 - travel);
+    // Travel from the style's start point into the well across the insert window.
+    // Shell-by-shell styles repeat the hand→receiver motion (reps > 1).
+    let tRaw = (reloadT - st.t0) / st.span;
+    if (st.reps > 1) tRaw = (Math.max(0, Math.min(0.999, tRaw)) * st.reps) % 1;
+    const travel = easeReload(tRaw);
+    reloadClipStartTmp.copy(rightHandTmp);
+    if (st.from === "low") {
+      reloadClipStartTmp.y -= 0.22; // drum heaved up from hip height
+    } else if (st.from === "top") {
+      // Top/rear insert: the round starts above and behind the receiver.
+      reloadClipStartTmp.y += 0.34;
+      reloadClipStartTmp.x -= (reloadWellTmp.x - rightHandTmp.x) * 0.4;
+      reloadClipStartTmp.z -= (reloadWellTmp.z - rightHandTmp.z) * 0.4;
+    }
+    clip.position.copy(reloadClipStartTmp).lerp(reloadWellTmp, travel);
+    // An arc so the clip rises into the well rather than sliding flat
+    // (per-style height: drums swing wide, mags barely lift).
+    clip.position.y += Math.sin(Math.min(1, Math.max(0, travel)) * Math.PI) * st.arc * (1 - travel);
     clip.quaternion.copy(reloadClipQuatTmp);
     clip.scale.copy(reloadClipScaleTmp);
   }
@@ -5090,7 +5897,12 @@ function createLightningEffect() {
       thirdPerson.weapon.slide.position.copy(base.position);
       thirdPerson.weapon.slide.rotation.copy(base.rotation);
       if (base.scale) thirdPerson.weapon.slide.scale.copy(base.scale);
-      if (reloadActive) thirdPerson.weapon.slide.position.x -= actionRack * (currentGun === GUNS.SHOTGUN ? 0.24 : currentGun === GUNS.SNIPER ? 0.16 : 0.08);
+      if (reloadActive) {
+        // Post-reload action rack: throw scaled by the gun's reload mechanism.
+        const rs = GUN_SPECS[currentGun]?.reloadStyle;
+        const rackTravel = rs === "shells" ? 0.24 : rs === "topLoad" ? 0.16 : rs === "drum" ? 0.12 : 0.08;
+        thirdPerson.weapon.slide.position.x -= actionRack * rackTravel;
+      }
     }
     applyWeaponDesignAnimation(thirdPerson.weapon, currentGun, {
       shotT,
@@ -5099,6 +5911,12 @@ function createLightningEffect() {
       actionRack,
       kick: thirdPerson.recoilBack,
       slideKick: shotT,
+      // Fire-cycle drive (per-gun mechanical animation in applyWeaponDesignAnimation).
+      firing: gunState.fireCooldown > 0,
+      cycleT: 1 - gunState.fireCooldown / Math.max(gunState.fireRate || 0.01, 0.01),
+      magEmpty: gunState.mag <= 0,
+      magCount: gunState.mag,
+      magSize: gunState.magSize,
     });
 
     // Grip anchor. Normally the two-handed centre; during reload the LEFT (support)
@@ -5106,6 +5924,13 @@ function createLightningEffect() {
     // Without this the gun stays pinned to the hand-centre and drags toward the right
     // hand as it pulls away — which is what read as "off".
     const gripAnchor = reloadGripTmp.copy(handCenter);
+    // One-handed (pistol) grip: the gun lives in the RIGHT (firing) hand, not the
+    // two-hand centre — with the support hand tucked lower (see the oneHand branch
+    // in applyThirdPersonArmPose), the centre sags and the pistol would float
+    // between the hands instead of sitting in the grip.
+    if (GUN_SPECS[currentGun]?.gripStyle === "oneHand" && !reloadActive) {
+      gripAnchor.lerp(rightHandTmp, 0.85);
+    }
     if (reloadActive) {
       // Left-hand cradle point: at the support hand, nudged slightly forward/up so the
       // receiver sits in the palm rather than clipping through it.
@@ -5170,6 +5995,30 @@ function createLightningEffect() {
       spanDir.z * 0.08 - 0.1 + reloadPresent * 0.42 - magSeat * 0.18
     );
 
+    // Per-gun feel layered on top of the absolute pose set above (all additive,
+    // recomputed every frame — never accumulates):
+    //  • muzzle lag: heavy guns' muzzle trails quick turns (spring in
+    //    updateThirdPersonCharacter, weight from spec.swayMul)
+    //  • rattle: SMG-class high-frequency jitter while firing (spec.driftMul)
+    //  • equip: lower/raise dip on weapon switch (spec.equipTime)
+    thirdPerson.weapon.gun.rotation.y += thirdPerson.gunLag;
+    thirdPerson.weapon.gun.rotation.z += thirdPerson.gunLag * 0.35;
+    const tpSpec = GUN_SPECS[currentGun] || ({} as any);
+    if (tpSpec.fireCycle === "rattle" && gunState.fireCooldown > 0 && !reloadActive) {
+      const tj = performance.now();
+      const jAmp = 0.006 * (Number.isFinite(tpSpec.driftMul) ? tpSpec.driftMul : 1);
+      thirdPerson.weapon.gun.position.x += Math.sin(tj * 0.121) * jAmp;
+      thirdPerson.weapon.gun.position.y += Math.sin(tj * 0.163) * jAmp * 0.8;
+      thirdPerson.weapon.gun.rotation.z += Math.sin(tj * 0.147) * jAmp * 1.6;
+    }
+    if (thirdPerson.equip > 0) {
+      const e = thirdPerson.equip * thirdPerson.equip; // ease-out raise
+      thirdPerson.weapon.gun.position.y -= e * 0.34;
+      thirdPerson.weapon.gun.position.addScaledVector(forward, -e * 0.08);
+      thirdPerson.weapon.gun.rotation.x -= e * 0.55;
+      thirdPerson.weapon.gun.rotation.z += e * 0.3;
+    }
+
     // Pack-a-Punch on the third-person weapon: a quick bank during the upgrade
     // plus the energy glow (slow shimmer + a bright flare through the upgrade).
     // rotation is set absolutely above, so this addition never accumulates.
@@ -5215,6 +6064,20 @@ function createLightningEffect() {
     thirdPerson.recoilRollVel += (-thirdPerson.recoilRoll * 88 - thirdPerson.recoilRollVel * 19) * dt;
     thirdPerson.recoilRoll += thirdPerson.recoilRollVel * dt;
 
+    // Equip lower/raise timer (duration = the incoming gun's equipTime).
+    thirdPerson.equip = Math.max(0, thirdPerson.equip - dt / Math.max(0.08, thirdPerson.equipTime || 0.3));
+
+    // Heavy-gun muzzle lag: the gun's yaw trails quick turns via a small
+    // rotational spring, weighted by spec.swayMul (pistol snappy, LMG floaty).
+    const yawNow = yaw.rotation.y;
+    if (thirdPerson.prevYawAngle === null) thirdPerson.prevYawAngle = yawNow;
+    const yawTurnVel = (yawNow - thirdPerson.prevYawAngle) / Math.max(dt, 1e-4);
+    thirdPerson.prevYawAngle = yawNow;
+    const lagWeight = Math.max(0, (Number.isFinite(GUN_SPECS[currentGun]?.swayMul) ? GUN_SPECS[currentGun].swayMul : 1) - 0.55) * 0.055;
+    const lagTarget = clamp(-yawTurnVel * lagWeight, -0.28, 0.28);
+    thirdPerson.gunLagVel += ((lagTarget - thirdPerson.gunLag) * 30 - thirdPerson.gunLagVel * 10) * dt;
+    thirdPerson.gunLag += thirdPerson.gunLagVel * dt;
+
     const bodyRecoilBack = clamp(thirdPerson.recoilBack, 0, 0.18);
     const bodyRecoilPitch = clamp(thirdPerson.recoilPitch, -0.18, 0.28);
     const bodyRecoilYaw = clamp(thirdPerson.recoilYaw, -0.1, 0.1);
@@ -5252,9 +6115,12 @@ function createLightningEffect() {
       else targetAction = "jump";
     } else if (movingNow && thirdPerson.lastMove.sprinting) {
       targetAction = pickSprintLocomotionAction(thirdPerson.actions, f, s);
-    } else if (thirdPerson.fireTimer > 0) {
-      targetAction = "fire";
     } else if (movingNow) {
+      // While moving, KEEP the locomotion clip even when firing — the arms are
+      // raised/punched procedurally by applyThirdPersonArmPose (which is grip-style
+      // aware, so the pistol stays one-handed). Switching to the full-body two-handed
+      // `fire` clip mid-stride is what made both arms flail on the one-handed pistol.
+      // (This mirrors the sprint branch above, which already reads correctly.)
       if (Math.abs(s) > Math.abs(f) * 1.2) {
         targetAction = s < -0.1 && thirdPerson.actions.strafeAlt ? "strafeAlt" : "strafe";
       } else if (f < -0.1) {
@@ -5265,6 +6131,8 @@ function createLightningEffect() {
       } else {
         targetAction = "walk";
       }
+    } else if (thirdPerson.fireTimer > 0) {
+      targetAction = "fire";
     } else if (wasMoving && !movingNow) {
       if (thirdPerson._lastWalkAction === "walkBack" && thirdPerson.actions.stopWalkBack) {
         targetAction = "stopWalkBack";
@@ -5276,6 +6144,21 @@ function createLightningEffect() {
 
     clearThirdPersonAimOffsets();
     setThirdPersonAction(targetAction);
+    // Smooth the rifle-carry upper-body layer in/out (matches the 0.14s action fades).
+    if (thirdPerson.carryAction) {
+      const cw = thirdPerson.carryWeight ?? 0;
+      thirdPerson.carryWeight = cw + ((thirdPerson.carryTarget || 0) - cw) * Math.min(1, dt * 7);
+      // Blend a fraction of the original unarmed arm-swing back UNDER the carry
+      // layer while moving; fade it out while aiming so ADS keeps a steady grip.
+      const swing = thirdPerson.armSwingActive;
+      const swingMix = swing ? TP_ARM_SWING_BLEND * (1 - (thirdPerson.aimBlend || 0)) : 0;
+      thirdPerson.carryAction.setEffectiveWeight(thirdPerson.carryWeight * (1 - swingMix));
+      if (swing) {
+        swing.setEffectiveWeight(thirdPerson.carryWeight * swingMix);
+        // Keep the arms in phase with the legs (same source clip, same duration).
+        if (thirdPerson.activeAction) swing.time = thirdPerson.activeAction.time;
+      }
+    }
     if (thirdPerson.mixer) thirdPerson.mixer.update(dt);
 
     // Apply procedural arm raise/lower on top of whatever the clip set.
@@ -5433,7 +6316,7 @@ function createLightningEffect() {
     });
   }
 
-  function withFilteredFbxWarnings(task) {
+  function withFilteredFbxWarnings<T>(task: () => T | Promise<T>): Promise<T> {
     const originalWarn = console.warn;
     const ignored = [
       "Maya|base",
@@ -5513,7 +6396,7 @@ function createLightningEffect() {
     await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
   }
 
-  function loadTexture(path, options = {}) {
+  function loadTexture(path, options: any = {}) {
     const texture = new THREE.TextureLoader().load(new URL(path, window.location.href).href);
     texture.colorSpace = options.color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     texture.flipY = false;
@@ -5861,7 +6744,7 @@ function createLightningEffect() {
   }
 
   function preloadImageAsset(path) {
-    return new Promise(resolve => {
+    return new Promise<void>(resolve => {
       const img = new Image();
       img.onload = () => {
         if (img.decode) img.decode().catch(() => {}).finally(resolve);
@@ -5892,7 +6775,7 @@ function createLightningEffect() {
       for (const material of materials) {
         if (!material) continue;
         for (const value of Object.values(material)) {
-          if (!value?.isTexture || warmed.has(value)) continue;
+          if (!(value as any)?.isTexture || warmed.has(value)) continue;
           warmed.add(value);
           initTextureForRenderer(value);
         }
@@ -6341,7 +7224,7 @@ function createLightningEffect() {
     return false;
   }
 
-  function tryMoveEnemyWithDetour(enemy, dx, dz, options = {}) {
+  function tryMoveEnemyWithDetour(enemy, dx, dz, options: any = {}) {
     const len = Math.hypot(dx, dz);
     if (len < 0.0001) return false;
 
@@ -6857,7 +7740,7 @@ function createLightningEffect() {
     }
   }
 
-  function makeInPlaceClipForModel(clip, model, options = {}) {
+  function makeInPlaceClipForModel(clip, model, options: any = {}) {
     const nodeNames = new Set();
     model.traverse(obj => {
       if (obj.name) nodeNames.add(obj.name);
@@ -7178,10 +8061,14 @@ function createLightningEffect() {
         ? { x: 1.10, y: 0.52, opacity: 0.68, jitter: 0.38 }
         : { x: 1.05, y: 0.60, opacity: 0.76, jitter: 0.48 };
     const bloom = 1.02 + (1 - t) * (gunType === GUNS.SHOTGUN ? 0.22 : 0.16);
+    // Per-gun sprite size from spec.muzzleFlashScale. The legacy trio's style
+    // table above already encodes its sizes, so only the roster scales here.
+    const legacyStyled = gunType === GUNS.SHOTGUN || gunType === GUNS.SNIPER || gunType === GUNS.RIFLE;
+    const fs = legacyStyled ? 1 : (Number.isFinite(GUN_SPECS[gunType]?.muzzleFlashScale) ? GUN_SPECS[gunType].muzzleFlashScale : 1);
     flash.visible = visible;
     flash.material.opacity = visible ? Math.min(1, style.opacity * (0.32 + t * 0.92)) : 0;
     flash.material.rotation = visible ? (Math.random() * Math.PI * 2) : 0;
-    flash.scale.set(base * style.x * bloom * thirdPersonScale, base * style.y * bloom * thirdPersonScale, base * thirdPersonScale);
+    flash.scale.set(base * style.x * bloom * thirdPersonScale * fs, base * style.y * bloom * thirdPersonScale * fs, base * thirdPersonScale * fs);
   }
 
   function addTankShotgunMount(parent, type, s) {
@@ -7217,25 +8104,59 @@ function createLightningEffect() {
     if (!type.variant) return;
 
     const tint = new THREE.Color(type.color);
+    const variant = type.variant;
+    // The Warden rig's materials are per-instance and are ANIMATED in place by
+    // storm_warden.js (energyMats/allMaterials pulse opacity + rage color). So we
+    // must NOT clone-and-replace them (that detaches the visible material from the
+    // animation refs and freezes the glow). Instead mutate each UNIQUE material
+    // once (guarded by `seen`, since a material is shared across many plates) —
+    // only scalar/colour props change, so no new shader program is compiled.
+    //
+    // Blink Seraph: sleek/ethereal glass — low metalness/roughness + very strong
+    // sky-reflection (envMapIntensity) reads as smooth iridescent panels rather
+    // than battle-worn plate; only a faint edge emissive. Null Cherub: matte,
+    // near-void body pushed toward black with high roughness so the glowing
+    // energy veins/core read as corrupted cracks against a dead-flat surface.
+    const voidColor = new THREE.Color(0x060f0c);
+    const seen = new Set();
     root.traverse(obj => {
       if (!obj.isMesh || !obj.material) return;
       const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-      const nextMaterials = materials.map(mat => {
-        const next = mat.clone();
-        if (next.color) next.color.lerp(tint, type.variant === "blink" ? 0.36 : 0.16);
-        if (next.emissive) next.emissive.setHex(type.emissive);
-        if (typeof next.emissiveIntensity === "number") next.emissiveIntensity *= type.variant === "blink" ? 1.06 : 0.98;
-        if (typeof next.roughness === "number") next.roughness = Math.min(0.92, next.roughness + (type.variant === "blink" ? -0.08 : 0.08));
-        if (typeof next.metalness === "number") next.metalness = Math.max(0.12, Math.min(0.84, next.metalness + (type.variant === "blink" ? 0.08 : -0.04)));
+      materials.forEach(next => {
+        if (!next || seen.has(next)) return;
+        seen.add(next);
+        const isArmor = typeof next.roughness === "number"; // MeshStandard plating
+        if (isArmor) {
+          if (next.color) {
+            if (variant === "blink") next.color.lerp(tint, 0.5);
+            else if (variant === "null") next.color.lerp(voidColor, 0.62).lerp(tint, 0.12);
+            else next.color.lerp(tint, 0.14);
+          }
+          // Armor emissive kept SUBTLE so plates read as lit metal, not neon.
+          if (next.emissive) next.emissive.setHex(type.emissive);
+          next.emissiveIntensity = variant === "null" ? 0.14 : variant === "blink" ? 0.18 : 0.06;
+          if (variant === "blink") {
+            next.roughness = Math.max(0.05, next.roughness - 0.34);
+            next.metalness = Math.max(0.0, next.metalness - 0.5);
+            next.envMapIntensity = 2.1;
+          } else if (variant === "null") {
+            next.roughness = Math.min(0.98, next.roughness + 0.3);
+            next.metalness = Math.max(0.05, next.metalness - 0.35);
+            next.envMapIntensity = 0.45;
+          }
+        } else {
+          // Energy / VFX glow parts (MeshBasicMaterial) — shift the glow hue to the
+          // variant identity and re-base the rage-lerp origin so it stays coherent.
+          if (next.color) next.color.lerp(tint, variant === "null" ? 0.82 : 0.68);
+          if (next.userData && next.userData.baseColor) next.userData.baseColor = next.color.clone();
+        }
         next.needsUpdate = true;
-        return next;
       });
-      obj.material = Array.isArray(obj.material) ? nextMaterials : nextMaterials[0];
     });
 
-    // Keep the variant identity in the materials and silhouette only; do not add extra geometry layers.
-    if (type.variant === "blink") rig.scale.set(0.95, 1.08, 0.93);
-    else if (type.variant === "null") rig.scale.set(1.05, 0.96, 1.02);
+    // Silhouette divergence: slim/tall Seraph, compact/squat Cherub.
+    if (variant === "blink") rig.scale.set(0.9, 1.12, 0.88);
+    else if (variant === "null") rig.scale.set(1.08, 0.9, 1.04);
     else rig.scale.set(1.02, 1.0, 1.01);
     root.userData.variantHalo = null;
     root.userData.variantCore = null;
@@ -7284,7 +8205,7 @@ function createLightningEffect() {
       obj.material = Array.isArray(obj.material) ? tinted : tinted[0];
     });
 
-    const ghostRuntime = createHumanoidEnemyActions(model);
+    const ghostRuntime: any = createHumanoidEnemyActions(model);
     ghostRuntime.model = model;
     ghostRuntime.rightHand = findRightHandBone(model);
     ghostRuntime.leftHand = findLeftHandBone(model);
@@ -7452,7 +8373,7 @@ function createLightningEffect() {
         zombie.update(dt, zref);
         // Write-back: the character controller flags full-body one-shot locks (scream)
         // on zref; mirror it onto the real enemy so the AI brain can hold the mover.
-        if (e) e.zombieAnimLocked = !!zref.zombieAnimLocked;
+        if (e) (e as any).zombieAnimLocked = !!(zref as any).zombieAnimLocked;
       } };
       root.userData.walkAction = null;
       root.userData.walkClipDuration = 0;
@@ -7726,7 +8647,7 @@ function createLightningEffect() {
     return out;
   }
 
-  function getSpawnPositions(count, minDistance = 18, options = {}) {
+  function getSpawnPositions(count, minDistance = 18, options: any = {}) {
     const preferVisible = options.preferVisible === true;
     const maxVisibleDistance = options.maxVisibleDistance ?? 34;
     const allOpen = [];
@@ -7939,7 +8860,7 @@ function createLightningEffect() {
   }
 
   function waitFrame() {
-    return new Promise(resolve => {
+    return new Promise<void>(resolve => {
       let settled = false;
       const finish = () => {
         if (settled) return;
@@ -8343,11 +9264,11 @@ function createLightningEffect() {
     }
   }
 
-async function spawnEnemies(wave, options = {}) {
+async function spawnEnemies(wave, options: any = {}) {
   const { smooth = false, minDistance = 18, relocatePlayer = false, preferVisible = false } = options;
   if (relocatePlayer) placePlayerForWave(wave);
 
-  const oldEnemies = enemies.splice(0, enemies.length);
+  const oldEnemies = enemies.splice(0, enemies.length); oldEnemies.forEach(unregisterEnemy);
 
   const count = getWaveEnemyCount(wave);
   let positions = getDevSpawnPositions(wave, count, minDistance, preferVisible);
@@ -8389,7 +9310,7 @@ async function spawnEnemies(wave, options = {}) {
     scene.add(enemy.mesh);
     if (enemy.hpBar) scene.add(enemy.hpBar.mesh);
     ensureLiveEnemyVisible(enemy);
-    enemies.push(enemy);
+    enemies.push(enemy); registerEnemy(enemy);
     if (smooth && ((i + 1) % 2 === 0 || i === count - 1)) await waitFrame();
   }
   game.totalEnemies = enemies.length;
@@ -8397,7 +9318,7 @@ async function spawnEnemies(wave, options = {}) {
 }
 
   async function warmFirstWaveEnemyInstances() {
-    const previousEnemies = enemies.splice(0, enemies.length);
+    const previousEnemies = enemies.splice(0, enemies.length); previousEnemies.forEach(unregisterEnemy);
     for (const enemy of previousEnemies) {
       scene.remove(enemy.mesh);
       if (enemy.hpBar) scene.remove(enemy.hpBar.mesh);
@@ -8437,7 +9358,7 @@ async function spawnEnemies(wave, options = {}) {
     return true;
   }
 
-  function prewarmSiegeDronePool(options = {}) {
+  function prewarmSiegeDronePool(options: any = {}) {
     const type = ENEMY_TYPES.find(t => t.name === "Siege Drone");
     if (!type) return;
 
@@ -8465,7 +9386,7 @@ async function spawnEnemies(wave, options = {}) {
 
   // Aggressive but spread-out prewarm: instantiate a small number of each enemy type
   // and create shared materials so shader compilation / texture uploads happen during loading.
-  async function prewarmAllEnemyPools(options = {}) {
+  async function prewarmAllEnemyPools(options: any = {}) {
     const perType = Math.max(1, options.count ?? 2);
     // Drones are the procedural Storm Warden now — no shared angel textures to
     // prewarm. The per-instance build below compiles its materials on creation.
@@ -8507,7 +9428,7 @@ async function spawnEnemies(wave, options = {}) {
     }
   }
 
-  async function prewarmClonedGhostPool(options = {}) {
+  async function prewarmClonedGhostPool(options: any = {}) {
     const type = ENEMY_TYPES.find(t => t.name === CLONED_GHOST_TYPE_NAME);
     if (!type) return;
     const pool = enemyPools[type.name] || [];
@@ -8576,14 +9497,14 @@ async function spawnEnemies(wave, options = {}) {
     if (weapon?.gun) weapon.gun.visible = !thirdPerson.enabled;
   }
 
-  let weapon = cacheFirstPersonWeapon(GUNS.RIFLE, createWeaponViewModel(GUNS.RIFLE));
-  let weaponAnim = initializeWeaponAnimation(GUNS.RIFLE);
+  let weapon = cacheFirstPersonWeapon(currentGun, createWeaponViewModel(currentGun));
+  let weaponAnim: any = initializeWeaponAnimation(currentGun);
   captureWeaponAnimationBases(weaponAnim, weapon);
 
-  const cameraFX = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74 };
-  const viewState = { ads: 0, lookBack: 0 };
+  const cameraFX: any = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74 };
+  const viewState: any = { ads: 0, lookBack: 0 };
 
-  function applyEnemyHitFeedback(enemy, damage, headshot, dirX = 0, dirZ = 0, options = {}) {
+  function applyEnemyHitFeedback(enemy, damage, headshot, dirX = 0, dirZ = 0, options: any = {}) {
     if (!enemy || !enemy.alive) return;
     const len = Math.hypot(dirX, dirZ) || 1;
     const nx = dirX / len;
@@ -8925,43 +9846,101 @@ async function spawnEnemies(wave, options = {}) {
   }
 
   function sfxShoot() {
-    const _fireEv = currentGun === GUNS.SHOTGUN ? 'shotgun_fire' : currentGun === GUNS.SNIPER ? 'sniper_fire' : 'rifle_fire';
-    if (playEventSound(_fireEv, { volume: 0.85, rate: 0.94 + Math.random() * 0.12 })) return;
-    if (currentGun === GUNS.SHOTGUN) {
+    // Data-driven fire SFX: each gun's fireCycle (mechanism) picks a distinct synth
+    // voice tuned per-gun (freq/gain/decay), and GUN_SPECS[gun].fireSound is tried
+    // first against the manifest so dropping real files in assets/audio/sfx/ overrides
+    // the synth with zero code changes.
+    const spec = GUN_SPECS[currentGun] || ({} as any);
+    const cycle = spec.fireCycle || "rifle";
+    const scatterGun = cycle === "pump";
+    const precisionGun = cycle === "bolt" || cycle === "coil";
+    const lightGun = cycle === "slide" || cycle === "rattle";
+    const _rate = (lightGun ? 1.12 : currentGun === GUNS.DMR ? 0.88 : 0.94) + Math.random() * 0.12;
+    if (spec.fireSound && playEventSound(spec.fireSound, { volume: lightGun ? 0.7 : 0.85, rate: _rate })) return;
+
+    // ── PISTOL — "slide": sharp crack + snappy slide clack ──────────────────
+    if (cycle === "slide") {
+      playNoise(0.010, 1.2, 44, "lowpass", 0, 0, 0.3);
+      playTone(52, "sine", 0.06, 0.30, -340, 0, 0, 18);
+      playDistorted(0.014, 1.15, 8600, "highpass", 0, 0, 2.4, 'hard');
+      playDistorted(0.030, 0.85, 2600, "bandpass", 0.001, 0, 2.6, 'med');
+      // Slide clack transient — bright metal snap right after the crack
+      playNoise(0.012, 0.55, 5200, "bandpass", 0.028, 0, 6.0);
+      playTone(1450, "triangle", 0.018, 0.10, -180, 0.030, 0, 700);
+      playNoise(0.18, 0.30, 500, "lowpass", 0.004, 0, 0.7);
+      return;
+    }
+    // ── SMG / AKIMBO — "rattle": buzzy, light, rapid-fire body ──────────────
+    if (cycle === "rattle") {
+      const akimbo = currentGun === GUNS.AKIMBO;
+      playNoise(0.009, 1.0, 46, "lowpass", 0, 0, 0.28);
+      playTone(60, "square", 0.05, 0.22, -300, 0, 0, 16);
+      playDistorted(0.013, 1.0, 7200, "highpass", 0, 0, 2.0, 'med');
+      playDistorted(0.026, 0.72, 2400, "bandpass", 0.001, 0, 2.4, akimbo ? 'soft' : 'med');
+      playNoise(0.16, 0.34, 620, "lowpass", 0.003, 0, 0.6);
+      playNoise(0.030, 0.18, 3400, "bandpass", 0.012, 0, 3.2);
+      return;
+    }
+    // ── LMG — "drum": deep heavy thump + mechanical belt clack ──────────────
+    if (cycle === "drum") {
+      playNoise(0.016, 1.7, 34, "lowpass", 0, 0, 0.22);
+      playTone(40, "sine", 0.11, 0.55, -260, 0, 0, 11);
+      playDistorted(0.020, 1.2, 6800, "highpass", 0, 0, 2.0, 'hard');
+      playDistorted(0.048, 1.15, 700, "lowpass", 0, 0, 0.62, 'hard');
+      // Belt/receiver mechanical clack
+      playNoise(0.020, 0.5, 2200, "bandpass", 0.018, 0, 3.4);
+      playTone(240, "triangle", 0.03, 0.14, -120, 0.02, 0, 140);
+      playNoise(0.34, 0.55, 260, "lowpass", 0.004, 0, 0.55);
+      playNoise(0.60, 0.20, 480, "bandpass", 0.03, 0, 1.2);
+      return;
+    }
+    // ── RAILGUN — "coil": sci-fi charge + zap, not a ballistic crack ────────
+    if (cycle === "coil") {
+      playSweep(180, 1400, 0.05, 0.55, "sawtooth", 0, 0);
+      playNoise(0.03, 0.9, 9000, "highpass", 0.045, 0, 2.6);
+      playTone(2200, "sine", 0.14, 0.5, 0, 0.048, 0, 5200);
+      playModulatedTone(140, 0.16, 0.35, 30, 260, 0.05, 0, 40);
+      playNoise(0.5, 0.4, 200, "lowpass", 0.06, 0, 0.6);
+      playTone(60, "sine", 0.3, 0.3, -200, 0.06, 0, 20);
+      return;
+    }
+    if (scatterGun) {
+      const flak = currentGun === GUNS.FLAK; // harsher, faster decay than the pump shotgun
       // Sub-bass pressure dome
       playNoise(0.014, 1.8,  38,   "lowpass",  0,     0, 0.22);
-      playTone(28, "sine", 0.10, 0.72, -300, 0, 0, 9);
+      playTone(flak ? 34 : 28, "sine", flak ? 0.07 : 0.10, 0.72, -300, 0, 0, 9);
       // Distorted muzzle blast — core crunch
-      playDistorted(0.055, 1.35, 420, "lowpass",  0,     0, 0.55, 'hard');
+      playDistorted(flak ? 0.040 : 0.055, 1.35, flak ? 520 : 420, "lowpass",  0,     0, 0.55, 'hard');
       playDistorted(0.032, 1.10, 280, "lowpass",  0.002, 0, 0.42, 'hard');
-      // High crack transient
-      playNoise(0.016, 1.4, 9200, "highpass", 0,     0, 1.8);
-      playDistorted(0.024, 0.85, 5800, "highpass", 0.002, 0, 2.8, 'med');
-      // Mid-body boom tail
-      playNoise(0.50, 0.90, 310,  "lowpass",  0.004, 0, 0.60);
+      // High crack transient — flak is more ragged/harsh
+      playNoise(0.016, 1.4, flak ? 10200 : 9200, "highpass", 0,     0, 1.8);
+      playDistorted(0.024, 0.85, 5800, "highpass", 0.002, 0, flak ? 3.6 : 2.8, 'med');
+      // Mid-body boom tail — shorter on flak (faster cyclic rate)
+      playNoise(flak ? 0.30 : 0.50, 0.90, 310,  "lowpass",  0.004, 0, 0.60);
       playDistorted(0.18, 0.70, 1800, "bandpass", 0.010, 0, 1.8, 'soft');
       // Pellet scatter burst
       playNoise(0.045, 0.55, 4800, "bandpass", 0.022, 0, 3.5);
       // Room bloom
-      playNoise(0.90, 0.22, 480,  "lowpass",  0.065, 0, 0.90);
+      playNoise(flak ? 0.55 : 0.90, 0.22, 480,  "lowpass",  0.065, 0, 0.90);
       return;
     }
-    if (currentGun === GUNS.SNIPER) {
+    if (precisionGun) {
+      const dmr = currentGun === GUNS.DMR; // crisp mid-power crack, shorter tail than the sniper
       // Sub-bass muzzle dome
       playNoise(0.012, 1.9,  32,   "lowpass",  0,     0, 0.20);
-      playTone(22, "sine", 0.12, 0.68, -350, 0, 0, 7);
+      playTone(dmr ? 26 : 22, "sine", dmr ? 0.09 : 0.12, 0.68, -350, 0, 0, 7);
       // Supersonic crack — ultra-brief spike
       playNoise(0.008, 1.6, 12000, "highpass", 0,     0, 1.5);
-      playDistorted(0.020, 1.3,  8500, "highpass", 0.001, 0, 2.0, 'hard');
+      playDistorted(0.020, 1.3,  8500, "highpass", 0.001, 0, dmr ? 2.6 : 2.0, 'hard');
       // Combustion body — heavy bloom
       playDistorted(0.065, 1.2,  190, "lowpass",  0,     0, 0.45, 'hard');
-      playNoise(0.80,  1.15, 145,  "lowpass",  0.006, 0, 0.55);
+      playNoise(dmr ? 0.55 : 0.80,  1.15, 145,  "lowpass",  0.006, 0, 0.55);
       // Muzzle ring overtone
       playTone(680, "sine", 0.18, 0.07, -90, 0.010, 0, 310);
       // Mid-distance atmosphere
       playNoise(0.30, 0.28, 1600, "bandpass", 0.055, 0, 1.8);
       // Long room decay
-      playNoise(1.40, 0.18, 290,  "lowpass",  0.160, 0, 0.62);
+      playNoise(dmr ? 0.90 : 1.40, 0.18, 290,  "lowpass",  0.160, 0, 0.62);
       // Delayed reflection echo
       playDistorted(0.15, 0.10, 380, "bandpass", 0.42, 0, 1.2, 'soft');
       playNoise(0.25, 0.06, 480,  "lowpass",  0.44,  0, 0.50);
@@ -9078,8 +10057,60 @@ async function spawnEnemies(wave, options = {}) {
     }
   }
 
+  // Reload SFX, dispatched by the equipped gun's reloadStyle so the mag/drum/
+  // shells/topLoad TP staging (see CLAUDE.md "Reload staging") is matched by sound.
   function sfxReload() {
+    const spec = GUN_SPECS[currentGun] || ({} as any);
+    const style = spec.reloadStyle || "mag";
+    if (spec.reloadSound && playEventSound(spec.reloadSound, { volume: 0.8 })) return;
     if (playEventSound('reload', { volume: 0.8 })) return;
+    if (style === "shells") { sfxReloadShells(); return; }
+    if (style === "drum") { sfxReloadDrum(); return; }
+    if (style === "topLoad") { sfxReloadTopLoad(); return; }
+    sfxReloadMag();
+  }
+
+  // Quick shell-by-shell chunks (shotgun/flak "shells" reloadStyle) — 3 individual
+  // shell insertions, each a push-thunk + brass rattle, then a pump-forward.
+  function sfxReloadShells(count = 3) {
+    for (let i = 0; i < count; i++) {
+      const t = i * 0.30;
+      playNoise(0.030, 0.30, 2600, "bandpass", t, 0, 4.0);
+      playTone(210, "triangle", 0.03, 0.10, -120, t + 0.004, 0, 130);
+      playNoise(0.045, 0.34, 320, "lowpass", t + 0.03, 0, 0.7);
+      playNoise(0.018, 0.16, 5200, "bandpass", t + 0.05, 0, 5.5);
+    }
+    const tEnd = count * 0.30;
+    // Pump-forward chamber slam
+    playNoise(0.05, 0.42, 1800, "bandpass", tEnd, 0, 3.0);
+    playNoise(0.035, 0.30, 260, "lowpass", tEnd + 0.03, 0, 0.65);
+  }
+
+  // Heavy drum swap (LMG/flak "drum" reloadStyle) — big detach clunk, wide arc
+  // carry, heavier drop-in seat than a mag.
+  function sfxReloadDrum() {
+    playNoise(0.05, 0.5, 220, "lowpass", 0, 0, 0.4);
+    playDistorted(0.04, 0.9, 500, "lowpass", 0.01, 0, 0.5, 'hard');
+    playNoise(0.09, 0.30, 3000, "bandpass", 0.05, 0, 3.0); // carry scrape
+    playNoise(0.10, 0.55, 260, "lowpass", 0.62, 0, 0.6);   // heavy drum seat
+    playDistorted(0.06, 0.85, 700, "lowpass", 0.62, 0, 0.55, 'hard');
+    playTone(150, "triangle", 0.05, 0.14, -90, 0.66, 0, 100);
+    playNoise(0.06, 0.35, 5800, "bandpass", 0.78, 0, 6.0);  // charging handle
+    playNoise(0.05, 0.28, 2200, "bandpass", 0.86, 0, 4.5);
+  }
+
+  // Top-load from above/behind (sniper/railgun "topLoad" reloadStyle) — bolt/hatch
+  // lift, single round or cell drop, seat click.
+  function sfxReloadTopLoad() {
+    playNoise(0.05, 0.30, 4200, "bandpass", 0, 0, 5.0);     // bolt/hatch lift
+    playTone(360, "triangle", 0.03, 0.09, -100, 0.01, 0, 180);
+    playNoise(0.03, 0.20, 1600, "bandpass", 0.35, 0, 3.5);  // round/cell drop
+    playNoise(0.05, 0.34, 300, "lowpass", 0.55, 0, 0.6);    // seat thunk
+    playTone(230, "triangle", 0.04, 0.10, -100, 0.58, 0, 130);
+    playNoise(0.05, 0.32, 4800, "bandpass", 0.70, 0, 5.5);  // hatch/bolt close
+  }
+
+  function sfxReloadMag() {
     // Magazine eject — sharp metallic click
     playNoise(0.018, 0.22, 3400, "bandpass", 0,     0, 6.0);
     playTone(310, "triangle", 0.022, 0.07, -150, 0.002, 0, 190);
@@ -9121,6 +10152,62 @@ async function spawnEnemies(wave, options = {}) {
     playTone(720, "triangle", 0.020, 0.042, -210, 0.004, 0, 360);
     // Short metallic decay
     playNoise(0.020, 0.048, 2200, "bandpass", 0.014, 0, 5.0);
+  }
+
+  // Weapon-switch handling sound — quick clothing/strap rustle + a metal clack,
+  // scaled by the incoming gun's equipTime (pistol snappiest, LMG/railgun slowest).
+  function sfxEquip(gunType) {
+    const spec = GUN_SPECS[gunType] || ({} as any);
+    const heavy = spec.equipTime >= 0.4;
+    if (spec.equipSound && playEventSound(spec.equipSound, { volume: 0.5 })) return;
+    playNoise(heavy ? 0.09 : 0.05, 0.20, heavy ? 900 : 1800, "bandpass", 0, 0, 1.4);
+    playNoise(0.03, 0.16, heavy ? 4200 : 5200, "bandpass", heavy ? 0.07 : 0.04, 0, 4.0);
+    playTone(heavy ? 180 : 320, "triangle", 0.03, 0.08, -100, heavy ? 0.08 : 0.05, 0, 140);
+  }
+
+  // ── Interactable feedback SFX (perk statue / mystery box) ───────────────────
+  // Ascending crystalline power-up chime, tier-scaled so each perk tier reads
+  // slightly bigger/brighter than the last.
+  function sfxPerkPurchase(tier = 0) {
+    if (playEventSound('perk_purchase', { volume: 0.85 })) return;
+    const base = 380 + tier * 90;
+    playNoise(0.03, 0.4, 3000, "bandpass", 0, 0, 3.0);
+    playTone(base,        "sine", 0.30, 0.22, 0, 0.00, 0, base * 1.3);
+    playTone(base * 1.5,  "sine", 0.28, 0.18, 0, 0.06, 0, base * 1.9);
+    playTone(base * 2.0,  "sine", 0.26, 0.14, 0, 0.12, 0, base * 2.6);
+    playNoise(0.5, 0.20, 1400, "bandpass", 0.02, 0, 1.4);
+  }
+
+  // Low denied buzz — press E without enough XP at a statue/box.
+  function sfxDenied() {
+    if (playEventSound('perk_deny', { volume: 0.6 })) return;
+    playTone(150, "square", 0.09, 0.16, -40, 0, 0, 90);
+    playTone(110, "square", 0.10, 0.14, -40, 0.08, 0, 65);
+    playNoise(0.05, 0.10, 500, "lowpass", 0.02, 0, 0.6);
+  }
+
+  // Mystery-box open — mechanical latch/creak on the lid swinging up.
+  function sfxBoxOpen() {
+    if (playEventSound('box_open', { volume: 0.8 })) return;
+    playNoise(0.06, 0.30, 1400, "bandpass", 0, 0, 2.0);
+    playDistorted(0.10, 0.35, 380, "lowpass", 0.02, 0, 0.5, 'soft');
+    playTone(220, "triangle", 0.14, 0.10, -80, 0.03, 0, 140); // hinge creak
+    playNoise(0.04, 0.18, 2600, "bandpass", 0.14, 0, 3.0);    // latch clack
+  }
+
+  // Rising reveal whoosh while the weapon lifts out of the box.
+  function sfxBoxReveal() {
+    if (playEventSound('box_reveal', { volume: 0.7 })) return;
+    playSweep(220, 900, 0.5, 0.22, "sine", 0, 0);
+    playNoise(0.5, 0.16, 2200, "bandpass", 0.02, 0, 1.4);
+  }
+
+  // Comedic descending-pitch dud sting for the teddy-bear pull.
+  function sfxBoxDud() {
+    if (playEventSound('box_dud', { volume: 0.7 })) return;
+    playSweep(520, 90, 0.32, 0.22, "sawtooth", 0.00, 0);
+    playSweep(360, 70, 0.34, 0.16, "square",   0.10, 0);
+    playSweep(260, 55, 0.36, 0.12, "sawtooth", 0.22, 0);
   }
 
   function sfxPackUpgrade(level = 1) {
@@ -9313,7 +10400,7 @@ async function spawnEnemies(wave, options = {}) {
     dn.sprite.material.dispose?.();
   }
 
-  function spawnDamageNumber(enemy, damage, options = {}) {
+  function spawnDamageNumber(enemy, damage, options: any = {}) {
     if (!enemy?.mesh || !Number.isFinite(damage) || damage <= 0) return;
     if (damageNumbers.length >= 34) recycleDamageNumber(damageNumbers.shift());
 
@@ -9458,7 +10545,7 @@ async function spawnEnemies(wave, options = {}) {
     writeLightningPathFromScratch(effect, buildLightningPathScratch(start, end, segments, jitter, lift));
   }
 
-  function spawnLightningEffect(start, end, power = 1, options = {}) {
+  function spawnLightningEffect(start, end, power = 1, options: any = {}) {
     const lowEndLateWave = lowEndMode && game.wave >= 6;
     const maxActive = options.maxActive ?? (lowEndLateWave ? 7 : lowEndMode ? 9 : LIGHTNING_POOL_SIZE);
     if (lightningEffects.length >= maxActive) recycleLightningEffect(lightningEffects.shift());
@@ -9654,7 +10741,7 @@ async function spawnEnemies(wave, options = {}) {
     return best;
   }
 
-  function applyCoopTargetDamage(targetInfo, amount, options = {}) {
+  function applyCoopTargetDamage(targetInfo, amount, options: any = {}) {
     if (targetInfo && targetInfo.local === false && isCoopHost() && targetInfo.id) {
       net.send({
         t: "edamage",
@@ -9671,7 +10758,7 @@ async function spawnEnemies(wave, options = {}) {
     return true;
   }
 
-  function broadcastCoopFx(fx, payload = {}) {
+  function broadcastCoopFx(fx, payload: any = {}) {
     if (!isCoopHost()) return;
     net.send({ t: "fx", id: myNetId, seq: nextNetSeq(), sentAt: Math.round(performance.now()), fx, ...payload });
   }
@@ -9682,7 +10769,7 @@ async function spawnEnemies(wave, options = {}) {
     return enemy.netId;
   }
 
-  function broadcastCoopLightningFx(start, end, power, options = {}) {
+  function broadcastCoopLightningFx(start, end, power, options: any = {}) {
     if (!isCoopHost()) return;
     net.send({
       t: "fx",
@@ -9705,7 +10792,7 @@ async function spawnEnemies(wave, options = {}) {
     });
   }
 
-  function broadcastCoopTracerFx(start, end, gunType, options = {}) {
+  function broadcastCoopTracerFx(start, end, gunType, options: any = {}) {
     broadcastCoopFx("tracer", {
       enemy: options.enemy ?? null,
       gun: gunType,
@@ -10960,133 +12047,10 @@ async function spawnEnemies(wave, options = {}) {
     packState.station = root;
   }
 
-  // ── Wall-buy weapon crates (exterior plaza) ──────────────────────────────────
-  // A CoD-classic "buy off the crate": press E to instantly swap to the crate's
-  // weapon with a full mag+reserve. Repeatable — walking up again just refills
-  // ammo for the same cost, so the crates double as a resupply point.
-  function createWallBuyCrates() {
-    if (crateStations.length) return;
-    const crateBodyMat = new THREE.MeshStandardMaterial({ color: 0x3a2f22, roughness: 0.82, metalness: 0.12 });
-    const crateTrimMat = new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0xaa5500, emissiveIntensity: 1.1, roughness: 0.35, metalness: 0.4 });
-    const crateGlowMat = new THREE.MeshBasicMaterial({ color: 0xffcc55, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
-    for (const def of CRATE_DEFS) {
-      const root = new THREE.Group();
-      root.name = `Wall-Buy Crate (${def.label})`;
-      root.position.set(def.x, 0, def.z);
-      root.userData.noInstancing = true;
-
-      const box = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.72, 0.78), crateBodyMat);
-      box.position.y = 0.36;
-      const lid = new THREE.Mesh(new THREE.BoxGeometry(1.06, 0.10, 0.84), crateTrimMat);
-      lid.position.y = 0.76;
-      for (const [sx, sz] of [[-0.44, 0], [0.44, 0], [0, -0.34], [0, 0.34]]) {
-        const strap = new THREE.Mesh(new THREE.BoxGeometry(sx ? 0.06 : 1.0, 0.74, sz ? 0.06 : 0.06), crateTrimMat);
-        strap.position.set(sx, 0.37, sz);
-        root.add(strap);
-      }
-      // Floating weapon-icon glow card above the crate — a cheap emissive plane
-      // (no extra light), rotates slowly so it reads at a glance from a distance.
-      const icon = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.28), crateGlowMat);
-      icon.position.y = 1.15;
-      icon.userData.isDecor = true;
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.02, 8, 28), crateTrimMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.06;
-      ring.userData.isDecor = true;
-
-      root.add(box, lid, icon, ring);
-      root.userData.icon = icon;
-      root.userData.ring = ring;
-      root.traverse(obj => { if (obj.isMesh && !obj.userData.isDecor) { obj.castShadow = false; obj.receiveShadow = true; wallMeshes.push(obj); } });
-      scene.add(root);
-      window.__extAddCollider?.(def.x, def.z, 1.1, 0.9);
-      crateStations.push({ def, root, active: false, prompt: "" });
-    }
-  }
-
-  // ── Perk machine (exterior plaza) ────────────────────────────────────────────
-  // One vending-style station that sells the PERK_DEFS in fixed order, one per
-  // purchase, escalating cost — permanent buffs for the rest of the run.
-  function createPerkMachine() {
-    if (perkMachineState.station) return;
-    const root = new THREE.Group();
-    root.name = "Perk Machine";
-    root.position.set(0, 0, 178);
-    root.userData.noInstancing = true;
-
-    const bodyMat  = new THREE.MeshStandardMaterial({ color: 0x1a2418, roughness: 0.4, metalness: 0.65, emissive: 0x0a1408, emissiveIntensity: 0.4 });
-    const glowMat  = new THREE.MeshStandardMaterial({ color: 0x8cff6a, emissive: 0x2a9e1a, emissiveIntensity: 2.6, roughness: 0.2, metalness: 0.1 });
-    const trimMat  = new THREE.MeshStandardMaterial({ color: 0xd8ffcc, emissive: 0x66cc44, emissiveIntensity: 1.0, roughness: 0.3, metalness: 0.5 });
-
-    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.0, 0.85), bodyMat);
-    cabinet.position.y = 1.0;
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.16, 0.98), trimMat);
-    cap.position.y = 2.06;
-    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.9, 0.05), glowMat);
-    screen.position.set(0, 1.2, -0.44);
-    const base = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.14, 1.0), trimMat);
-    base.position.y = 0.07;
-
-    const bottleGeo = new THREE.CylinderGeometry(0.09, 0.11, 0.5, 10);
-    const bottles = [];
-    for (let i = 0; i < 3; i++) {
-      const bottle = new THREE.Mesh(bottleGeo, glowMat.clone());
-      bottle.position.set(-0.3 + i * 0.3, 0.55 + Math.sin(i) * 0.05, 0.46);
-      bottle.userData.isDecor = true;
-      bottles.push(bottle);
-      root.add(bottle);
-    }
-
-    const light = new THREE.PointLight(0x6aff44, 2.0, 6.0, 1.8);
-    light.position.set(0, 1.6, 0.3);
-
-    root.add(cabinet, cap, screen, base, light);
-    root.userData.screen = screen;
-    root.userData.light = light;
-    root.userData.bottles = bottles;
-    root.traverse(obj => { if (obj.isMesh && !obj.userData.isDecor) { obj.castShadow = false; obj.receiveShadow = true; wallMeshes.push(obj); } });
-    scene.add(root);
-    window.__extAddCollider?.(0, 178, 0.7, 0.55);
-    perkMachineState.station = root;
-  }
-
-  // ── Horde beacon (exterior plaza) ────────────────────────────────────────────
-  // Free to activate, gated on a cooldown: calls in a squad of tougher bonus
-  // enemies (2x XP each) right in the exterior zone — a reason to actually
-  // fight out there instead of just walking through it for the stations.
-  function createHordeBeacon() {
-    if (beaconState.station) return;
-    const root = new THREE.Group();
-    root.name = "Horde Beacon";
-    root.position.set(0, 0, 212);
-    root.userData.noInstancing = true;
-
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x241018, roughness: 0.5, metalness: 0.6, emissive: 0x180608, emissiveIntensity: 0.5 });
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xff3050, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-
-    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 1.5, 10), baseMat);
-    pillar.position.y = 0.75;
-    const cage = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.03, 8, 24), baseMat.clone());
-    cage.rotation.x = Math.PI / 2;
-    cage.position.y = 1.55;
-    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.24, 1), coreMat);
-    core.position.y = 1.55;
-    core.userData.isDecor = true;
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.14, 10), baseMat);
-    base.position.y = 0.07;
-
-    const light = new THREE.PointLight(0xff3050, 1.6, 6.5, 1.8);
-    light.position.y = 1.55;
-
-    root.add(pillar, cage, core, base, light);
-    root.userData.core = core;
-    root.userData.cage = cage;
-    root.userData.light = light;
-    root.traverse(obj => { if (obj.isMesh && !obj.userData.isDecor) { obj.castShadow = false; obj.receiveShadow = true; wallMeshes.push(obj); } });
-    scene.add(root);
-    window.__extAddCollider?.(0, 212, 0.65, 0.65);
-    beaconState.station = root;
-  }
+  // Wall-buy crates and the horde beacon were removed. The perk machine is now
+  // the plaza landmark statue itself — see loadWorldLandmarks, which anchors
+  // perkMachineState.station to the loaded statue and collects its materials
+  // for the purchasable emissive pulse (no prop geometry, no extra lights).
 
   function getPackBeamEndpoint(sourceId, target) {
     if (sourceId && sourceId !== myNetId) {
@@ -11101,7 +12065,7 @@ async function spawnEnemies(wave, options = {}) {
     return target;
   }
 
-  function spawnPackUpgradeEffect(gunType, nextLevel, options = {}) {
+  function spawnPackUpgradeEffect(gunType, nextLevel, options: any = {}) {
     // Station ring/shockwave burst removed by request — the upgrade now reads through
     // the gun's own pack animation (weaponAnim.packAnim spin + flash) and the
     // persistent colour glow (applyGunPackVisual). No world VFX is spawned.
@@ -11156,7 +12120,7 @@ async function spawnEnemies(wave, options = {}) {
       ring.rotation.z = Math.random() * Math.PI;
       ring.position.y = spec.yOff;
       ring.scale.setScalar(spec.scl);
-      ring.userData.spin = spec.spin || (3.4 + rings.length * 1.35) * (rings.length % 2 ? -1 : 1);
+      ring.userData.spin = (spec as any).spin || (3.4 + rings.length * 1.35) * (rings.length % 2 ? -1 : 1);
       root.add(ring);
       rings.push(ring);
     }
@@ -11442,32 +12406,339 @@ async function spawnEnemies(wave, options = {}) {
     packState.station.scale.setScalar(visualActive ? 1.03 + pulse * 0.025 : 1);
   }
 
-  function updateWallBuyCrates(dt) {
-    if (!crateStations.length) return;
-    const now = performance.now();
-    for (const c of crateStations) {
-      const dist = Math.hypot(yaw.position.x - c.root.position.x, yaw.position.z - c.root.position.z);
-      c.active = dist < 2.4 && game.state === "playing";
-      const owned = currentGun === c.def.gun;
-      c.prompt = c.active
-        ? player.xp >= c.def.cost
-          ? owned ? `PRESS E: RESUPPLY ${c.def.label} (${c.def.cost} XP)` : `PRESS E: TAKE ${c.def.label} (${c.def.cost} XP)`
-          : `${c.def.label} NEEDS ${c.def.cost - player.xp} XP`
-        : "";
-      if (c.root.userData.icon) {
-        c.root.userData.icon.rotation.y += dt * (c.active ? 1.6 : 0.6);
-        c.root.userData.icon.material.opacity = c.active ? 0.85 + Math.sin(now * 0.006) * 0.1 : 0.45;
-      }
-      if (c.root.userData.ring) {
-        c.root.userData.ring.rotation.z += dt * (c.active ? 1.2 : 0.4);
+  // ── Mystery box (exterior weapon source) ────────────────────────────────────
+  function createMysteryBox() {
+    if (mysteryBoxState.station) return;
+    const root = new THREE.Group();
+    root.name = "Mystery Box";
+    root.position.set(10, 0, 140); // old wall-buy crate spot
+    root.rotation.y = -Math.PI * 0.15;
+    root.userData.noInstancing = true; // animated/interactive — keep out of static merge
+
+    // ── Materials (all created here so the boot compile pass links them; no lights) ──
+    const woodMat  = new THREE.MeshStandardMaterial({ color: 0x2a1c0f, roughness: 0.82, metalness: 0.06, emissive: 0x0e0602, emissiveIntensity: 0.3 });
+    const plankMat = new THREE.MeshStandardMaterial({ color: 0x22160b, roughness: 0.88, metalness: 0.04 });
+    const trimMat  = new THREE.MeshStandardMaterial({ color: 0xd8b256, roughness: 0.26, metalness: 0.82, emissive: 0x5a3c0a, emissiveIntensity: 0.5 });
+    const glowMat  = new THREE.MeshStandardMaterial({ color: 0x8af0ff, emissive: 0x2ad0f4, emissiveIntensity: 2.2, roughness: 0.12, metalness: 0.05 });
+    mysteryBoxState.glowMats = [glowMat, trimMat];
+
+    const mesh = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+
+    // ── Chest body: a slightly tapered plank crate (narrower at the base reads more
+    // "treasure chest" than a plain cube) with recessed plank grooves. ──
+    const base = mesh(1.78, 0.78, 1.02, woodMat);
+    base.position.y = 0.4;
+    root.add(base);
+    // Vertical plank grooves on the long faces (thin dark insets — cheap detail).
+    for (const gx of [-0.58, -0.19, 0.19, 0.58]) {
+      for (const gz of [0.515, -0.515]) {
+        const groove = mesh(0.05, 0.66, 0.03, plankMat);
+        groove.position.set(gx, 0.4, gz);
+        root.add(groove);
       }
     }
+    // Ornate gold CORNER BRACKETS (L-shaped) at all four vertical edges — the framed,
+    // banded look of a real mystery chest instead of three flat bands.
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      const cx = sx * 0.86, cz = sz * 0.48;
+      for (const cy of [0.09, 0.71]) { // bottom + top corner caps
+        const capA = mesh(0.12, 0.1, 0.2, trimMat); capA.position.set(cx, cy, cz - sz * 0.06); root.add(capA);
+        const capB = mesh(0.2, 0.1, 0.12, trimMat); capB.position.set(cx - sx * 0.06, cy, cz); root.add(capB);
+      }
+      const post = mesh(0.08, 0.66, 0.08, trimMat); post.position.set(cx - sx * 0.02, 0.4, cz - sz * 0.02); root.add(post);
+    }
+    // Glowing arcane seam around the lid line.
+    const seam = mesh(1.8, 0.05, 1.04, glowMat);
+    seam.position.y = 0.79;
+    root.add(seam);
+    // Rivet studs along the top band (small gold dots).
+    for (const rx of [-0.62, -0.21, 0.21, 0.62]) {
+      const rivet = mesh(0.07, 0.07, 0.07, trimMat);
+      rivet.position.set(rx, 0.72, 0.5);
+      root.add(rivet);
+    }
+
+    // ── Iconic glowing "?" on the front face (built from boxes). ──
+    const qMark = new THREE.Group();
+    qMark.position.set(0, 0.42, 0.52);
+    const qseg = (x, y, w, h) => { const m = mesh(w, h, 0.05, glowMat); m.position.set(x, y, 0); qMark.add(m); };
+    qseg(-0.02, 0.20, 0.24, 0.055);  // top curve bar
+    qseg(0.11, 0.12, 0.055, 0.14);   // upper-right down-stroke
+    qseg(0.03, 0.03, 0.12, 0.055);   // inward hook
+    qseg(0.0, -0.08, 0.055, 0.16);   // stem
+    qseg(0.0, -0.21, 0.075, 0.075);  // dot
+    root.add(qMark);
+    mysteryBoxState.qMark = qMark;
+
+    // Lid — hinged along the back edge (rotates about X), with a domed gold ridge.
+    const lid = new THREE.Group();
+    lid.position.set(0, 0.79, -0.51);
+    const lidMesh = mesh(1.78, 0.16, 1.02, woodMat); lidMesh.position.set(0, 0.08, 0.51); lid.add(lidMesh);
+    const lidRidge = mesh(0.34, 0.12, 1.04, woodMat); lidRidge.position.set(0, 0.18, 0.51); lid.add(lidRidge);
+    const lidTrim = mesh(1.8, 0.05, 1.06, trimMat); lidTrim.position.set(0, 0.17, 0.51); lid.add(lidTrim);
+    const lidGlow = mesh(0.34, 0.04, 1.06, glowMat); lidGlow.position.set(0, 0.25, 0.51); lid.add(lidGlow);
+    root.add(lid);
+    mysteryBoxState.lid = lid;
+
+    // ── Light beam: a wide additive cone that erupts from the open chest during a
+    // roll (MeshBasicMaterial additive — a glowing mesh, NOT a real light). ──
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0x8cecff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(0.62, 2.6, 20, 1, true), beamMat);
+    beam.position.set(0, 2.0, 0); // wide end up
+    beam.renderOrder = 3;
+    beam.frustumCulled = false;
+    root.add(beam);
+    mysteryBoxState.beam = beam;
+
+    // Shimmer: single additive sprite above the box (reuses the muzzle-flash sprite
+    // pipeline — additive, depthWrite off, definitely not a light).
+    const shimmer = createMuzzleFlash(0xaef2ff, 2.4);
+    shimmer.position.set(0, 1.5, 0);
+    shimmer.material.opacity = 0;
+    shimmer.visible = true;
+    root.add(shimmer);
+    mysteryBoxState.shimmer = shimmer;
+
+    // Floating glow motes: a few small additive sprites that idle-orbit the chest and
+    // stream upward along the beam while rolling. Same sprite pipeline as the shimmer.
+    mysteryBoxState.motes = [];
+    for (let i = 0; i < 7; i++) {
+      const mote = createMuzzleFlash(0xbdf3ff, 0.5);
+      mote.material.opacity = 0;
+      mote.visible = true;
+      mote.userData = {
+        phase: Math.random() * Math.PI * 2,
+        radius: 0.55 + Math.random() * 0.5,
+        speed: 0.5 + Math.random() * 0.7,
+        yBase: 0.5 + Math.random() * 0.6,
+        rise: Math.random(),
+      };
+      root.add(mote);
+      mysteryBoxState.motes.push(mote);
+    }
+
+    // Teddy-bear dud: simple brown box-bear, hidden until rolled.
+    const bear = new THREE.Group();
+    const furMat = new THREE.MeshStandardMaterial({ color: 0x7a4f2a, roughness: 0.9, metalness: 0.02 });
+    const bodyB = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.34, 0.2), furMat); bodyB.position.y = 0.17; bear.add(bodyB);
+    const headB = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.18), furMat); headB.position.y = 0.44; bear.add(headB);
+    for (const s of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.06), furMat); ear.position.set(0.09 * s, 0.57, 0); bear.add(ear);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.2, 0.08), furMat); arm.position.set(0.19 * s, 0.2, 0); bear.add(arm);
+    }
+    bear.visible = false;
+    root.add(bear);
+    mysteryBoxState.teddyMesh = bear;
+
+    scene.add(root);
+    mysteryBoxState.station = root;
+    if (typeof window.__extAddCollider === "function") window.__extAddCollider(10, 140, 2.0, 1.3);
+    // Pre-create one display rig now so its materials are linked in the boot
+    // compile pass (compileAllWarmables walks the whole graph, visible or not).
+    getMysteryBoxDisplayRig(GUNS.PISTOL);
+  }
+
+  function getMysteryBoxDisplayRig(gunType) {
+    let rig = mysteryBoxState.displayCache.get(gunType);
+    if (!rig) {
+      rig = createWeaponViewModel(gunType, mysteryBoxState.station);
+      rig.gun.scale.setScalar(0.55);
+      rig.gun.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; } });
+      rig.flash.visible = false;
+      rig.gun.visible = false;
+      mysteryBoxState.displayCache.set(gunType, rig);
+    }
+    return rig;
+  }
+
+  function hideMysteryBoxDisplays() {
+    for (const rig of mysteryBoxState.displayCache.values()) { rig.gun.visible = false; rig.gun.rotation.z = 0; }
+    if (mysteryBoxState.teddyMesh) mysteryBoxState.teddyMesh.visible = false;
+    if (mysteryBoxState.shimmer) mysteryBoxState.shimmer.material.opacity = 0;
+    if (mysteryBoxState.beam) mysteryBoxState.beam.material.opacity = 0;
+  }
+
+  function resetMysteryBox() {
+    mysteryBoxState.rolling = false;
+    mysteryBoxState.rollT = 0;
+    mysteryBoxState.resultGun = null;
+    mysteryBoxState.teddy = false;
+    mysteryBoxState.visualOnly = false;
+    mysteryBoxState.prompt = "";
+    hideMysteryBoxDisplays();
+  }
+
+  function startMysteryBoxRoll(resultGun, teddy, visualOnly) {
+    mysteryBoxState.rolling = true;
+    mysteryBoxState.rollT = 0;
+    mysteryBoxState._seated = false;
+    mysteryBoxState.flashPulse = 0;
+    mysteryBoxState.resultGun = resultGun;
+    mysteryBoxState.teddy = teddy;
+    mysteryBoxState.visualOnly = !!visualOnly;
+    hideMysteryBoxDisplays();
+    if (teddy) {
+      if (mysteryBoxState.teddyMesh) mysteryBoxState.teddyMesh.visible = true;
+    } else {
+      const rig = getMysteryBoxDisplayRig(resultGun);
+      rig.gun.visible = true;
+    }
+  }
+
+  function tryMysteryBox() {
+    if (!mysteryBoxState.active || mysteryBoxState.rolling) return;
+    if (player.xp < MYSTERY_BOX_COST) {
+      addKillFeed(`MYSTERY BOX NEEDS ${MYSTERY_BOX_COST - player.xp} XP`);
+      sfxDenied();
+      return;
+    }
+    player.xp -= MYSTERY_BOX_COST;
+    const teddy = Math.random() < MYSTERY_BOX_TEDDY_CHANCE;
+    // Prefer weapons the player does NOT own yet, so the box drives real
+    // progression instead of endlessly re-rolling duplicates. Once everything is
+    // owned it may roll anything (a dupe just refills that gun's ammo on finish).
+    const unowned = Object.values(GUNS).filter(g => !ownsWeapon(g));
+    const pool = unowned.length ? unowned : Object.values(GUNS).filter(g => g !== currentGun);
+    const resultGun = pool[Math.floor(Math.random() * pool.length)];
+    startMysteryBoxRoll(resultGun, teddy, false);
+    sfxBoxOpen();
+    sfxBoxReveal();
+    cameraFX.shake = Math.min(1, cameraFX.shake + 0.25);
+    if (net?.active) broadcastVisualFx("mysteryBox", { gun: teddy ? "teddy" : resultGun });
+    updateHUD(0);
+  }
+
+  function finishMysteryBoxRoll() {
+    const { teddy, resultGun, visualOnly } = mysteryBoxState;
+    mysteryBoxState.rolling = false;
+    mysteryBoxState.rollT = 0;
+    hideMysteryBoxDisplays();
+    if (visualOnly) return; // remote player's roll — FX only
+    if (teddy) {
+      const refund = Math.floor(MYSTERY_BOX_COST / 2);
+      player.xp += refund;
+      addKillFeed(`TEDDY BEAR! REFUNDED ${refund} XP`);
+      sfxBoxDud();
+    } else if (resultGun && GUN_SPECS[resultGun]) {
+      const st = allGuns[resultGun];
+      if (st) {
+        st.mag = st.magSize;
+        st.ammo = GUN_SPECS[resultGun].ammo;
+      }
+      const wasNew = !ownsWeapon(resultGun);
+      grantWeapon(resultGun); // acquire it for the rest of the run
+      updateWeaponSlots();
+      if (resultGun !== currentGun) switchGun(resultGun, { fromBox: true });
+      addKillFeed(`MYSTERY BOX: ${GUN_SPECS[resultGun].name.toUpperCase()}${wasNew ? " — NEW" : " — AMMO REFILL"}`);
+      playEventSound('pack_ready', { volume: 0.6 });
+    }
+    updateHUD(0);
+  }
+
+  const MYSTERY_BOX_TOTAL = MYSTERY_BOX_RISE_SECONDS + MYSTERY_BOX_HOLD_SECONDS;
+  function updateMysteryBox(dt) {
+    const s = mysteryBoxState;
+    if (!s.station) return;
+    const dist = Math.hypot(yaw.position.x - s.station.position.x, yaw.position.z - s.station.position.z);
+    s.active = dist < 4.5 && game.state === "playing" && !s.rolling;
+    s.prompt = s.rolling && !s.visualOnly
+      ? "MYSTERY BOX ROLLING…"
+      : s.active
+        ? player.xp >= MYSTERY_BOX_COST
+          ? `PRESS E: MYSTERY BOX — RANDOM WEAPON (${MYSTERY_BOX_COST} XP)`
+          : `MYSTERY BOX NEEDS ${MYSTERY_BOX_COST - player.xp} XP`
+        : "";
+
+    const now = performance.now();
+    const riseT = s.rolling ? clamp01(s.rollT / MYSTERY_BOX_RISE_SECONDS) : 0;
+
+    // Lid swing — a spring (not a lerp) so it flings open with a little overshoot
+    // bounce and clacks shut, reading as a real hinged mechanism.
+    const lidTarget = s.rolling ? -2.0 : 0;
+    s.lidVel += ((lidTarget - s.lidAngle) * 95 - s.lidVel * 14) * dt;
+    s.lidAngle += s.lidVel * dt;
+    if (s.lid) s.lid.rotation.x = s.lidAngle;
+
+    // Seat-flash: a bright pop when the prize finishes rising (decays over ~0.5s).
+    s.flashPulse = Math.max(0, s.flashPulse - dt * 2.2);
+
+    // Glow pulse on trim + "?" (emissiveIntensity only — uniform update, no relink).
+    const nearPulse = dist < 16 ? 0.55 + Math.sin(now * 0.004) * 0.45 : 0.22;
+    const glowBase = (s.rolling ? 3.0 : 1.4) * nearPulse + 0.6 + s.flashPulse * 3.0;
+    for (const m of s.glowMats) m.emissiveIntensity = glowBase;
+    if (s.qMark) {
+      // The "?" breathes on its own faster rhythm and spins-glows during a roll.
+      s.qMark.rotation.z = s.rolling ? Math.sin(now * 0.006) * 0.12 : 0;
+    }
+
+    // Beam of light: dark idle, erupts and pulses while rolling, flares on seat.
+    if (s.beam) {
+      const beamTarget = s.rolling ? (0.28 + Math.sin(now * 0.012) * 0.12 + Math.sin(riseT * Math.PI) * 0.35) : 0;
+      const bo = beamTarget + s.flashPulse * 0.6;
+      s.beam.material.opacity += (bo - s.beam.material.opacity) * Math.min(1, dt * 6);
+      s.beam.rotation.y = now * 0.0009;
+      const bs = 0.85 + Math.sin(now * 0.01) * 0.12 + s.flashPulse * 0.5;
+      s.beam.scale.set(bs, 1, bs);
+    }
+
+    // Floating motes: idle-orbit by proximity; stream upward along the beam while rolling.
+    if (s.motes) {
+      for (const mote of s.motes) {
+        const u = mote.userData;
+        u.phase += dt * u.speed * (s.rolling ? 2.4 : 1);
+        const orbit = u.radius * (s.rolling ? 0.5 : 1);
+        mote.position.x = Math.cos(u.phase) * orbit;
+        mote.position.z = Math.sin(u.phase) * orbit;
+        if (s.rolling) {
+          // Rise and recycle: a continuous fountain up the beam.
+          u.rise = (u.rise + dt * (0.5 + u.speed * 0.3)) % 1;
+          mote.position.y = 0.7 + u.rise * 2.4;
+          mote.material.opacity = Math.sin(u.rise * Math.PI) * 0.8;
+        } else {
+          const near = clamp01(1 - dist / 18);
+          mote.position.y = u.yBase + Math.sin(now * 0.001 + u.phase) * 0.18;
+          const target = (s.active ? 0.3 : 0.12) * near;
+          mote.material.opacity += (target - mote.material.opacity) * Math.min(1, dt * 3);
+        }
+      }
+    }
+
+    if (!s.rolling) {
+      // Idle beacon: fade the existing shimmer sprite in by proximity so the box
+      // reads as interactive from range, not just mid-roll.
+      if (s.shimmer) {
+        const near = clamp01(1 - dist / 20);
+        const target = s.active ? near * (0.35 + Math.sin(now * 0.005) * 0.12) : near * 0.16;
+        s.shimmer.position.y = 1.2 + Math.sin(now * 0.0012) * 0.08;
+        s.shimmer.material.opacity += (target - s.shimmer.material.opacity) * Math.min(1, dt * 4);
+      }
+      return;
+    }
+    s.rollT += dt;
+    const eased = 1 - Math.pow(1 - riseT, 3);
+    const display = s.teddy ? s.teddyMesh : s.displayCache.get(s.resultGun)?.gun;
+    if (display) {
+      // Rise out of the chest with a slowing spin, then a gentle settle bob at the top.
+      const settle = riseT >= 1 ? Math.sin((s.rollT - MYSTERY_BOX_RISE_SECONDS) * 6) * 0.03 : 0;
+      display.position.set(0, 0.55 + eased * 1.15 + settle, 0);
+      display.rotation.y = now * 0.002 * (2.0 - riseT * 1.4);
+      display.rotation.z = (1 - eased) * 0.5; // straightens as it rises
+    }
+    if (s.shimmer) {
+      s.shimmer.position.y = 0.9 + eased * 1.05;
+      s.shimmer.material.opacity = Math.sin(riseT * Math.PI) * 0.9 + s.flashPulse * 0.8;
+    }
+    // Fire the seat-flash once, as the rise completes.
+    if (riseT >= 1 && !s._seated) { s._seated = true; s.flashPulse = 1; }
+    if (s.rollT >= MYSTERY_BOX_TOTAL) finishMysteryBoxRoll();
   }
 
   function updatePerkMachine(dt) {
     if (!perkMachineState.station) return;
     const dist = Math.hypot(yaw.position.x - perkMachineState.station.position.x, yaw.position.z - perkMachineState.station.position.z);
-    perkMachineState.active = dist < 2.4 && game.state === "playing";
+    // The statue is a big landmark (scale 6, ~4-unit collider) — interact range
+    // reaches just past its plinth.
+    perkMachineState.active = dist < 5.2 && game.state === "playing";
     const tier = player.perkTier || 0;
     const def = PERK_DEFS[tier];
     perkMachineState.prompt = perkMachineState.active
@@ -11477,46 +12748,132 @@ async function spawnEnemies(wave, options = {}) {
           ? `PRESS E: ${def.name} — ${def.desc} (${def.cost} XP)`
           : `${def.name} NEEDS ${def.cost - player.xp} XP`
       : "";
-    const now = performance.now();
-    const screen = perkMachineState.station.userData.screen;
-    if (screen) screen.material.emissiveIntensity = perkMachineState.active ? 3.2 + Math.sin(now * 0.006) * 0.6 : 2.0 + Math.sin(now * 0.003) * 0.3;
-    const light = perkMachineState.station.userData.light;
-    if (light) light.intensity = (perkMachineState.active ? 2.8 : 1.7) + Math.sin(now * 0.005) * 0.4;
-    for (const bottle of perkMachineState.station.userData.bottles || []) {
-      bottle.position.y = 0.55 + Math.sin(now * 0.002 + bottle.position.x * 4) * 0.05;
-      bottle.material.emissiveIntensity = 1.8 + Math.sin(now * 0.004 + bottle.position.x * 6) * 0.6;
+    // Statue pulse: a dim always-on idle glow (so it reads as "interactive" from
+    // across the plaza, not just in interact range) that ramps to a much
+    // stronger pulse once a perk is actually purchasable. emissiveIntensity only
+    // (emissive is a standard uniform — no new lights, no shader relink).
+    const mats = perkMachineState.pulseMats;
+    if (mats && mats.length) {
+      const purchasable = perkMachineState.active && def && player.xp >= def.cost;
+      const now = performance.now();
+      const pulse = purchasable
+        ? 0.85 + Math.sin(now * 0.004) * 0.35
+        : 0.12 + Math.sin(now * 0.0016) * 0.06;
+      for (const m of mats) {
+        if (Math.abs((m.emissiveIntensity || 0) - pulse) > 0.01) m.emissiveIntensity = pulse;
+      }
+      // Ground-level glow sprite: fades in with proximity (visible well before
+      // interact range) and brightens further when purchasable.
+      const sprite = perkMachineState.glowSprite;
+      if (sprite) {
+        const near = clamp01(1 - dist / 24);
+        const target = near * (purchasable ? 0.55 + Math.sin(now * 0.004) * 0.12 : 0.22);
+        sprite.material.opacity += (target - sprite.material.opacity) * Math.min(1, dt * 4);
+      }
     }
   }
 
-  function updateHordeBeacon(dt) {
-    if (!beaconState.station) return;
-    beaconState.cooldown = Math.max(0, beaconState.cooldown - dt);
-    const dist = Math.hypot(yaw.position.x - beaconState.station.position.x, yaw.position.z - beaconState.station.position.z);
-    const inRange = dist < 2.6 && game.state === "playing";
-    // Coop guard: the beacon spawns SHARED enemies (unlike the crate/perk stations,
-    // which only touch this player's own local xp/loadout). A guest activating it
-    // would create enemies only it can see, with no host authority to sync them —
-    // fail safe by disabling it for non-host clients in a coop session.
-    const guestBlocked = !!(net?.active && gameMode === "coop" && !net.isHost);
-    beaconState.active = inRange && !guestBlocked && beaconState.cooldown <= 0;
-    beaconState.prompt = beaconState.active
-      ? "PRESS E: CALL HORDE BEACON (BONUS TARGETS)"
-      : (inRange && guestBlocked)
-        ? "HORDE BEACON: HOST ONLY"
-        : (inRange && beaconState.cooldown > 0)
-          ? `BEACON RECHARGING (${Math.ceil(beaconState.cooldown)}s)`
-          : "";
-    const now = performance.now();
-    const ready = beaconState.cooldown <= 0;
-    if (beaconState.station.userData.core) {
-      const core = beaconState.station.userData.core;
-      core.rotation.y += dt * (ready ? 1.4 : 0.4);
-      core.rotation.x += dt * (ready ? 0.9 : 0.25);
-      core.material.opacity = ready ? 0.75 + Math.sin(now * 0.007) * 0.2 : 0.25;
-      core.scale.setScalar(ready ? 1 + Math.sin(now * 0.006) * 0.06 : 0.85);
+  // ── Car alarms (exterior street) ─────────────────────────────────────────────
+  // Press E near a parked car → 10 s two-tone alarm + emissive light-housing flash;
+  // every enemy steers toward the noise (soundLure) instead of the player. Per-car
+  // 30 s cooldown. Coop: host-authoritative (enemies are host-simulated) — the host
+  // broadcasts a "carAlarm" vfx so guests hear/see it.
+  function getExtCars() { return Array.isArray(window.__extCarAlarms) ? window.__extCarAlarms : null; }
+
+  function updateCarAlarms(dt) {
+    const cars = getExtCars();
+    if (!cars) return;
+    const nowSec = performance.now() / 1000;
+    // Nearest car in interact range.
+    let near = null, nearDist = 3.4;
+    for (const car of cars) {
+      car.cooldownUntil = car.cooldownUntil || 0;
+      const d = Math.hypot(yaw.position.x - car.x, yaw.position.z - car.z);
+      if (d < nearDist) { near = car; nearDist = d; }
     }
-    if (beaconState.station.userData.cage) beaconState.station.userData.cage.rotation.z += dt * 0.5;
-    if (beaconState.station.userData.light) beaconState.station.userData.light.intensity = ready ? 1.6 + Math.sin(now * 0.005) * 0.4 : 0.5;
+    carAlarmState.nearCar = near;
+    const inRange = !!near && game.state === "playing";
+    const guestBlocked = !!(net?.active && gameMode === "coop" && !net.isHost);
+    const cooling = inRange && near.cooldownUntil > nowSec;
+    carAlarmState.active = inRange && !guestBlocked && !cooling;
+    carAlarmState.prompt = carAlarmState.active
+      ? "PRESS E: TRIGGER CAR ALARM (LURE ENEMIES)"
+      : inRange && guestBlocked
+        ? "CAR ALARM: HOST ONLY"
+        : cooling
+          ? `CAR ALARM RESETTING (${Math.ceil(near.cooldownUntil - nowSec)}s)`
+          : "";
+    // Flash the ringing car's emissive window/light-housing materials in sync with
+    // the two-tone (0.4 s per tone). Emissive-only — NO real lights.
+    const ringing = carAlarmState.ringing;
+    if (ringing) {
+      if (nowSec >= carAlarmState.ringUntil) {
+        for (const rec of ringing.mats) rec.mat.emissiveIntensity = rec.base;
+        carAlarmState.ringing = null;
+      } else {
+        const phase = Math.floor((carAlarmState.ringUntil - nowSec) / 0.4) % 2;
+        const hot = phase === 0 ? 2.6 : 0.15;
+        for (const rec of ringing.mats) rec.mat.emissiveIntensity = hot * (rec.scale || 1);
+      }
+    }
+    if (soundLure.until > 0 && nowSec >= soundLure.until) soundLure.until = 0;
+  }
+
+  // Two-tone synthesized car alarm (no siren asset in assets/audio — verified),
+  // riding the shared WebAudio bus + voice limiter like every other synth SFX.
+  function playCarAlarmSound(durationSec, pan = 0) {
+    if (!acquireVoice(durationSec)) return;
+    try {
+      const ctx = getAudioCtx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      const t0 = ctx.currentTime;
+      // Alternate 700/950 Hz every 0.4 s for the whole duration.
+      for (let t = 0; t < durationSec; t += 0.4) {
+        o.frequency.setValueAtTime(Math.floor(t / 0.4) % 2 === 0 ? 950 : 700, t0 + t);
+      }
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(0.055, t0 + 0.03);
+      g.gain.setValueAtTime(0.055, t0 + durationSec - 0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + durationSec);
+      o.connect(g);
+      connectWithPan(ctx, g, pan);
+      o.start(t0);
+      o.stop(t0 + durationSec + 0.05);
+    } catch (_) {}
+  }
+
+  // Shared local FX (sound + emissive flash + lure) — used by the local trigger
+  // and by the network "carAlarm" vfx handler.
+  function startCarAlarmFx(car, { lure = true } = {}) {
+    const nowSec = performance.now() / 1000;
+    // Restore the previous car's emissives if a second alarm starts mid-ring.
+    if (carAlarmState.ringing && carAlarmState.ringing !== car) {
+      for (const rec of carAlarmState.ringing.mats) rec.mat.emissiveIntensity = rec.base;
+    }
+    carAlarmState.ringing = car;
+    carAlarmState.ringUntil = nowSec + CAR_ALARM_DURATION;
+    car.cooldownUntil = nowSec + CAR_ALARM_COOLDOWN;
+    if (lure) {
+      soundLure.x = car.x;
+      soundLure.z = car.z;
+      soundLure.until = nowSec + CAR_ALARM_DURATION;
+    }
+    playCarAlarmSound(CAR_ALARM_DURATION);
+  }
+
+  function tryTriggerCarAlarm() {
+    if (!carAlarmState.active || !carAlarmState.nearCar) return;
+    const car = carAlarmState.nearCar;
+    // Lure only matters where enemies are simulated: solo, or coop host (guests
+    // are blocked in updateCarAlarms). Broadcast so everyone hears/sees it.
+    startCarAlarmFx(car, { lure: true });
+    addKillFeed("CAR ALARM TRIGGERED — ENEMIES INBOUND");
+    cameraFX.shake = Math.min(1, cameraFX.shake + 0.2);
+    if (net?.active) {
+      broadcastVisualFx("carAlarm", { x: +car.x.toFixed(2), z: +car.z.toFixed(2) });
+    }
   }
 
   function tryPackUpgrade() {
@@ -11524,11 +12881,13 @@ async function spawnEnemies(wave, options = {}) {
     const level = gunUpgradeLevels[currentGun] || 0;
     if (level >= MAX_PACK_LEVEL) {
       addKillFeed("PACK-A-PUNCH MAXED");
+      sfxDenied();
       return;
     }
     const cost = getPackCost(currentGun);
     if (player.xp < cost) {
       addKillFeed(`NEED ${cost - player.xp} XP`);
+      sfxDenied();
       return;
     }
     player.xp -= cost;
@@ -11537,6 +12896,9 @@ async function spawnEnemies(wave, options = {}) {
     gunState = allGuns[currentGun];
     weaponAnim.animSpec = getWeaponAnimSpec(currentGun);
     const nextLevel = gunUpgradeLevels[currentGun] + 1;
+    // spawnPackUpgradeEffect early-returns (world VFX removed by request) so the
+    // charge-up/discharge SFX must be triggered directly from the interaction.
+    sfxPackUpgrade(nextLevel);
     spawnPackUpgradeEffect(currentGun, nextLevel, { sourceId: myNetId });
     // Persistent pack-a-punch glow on the equipped weapon + the upgrade animation.
     applyGunPackVisual(weapon, gunUpgradeLevels[currentGun]);
@@ -11554,24 +12916,6 @@ async function spawnEnemies(wave, options = {}) {
     updateHUD(0);
   }
 
-  function tryBuyCrate(crate) {
-    if (!crate.active) return;
-    if (player.xp < crate.def.cost) {
-      addKillFeed(`NEED ${crate.def.cost - player.xp} XP`);
-      return;
-    }
-    player.xp -= crate.def.cost;
-    if (currentGun !== crate.def.gun) switchGun(crate.def.gun);
-    const g = allGuns[crate.def.gun];
-    g.mag = g.magSize;
-    g.ammo = GUN_SPECS[crate.def.gun].ammo;
-    gunState = allGuns[currentGun];
-    weaponAnim.switchBlend = Math.max(weaponAnim.switchBlend, 0.6);
-    cameraFX.shake = Math.min(1, cameraFX.shake + 0.3);
-    addKillFeed(`RESUPPLIED ${crate.def.label.toUpperCase()}`);
-    updateHUD(0);
-  }
-
   function tryBuyPerk() {
     if (!perkMachineState.active) return;
     const tier = player.perkTier || 0;
@@ -11579,6 +12923,7 @@ async function spawnEnemies(wave, options = {}) {
     if (!def) { addKillFeed("ALL PERKS ACQUIRED"); return; }
     if (player.xp < def.cost) {
       addKillFeed(`NEED ${def.cost - player.xp} XP`);
+      sfxDenied();
       return;
     }
     player.xp -= def.cost;
@@ -11587,52 +12932,23 @@ async function spawnEnemies(wave, options = {}) {
     else if (def.id === "vitality") { player.maxHp += 50; player.hp = player.maxHp; }
     else if (def.id === "aegis") player.perkDamageResist = 0.25;
     cameraFX.shake = Math.min(1, cameraFX.shake + 0.4);
+    sfxPerkPurchase(tier);
     addKillFeed(`PERK ACQUIRED: ${def.name}`);
+    updatePerkHud();
     updateHUD(0);
-  }
-
-  function tryActivateHordeBeacon() {
-    if (!beaconState.active) return;
-    beaconState.cooldown = HORDE_BEACON_COOLDOWN;
-    const bx = beaconState.station.position.x;
-    const bz = beaconState.station.position.z;
-    const count = 3 + Math.floor(game.wave / 4);
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5;
-      const radius = 4 + Math.random() * 3;
-      const x = bx + Math.cos(angle) * radius;
-      const z = bz + Math.sin(angle) * radius;
-      const cell = worldToMap(x, z);
-      const openForEnemy = isOpenCell(cell.mx, cell.my) && !wallAtWorldRadius(x, z, 0.58) && !propBlocksAt(x, z, 0.58, 0.1, PLAYER_H + 1.1);
-      const pos = openForEnemy ? { x, z } : { x: bx, z: bz };
-      const type = pickEnemyTypeForWave(game.wave);
-      const enemy = createEnemy(type, pos, Math.max(2, game.wave), getWaveHpScale(game.wave));
-      enemy.alive = true;
-      enemy.aggroed = true;
-      enemy.xp = Math.round(enemy.xp * 2); // bonus targets pay double
-      scene.add(enemy.mesh);
-      if (enemy.hpBar?.mesh) scene.add(enemy.hpBar.mesh);
-      ensureLiveEnemyVisible(enemy);
-      enemies.push(enemy);
-    }
-    game.totalEnemies = game.killed + enemies.filter(e => e.alive).length;
-    updateObjective();
-    lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.35);
-    cameraFX.shake = Math.min(1, cameraFX.shake + 0.5);
-    addKillFeed("HORDE BEACON ACTIVE — BONUS TARGETS INBOUND");
   }
 
   function tryInteract() {
     if (packState.active) { tryPackUpgrade(); return; }
-    const crate = crateStations.find(c => c.active);
-    if (crate) { tryBuyCrate(crate); return; }
     if (perkMachineState.active) { tryBuyPerk(); return; }
-    if (beaconState.active) { tryActivateHordeBeacon(); return; }
+    if (mysteryBoxState.active) { tryMysteryBox(); return; }
+    if (carAlarmState.active) { tryTriggerCarAlarm(); return; }
   }
 
-  function damagePlayer(amount, options = {}) {
+  function damagePlayer(amount, options: any = {}) {
     if (amount <= 0) return false;
     if (player.pvpDead) return false;
+    if (cutscene.active) return false; // invulnerable during blackout cutscene
     player.unlimitedSprint = true;
     player.stamina = player.maxStamina;
     player.sprintExhausted = false;
@@ -11651,8 +12967,9 @@ async function spawnEnemies(wave, options = {}) {
     player.hp = Math.min(player.maxHp, player.hp + amount);
   }
 
-  function resetPlayer(options = {}) {
+  function resetPlayer(options: any = {}) {
     const { setStartTime = true } = options;
+    cancelCutscene();
     const start = mapToWorld(1, 1);
     keys.clear();
     yaw.position.set(start.x, PLAYER_H, start.z);
@@ -11681,6 +12998,8 @@ async function spawnEnemies(wave, options = {}) {
     player.respawnTimer = 0;
     player.killStreak = 0;
     player.streakTimer = 0;
+    player.meleeCooldown = 0;
+    player.meleeTimer = 0; // knife hides next updateKnifeVisual tick
     player.totalKills = 0;
     player.shotsFired = 0;
     player.shotsHit = 0;
@@ -11696,7 +13015,16 @@ async function spawnEnemies(wave, options = {}) {
     player.perkDamageMul = 1;
     player.perkDamageResist = 0;
     player.perkTier = 0;
-    beaconState.cooldown = 0;
+    updatePerkHud();
+    // Kill any live car alarm/lure + restore flashed emissives, and clear the
+    // death fade so a restart never starts black.
+    if (carAlarmState.ringing) {
+      for (const rec of carAlarmState.ringing.mats) rec.mat.emissiveIntensity = rec.base;
+      carAlarmState.ringing = null;
+    }
+    soundLure.until = 0;
+    resetMysteryBox(); // idempotent with restart — cancel any in-flight roll
+    resetDeathFade();
     mouse.down = false;
     mouse.aiming = false;
     viewState.ads = 0;
@@ -11709,9 +13037,14 @@ async function spawnEnemies(wave, options = {}) {
       g.fireCooldown = 0;
       g.reloadTimer = 0;
       g.muzzleTimer = 0;
+      g.bloom = 0;
       g.isAutoReloading = false;
     }
     resetPackProgress();
+    // Fresh progression each run: back to the starter weapon, box guns re-locked.
+    if (currentGun !== STARTER_GUN) switchGun(STARTER_GUN, { fromBox: true });
+    resetOwnedWeapons();
+    updateWeaponSlots();
     gunState = allGuns[currentGun];
     weaponAnim.animSpec = getWeaponAnimSpec(currentGun);
 
@@ -11790,17 +13123,43 @@ async function spawnEnemies(wave, options = {}) {
     if (quitStatus && nextPanel === "quit") quitStatus.textContent = "Awaiting confirmation";
   }
 
+  // Inject the "locked" loadout-card styling once (so BOTH html entry points get
+  // it without editing markup). Non-starter cards read as locked/unpickable.
+  let loadoutLockStyleInjected = false;
+  function ensureLoadoutLockStyle() {
+    if (loadoutLockStyleInjected) return;
+    loadoutLockStyleInjected = true;
+    const style = document.createElement("style");
+    style.id = "loadout-lock-style";
+    style.textContent =
+      ".loadout-card.locked{cursor:not-allowed;opacity:0.62;filter:grayscale(0.35);}" +
+      ".loadout-card.locked:hover{border-color:var(--line);}" +
+      ".loadout-card.locked .loadout-name{color:#8fa6b4;}" +
+      ".loadout-card.locked::after{content:'\\1F512 FIND IN MYSTERY BOX';position:absolute;" +
+      "left:0;right:0;bottom:0;z-index:3;text-align:center;padding:5px 4px;font-size:9px;" +
+      "font-weight:700;letter-spacing:0.12em;color:#ffd166;background:rgba(8,10,16,0.86);" +
+      "border-top:1px solid rgba(255,209,102,0.35);pointer-events:none;}";
+    document.head.appendChild(style);
+  }
+
   function applySelectedLoadoutUI() {
+    ensureLoadoutLockStyle();
     for (const card of loadoutCards || []) {
-      card.classList.toggle("selected", card.dataset.loadout === selectedLoadout);
+      const gun = card.dataset.loadout;
+      card.classList.toggle("selected", gun === selectedLoadout);
+      card.classList.toggle("locked", gun !== STARTER_GUN);
     }
     if (selectedLoadoutVal) {
-      selectedLoadoutVal.textContent = GUN_SPECS[selectedLoadout]?.name || "Assault Rifle";
+      selectedLoadoutVal.textContent = GUN_SPECS[selectedLoadout]?.name || "Service Pistol";
     }
   }
 
   function chooseLoadout(gunType) {
-    if (!validLoadouts.has(gunType)) return;
+    // Only the starter is selectable now; other cards are locked (mystery-box only).
+    if (gunType !== STARTER_GUN) {
+      sfxDenied();
+      return;
+    }
     selectedLoadout = gunType;
     applySelectedLoadoutUI();
     saveSettings({ loadout: selectedLoadout });
@@ -11954,8 +13313,15 @@ async function spawnEnemies(wave, options = {}) {
     if (!editorWindow) window.location.href = editorUrl;
   }
 
-  function switchGun(gunType) {
+  function switchGun(gunType, options: any = {}) {
     if (gunType === currentGun) return;
+    // Progression gate: only OWNED weapons can be selected. The mystery box passes
+    // { fromBox:true } after granting, so its result always goes through.
+    if (!options.fromBox && !ownsWeapon(gunType)) {
+      addKillFeed(`${GUN_SPECS[gunType]?.name?.toUpperCase() || "WEAPON"} LOCKED — FIND IN MYSTERY BOX`);
+      sfxDenied();
+      return;
+    }
     allGuns[currentGun] = gunState;
     if (weapon?.gun) weapon.gun.visible = false;
     currentGun = gunType;
@@ -11966,8 +13332,14 @@ async function spawnEnemies(wave, options = {}) {
     warmWeaponShootAudio(gunType);
     if (game.state === "playing" || game.state === "transition") warmLiveWeaponShootAudio(gunType);
     if (thirdPerson.ready) createThirdPersonWeapon(gunType);
+    // Equip lower/raise on the TP gun, weight-scaled by the incoming gun's
+    // equipTime (pistol snappiest, LMG/railgun slowest). weaponAnim was just
+    // rebuilt by selectFirstPersonWeapon, so animSpec is the new gun's.
+    thirdPerson.equip = 1;
+    thirdPerson.equipTime = weaponAnim.animSpec.equipTime || 0.3;
     applyViewModeVisibility();
     gunState.fireCooldown = Math.max(gunState.fireCooldown, 0.14);
+    sfxEquip(gunType);
     addKillFeed(`SWITCHED TO ${GUN_SPECS[gunType].name.toUpperCase()}`);
   }
 
@@ -12012,10 +13384,14 @@ async function spawnEnemies(wave, options = {}) {
         ? { camKick: 0.082, camShake: 0.016, camRoll: 0.0018, weaponKick: 2.75, weaponYaw: 0.18, weaponRoll: 0.1, slideKick: 0.18, crosshair: 0.1 }
         : { camKick: 0.075, camShake: 0.035, camRoll: 0.0038, weaponKick: 2.2, weaponYaw: 0.18, weaponRoll: 0.055, slideKick: 0.16, crosshair: 0.24 };
     const kickMul = recoilMul * firstShotMul;
+    // Per-gun physics multipliers (spec-driven; default 1/0 keeps legacy feel).
+    const specPhys = GUN_SPECS[currentGun] || ({} as any);
+    const shakeMul = Number.isFinite(specPhys.shakeMul) ? specPhys.shakeMul : 1;
+    const driftMul = Number.isFinite(specPhys.driftMul) ? specPhys.driftMul : 1;
 
     cameraFX.recoilVel += recoilSpec.kick * recoilProfile.camKick * kickMul;
-    cameraFX.rollVel += (Math.random() - 0.5) * (recoilSpec.roll * recoilProfile.camRoll * kickMul);
-    cameraFX.shake = Math.min(1, cameraFX.shake + recoilProfile.camShake * kickMul);
+    cameraFX.rollVel += (Math.random() - 0.5) * (recoilSpec.roll * recoilProfile.camRoll * kickMul) * shakeMul;
+    cameraFX.shake = Math.min(1, cameraFX.shake + recoilProfile.camShake * kickMul * shakeMul);
     weaponAnim.kickVel += recoilProfile.weaponKick * kickMul;
     weaponAnim.recoilYawVel += recoilSpec.yaw * recoilProfile.weaponYaw * kickMul * (Math.random() > 0.5 ? 1 : -1);
     weaponAnim.recoilRollVel += recoilSpec.roll * recoilProfile.weaponRoll * kickMul;
@@ -12033,7 +13409,7 @@ async function spawnEnemies(wave, options = {}) {
     const hipFire = !scoped;
     const riflePattern = currentGun === GUNS.RIFLE ? (hipFire ? 0.38 : 0.14) : currentGun === GUNS.SHOTGUN ? (hipFire ? 0.62 : 0.24) : (hipFire ? 0.72 : 0.12);
     const kickY = -(currentGun === GUNS.RIFLE ? (hipFire ? 3.2 : 1.7) : currentGun === GUNS.SHOTGUN ? (hipFire ? 8.2 : 3.6) : (hipFire ? 5.2 : 0.8)) * firstShotMul;
-    const kickX = ((weaponAnim.recoilBurst % 2 === 0 ? -1 : 1) * (currentGun === GUNS.RIFLE ? (hipFire ? 0.85 : 0.32) : currentGun === GUNS.SHOTGUN ? (hipFire ? 2.4 : 0.95) : (hipFire ? 1.0 : 0.22))) + (Math.random() - 0.5) * riflePattern;
+    const kickX = (((weaponAnim.recoilBurst % 2 === 0 ? -1 : 1) * (currentGun === GUNS.RIFLE ? (hipFire ? 0.85 : 0.32) : currentGun === GUNS.SHOTGUN ? (hipFire ? 2.4 : 0.95) : (hipFire ? 1.0 : 0.22))) + (Math.random() - 0.5) * riflePattern) * driftMul;
     const crosshairRecoilScale = currentGun === GUNS.SNIPER ? (scoped ? 0.12 : 0.3) : currentGun === GUNS.RIFLE ? (hipFire ? 0.55 : 0.3) : (hipFire ? 0.92 : 0.5);
     pushCrosshairRecoil(kickX * kickMul * crosshairRecoilScale, kickY * kickMul * crosshairRecoilScale);
     const aimCursorOffset = getAimCursorOffset(fireAnglesTmp);
@@ -12045,11 +13421,14 @@ async function spawnEnemies(wave, options = {}) {
     const rifleSprayX = 0;
     const rifleSprayY = 0;
     const moving = keys.has("KeyW") || keys.has("KeyA") || keys.has("KeyS") || keys.has("KeyD");
-    const shotSpread = currentGun === GUNS.RIFLE
+    // Spec-driven spread (works for the whole roster): ADS tightens it, and the
+    // original behavior is preserved (rifle spread 0, sniper spread handled by aim).
+    // Bloom: sustained fire grows the hip cone per-gun (bloomGrow → bloomMax), and
+    // it recovers at bloomDecay rad/s in updateWeapon.
+    gunState.bloom = Math.min(specPhys.bloomMax || 0, (gunState.bloom || 0) + (specPhys.bloomGrow || 0));
+    const shotSpread = currentGun === GUNS.SNIPER
       ? 0
-      : currentGun === GUNS.SHOTGUN
-        ? gunState.spread * (hipFire ? 1 : 0.62)
-        : 0;
+      : (gunState.spread + (gunState.bloom || 0) * (hipFire ? 1 : 0.4)) * (hipFire ? 1 : 0.62);
 
     sfxShoot();
     if (net?.active) { broadcastShot(); tryPvpHit(); }
@@ -12059,7 +13438,7 @@ async function spawnEnemies(wave, options = {}) {
     if (activeWeapon?.flash) {
       applyMuzzleFlashSprite(activeWeapon.flash, true, 1, currentGun, activeWeapon === thirdPerson.weapon ? 0.74 : 1);
     }
-    const shotRange = currentGun === GUNS.SNIPER ? MAX_SHOT_RANGE : 42;
+    const shotRange = (currentGun === GUNS.SNIPER || currentGun === GUNS.RAILGUN || currentGun === GUNS.DMR) ? MAX_SHOT_RANGE : 42;
     const floorMesh = scene.userData.environmentSurfaces?.floor || null;
     const pendingDamage = new Map();
     const pendingHeadshot = new Set();
@@ -12086,9 +13465,13 @@ async function spawnEnemies(wave, options = {}) {
       let bestEnemy = null;
       let bestEnemyDist = Infinity;
       let bestEnemyPart = null;
+      const pierceHits = specPhys.pierce ? [] : null; // railgun: every enemy on the line
       for (const enemy of enemies) {
         if (!enemy.alive) continue;
         const d = getEnemyShotDistance(enemy, raycaster.ray.origin, raycaster.ray.direction, shotRange, currentGun, shotHitInfoTmp);
+        if (pierceHits && d < wallDist && d <= shotRange) {
+          pierceHits.push({ enemy, part: shotHitInfoTmp.part });
+        }
         if (d < bestEnemyDist) {
           bestEnemyDist = d;
           bestEnemy = enemy;
@@ -12096,8 +13479,23 @@ async function spawnEnemies(wave, options = {}) {
         }
       }
 
+      // Piercing slug: damage every enemy along the ray (beyond the first, which the
+      // normal path below handles), and let the tracer continue to the wall.
+      if (pierceHits && pierceHits.length > 1) {
+        for (const hit of pierceHits) {
+          if (hit.enemy === bestEnemy) continue;
+          let pd = (gunState.damage / gunState.pellets) * (player.perkDamageMul || 1);
+          if (hit.part === "head") { pd *= 2; pendingHeadshot.add(hit.enemy); }
+          pendingDamage.set(hit.enemy, (pendingDamage.get(hit.enemy) || 0) + pd);
+          const hd = pendingHitDir.get(hit.enemy) || { x: 0, z: 0 };
+          hd.x += raycaster.ray.direction.x;
+          hd.z += raycaster.ray.direction.z;
+          pendingHitDir.set(hit.enemy, hd);
+        }
+      }
+
       const hitEnemyFirst = bestEnemy && bestEnemyDist < wallDist && bestEnemyDist <= shotRange;
-      const tracerEnd = hitEnemyFirst
+      const tracerEnd = hitEnemyFirst && !specPhys.pierce
         ? enemyHitPointTmp.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, bestEnemyDist)
         : wallPoint || tracerFallbackEndTmp.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, shotRange);
 
@@ -12187,13 +13585,49 @@ async function spawnEnemies(wave, options = {}) {
     if (gunState.mag <= 0 && gunState.ammo > 0) tryReload();
   }
 
+  // ── Knife melee ──────────────────────────────────────────────────────────────
+  // Procedural blade+handle mesh shown in the right hand only during the melee
+  // swing (mesh visibility — not a light, no shader impact). Built once at boot so
+  // its materials are linked by the startup compile pass.
+  const knifeMesh = (() => {
+    const g = new THREE.Group();
+    g.name = "MeleeKnife";
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0xbfd4e2, roughness: 0.18, metalness: 0.92, emissive: 0x1a2a36, emissiveIntensity: 0.25 });
+    const gripMat = new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.8, metalness: 0.1 });
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.34, 0.012), steelMat);
+    blade.position.y = 0.27; g.add(blade);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.09, 4), steelMat);
+    tip.position.y = 0.485; tip.rotation.y = Math.PI / 4; g.add(tip);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.022, 0.032), gripMat);
+    guard.position.y = 0.09; g.add(guard);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.17, 0.036), gripMat);
+    g.add(handle);
+    g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; } });
+    g.visible = false;
+    scene.add(g);
+    return g;
+  })();
+  const knifePosTmp = new THREE.Vector3();
+  const knifeQuatTmp = new THREE.Quaternion();
+  function updateKnifeVisual() {
+    const show = player.meleeTimer > 0 && thirdPerson.ready && thirdPerson.rightHand && game.state === "playing";
+    knifeMesh.visible = !!show;
+    if (!show) return;
+    thirdPerson.rightHand.getWorldPosition(knifePosTmp);
+    thirdPerson.rightHand.getWorldQuaternion(knifeQuatTmp);
+    knifeMesh.position.copy(knifePosTmp);
+    knifeMesh.quaternion.copy(knifeQuatTmp);
+    knifeMesh.rotateX(Math.PI * 0.5); // blade points out of the fist
+    knifeMesh.translateY(0.05);
+  }
+
   const meleeToEnemyTmp = new THREE.Vector3();
   function meleeAttack() {
     if (game.state !== "playing") return;
     if (player.pvpDead) return;
     if (player.meleeCooldown > 0) return;
     if (gunState.reloadTimer > 0) return;
-    player.meleeCooldown = 0.65;
+    player.meleeCooldown = 0.5;
     player.meleeTimer = 0.34;
     weaponAnim.meleeSwing = 1;
     weaponAnim.kickVel += 8.6;
@@ -12204,7 +13638,7 @@ async function spawnEnemies(wave, options = {}) {
     thirdPerson.fireTimer = Math.max(thirdPerson.fireTimer, 0.2);
 
     const MELEE_RANGE = 2.7;
-    const MELEE_DAMAGE = 160;
+    const MELEE_DAMAGE = 260; // knife — one-shots early zombies (240 hp)
     camera.getWorldPosition(cameraWorldTmp);
     getAimCursorDirectionWorld(enemyShotDirTmp, 0, 0);
 
@@ -12404,6 +13838,10 @@ async function spawnEnemies(wave, options = {}) {
       await waitFrame();
       await spawnEnemies(game.wave, { smooth: true, minDistance: 20 });
       ensureAllLiveEnemiesVisible();
+      // Blackout wave: the fire sky (applyWaveLighting above) + enemies now
+      // exist — run the local-only intro cutscene. Non-blocking: gameplay state
+      // flips to "playing" below; the cutscene freezes input/AI via its flag.
+      if (game.wave % 10 === 0) startBlackoutCutscene();
       announce('vo_wave_start');
       playEventSound('wave_start', { volume: 0.6 });
       game.waveStartTime = performance.now();
@@ -12545,12 +13983,16 @@ async function spawnEnemies(wave, options = {}) {
 
   function endGame(kind) {
     if (game.state === "dead" || game.state === "won") return;
+    cancelCutscene(); // restore camera/HUD/letterbox if a cutscene was running
     if (kind === "dead" && net?.active && gameMode === "coop") {
       beginNetworkedPlayerDeath(COOP_RESPAWN_SECONDS, "DOWNED - RESPAWN IN 10");
       return;
     }
     if (kind === "dead") {
       enterLocalDeathView();
+      // Fade the 3D view to black (~2.5 s) under the HUD/stats overlay while the
+      // death animation plays. Cleared by resetPlayer on restart/new mission.
+      startDeathFade();
       announce('vo_mission_fail', { minGap: 0 });
       playEventSound('mission_fail', { volume: 0.8 });
     }
@@ -12738,8 +14180,13 @@ async function spawnEnemies(wave, options = {}) {
       thirdPersonCameraWorldTmp
         .copy(origin)
         .addScaledVector(right, thirdPersonCameraLocalTmp.x)
-        .addScaledVector(forward, -thirdPersonCameraLocalTmp.z)
-        .add(0, thirdPersonCameraLocalTmp.y, 0);
+        .addScaledVector(forward, -thirdPersonCameraLocalTmp.z);
+      // Add the local Y (height) offset. NOTE: this was previously `.add(0, y, 0)`,
+      // but THREE's Vector3.add() takes a SINGLE vector — passing three numbers set
+      // the whole vector to NaN, which made every candidate score NaN and forced the
+      // fallback branch below every frame (the wall-collision candidate scoring was
+      // dead). Adding the component directly restores that system.
+      thirdPersonCameraWorldTmp.y += thirdPersonCameraLocalTmp.y;
 
       const dir = thirdPersonCameraWorldTmp.sub(origin);
       const worldDist = dir.length();
@@ -12773,8 +14220,408 @@ async function spawnEnemies(wave, options = {}) {
     return thirdPersonCameraSolvedTmp;
   }
 
+  // ── Blackout-wave cutscene ─────────────────────────────────────────────────
+  // Local-visual-only scripted camera when a blackout wave (wave % 10 === 0)
+  // begins: (A) frame the molten sun on the fire dome, (B) crane-pan across the
+  // spawned enemies, (C) blend to the LIVE third-person camera pose so gameplay
+  // resumes with zero pop. No lights are touched, no reparenting: each frame we
+  // compute a world-space pose and write it into camera's pitch-local transform
+  // AFTER updateCameraFX has written the normal gameplay pose (which phase C
+  // samples as its landing target). Runs independently on every client; never
+  // blocks netcode (host keeps broadcasting frozen enemy snapshots).
+  const cutscene: any = {
+    active: false,
+    phase: 0,           // 0 = sun, 1 = enemy pan, 2 = return-to-player
+    t: 0,
+    phaseT: 0,
+    durA: 2.8,
+    durB: 3.3,
+    durC: 1.8,
+    // Pose captured at each phase boundary — the "from" of the current blend.
+    blendPos: new THREE.Vector3(),
+    blendQuat: new THREE.Quaternion(),
+    blendFov: 55,
+    // Enemy-pan orbit parameters (computed at phase B entry). The pan is a LOW,
+    // CLOSE hero shot: a blackout world viewed from the air is pitch black, so
+    // aerials show nothing — the readable shot is a near-ground arc around the
+    // enemy nearest the pack's centre, silhouetted against the fire sky.
+    focus: new THREE.Vector3(),
+    focusY: 0,
+    orbitR: 5.5,
+    orbitH: 2.2,
+    orbitA0: 0,
+    orbitSweep: 2.4,
+    // Last pose the cutscene wrote (used to capture blends at boundaries).
+    lastPos: new THREE.Vector3(),
+    lastQuat: new THREE.Quaternion(),
+    lastFov: 55,
+    domReady: false,
+    // Phase-B cinematic key-light boost (existing sun/hemi, intensity-only).
+    lightBoosted: false,
+    sunPrev: null,
+    hemiPrev: null,
+  };
+  const cutsceneSunDirTmp = new THREE.Vector3();
+  const cutsceneEyeTmp = new THREE.Vector3();
+  const cutsceneTargetTmp = new THREE.Vector3();
+  const cutsceneUpTmp = new THREE.Vector3(0, 1, 0);
+  const cutsceneLookMatTmp = new THREE.Matrix4();
+  const cutsceneQuatTmp = new THREE.Quaternion();
+  const cutscenePitchQuatTmp = new THREE.Quaternion();
+  const cutsceneLivePosTmp = new THREE.Vector3();
+  const cutsceneLiveQuatTmp = new THREE.Quaternion();
+
+  function cutsceneEase(x) { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); }
+  // Softer, slower cinematic curve for the big camera moves (ease-in-out cubic).
+  function cutsceneEaseCine(x) { const c = Math.max(0, Math.min(1, x)); return c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2; }
+
+  // Cinematic audio: a deep sub "boom" + descending drone when the cutscene
+  // engages, and a short riser as it hands back to gameplay. Uses the shared
+  // WebAudio synth (same bus/limiter as every other SFX).
+  function sfxCutsceneHit() {
+    playTone(46, "sine", 1.5, 0.5, 0, 0, 0, 30);        // deep sub boom, slides 46→30 Hz
+    playSweep(150, 40, 1.7, 0.26, "sawtooth", 0.02, 0);  // ominous descending drone
+    playNoise(1.3, 0.14, 220, "lowpass", 0, 0, 0.7);     // low rumble bed
+  }
+  function sfxCutsceneRiser() {
+    playSweep(70, 320, 0.85, 0.20, "sine", 0, 0);        // rising whoosh into the action
+    playTone(120, "triangle", 0.5, 0.16, 0, 0.4, 0, 320);
+  }
+
+  // Cinematic key light for the enemy pan: a blackout interior/exterior is near
+  // pitch black, so the hero shot needs light to read. Boost the EXISTING ember
+  // sun + hemi (intensity-only — never visibility, per the light-count shader-
+  // cache invariant) for the duration of phase B, restore exactly after.
+  function boostCutsceneKeyLight(on) {
+    if (on === cutscene.lightBoosted) return;
+    const extSun = window.__extSun, extHemi = window.__extHemi;
+    if (on) {
+      cutscene.lightBoosted = true;
+      cutscene.sunPrev = extSun ? extSun.intensity : null;
+      cutscene.hemiPrev = extHemi ? extHemi.intensity : null;
+      if (extSun) extSun.intensity = Math.max(extSun.intensity, 2.6);
+      if (extHemi) extHemi.intensity = Math.max(extHemi.intensity, 0.42);
+    } else {
+      cutscene.lightBoosted = false;
+      if (extSun && cutscene.sunPrev !== null) extSun.intensity = cutscene.sunPrev;
+      if (extHemi && cutscene.hemiPrev !== null) extHemi.intensity = cutscene.hemiPrev;
+    }
+  }
+
+  // Letterbox bars + skip hint + HUD fade — all JS-created DOM/CSS so both HTML
+  // entry points share it without markup edits (zero shader/light cost).
+  function ensureCutsceneDom() {
+    if (cutscene.domReady) return;
+    cutscene.domReady = true;
+    const style = document.createElement("style");
+    style.textContent = `
+      #rb-cut-top, #rb-cut-bottom { position: fixed; left: 0; right: 0; height: 12vh; background: #000; z-index: 60; transform: scaleY(0); transition: transform .9s cubic-bezier(.16,1,.3,1); pointer-events: none; }
+      #rb-cut-top { top: 0; transform-origin: top; }
+      #rb-cut-bottom { bottom: 0; transform-origin: bottom; }
+      body.rb-cutscene #rb-cut-top, body.rb-cutscene #rb-cut-bottom { transform: scaleY(1); }
+      /* Filmic vignette that fades in with the bars — pushes focus to centre. */
+      #rb-cut-vig { position: fixed; inset: 0; z-index: 59; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(ellipse 128% 92% at 50% 48%, transparent 40%, rgba(0,0,0,.34) 74%, rgba(0,0,0,.76) 100%); }
+      body.rb-cutscene #rb-cut-vig { opacity: 1; }
+      /* Title card — driven by JS opacity so its fade is keyed to phase A. */
+      #rb-cut-title { position: fixed; left: 0; right: 0; top: 34%; text-align: center; z-index: 62; pointer-events: none; opacity: 0;
+        font: 800 clamp(40px, 7.4vw, 96px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .17em; text-transform: uppercase; color: #ffe6c6;
+        text-shadow: 0 0 26px rgba(255,96,24,.72), 0 0 70px rgba(255,42,0,.5), 0 3px 10px rgba(0,0,0,.92); }
+      #rb-cut-sub { position: fixed; left: 0; right: 0; top: calc(34% + clamp(50px, 8.6vw, 118px)); text-align: center; z-index: 62; pointer-events: none; opacity: 0;
+        font: 600 clamp(13px, 1.7vw, 21px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .46em; text-transform: uppercase; color: rgba(255,176,128,.92); text-shadow: 0 2px 8px rgba(0,0,0,.92); }
+      #hud { transition: opacity .4s; }
+      body.rb-cutscene #hud { opacity: 0 !important; }
+    `;
+    document.head.appendChild(style);
+    const top = document.createElement("div"); top.id = "rb-cut-top";
+    const bottom = document.createElement("div"); bottom.id = "rb-cut-bottom";
+    const vig = document.createElement("div"); vig.id = "rb-cut-vig";
+    const title = document.createElement("div"); title.id = "rb-cut-title"; title.textContent = "";
+    const sub = document.createElement("div"); sub.id = "rb-cut-sub";
+    document.body.append(top, bottom, vig, title, sub);
+    cutscene.titleEl = title;
+    cutscene.subEl = sub;
+  }
+
+  function setCutsceneDomActive(on) {
+    ensureCutsceneDom();
+    document.body.classList.toggle("rb-cutscene", on);
+  }
+
+  function captureCutsceneBlendFrom(pos, quat, fov) {
+    cutscene.blendPos.copy(pos);
+    cutscene.blendQuat.copy(quat);
+    cutscene.blendFov = fov;
+  }
+
+  function startBlackoutCutscene(force = false) {
+    if (cutscene.active) return false;
+    if (!force && (game.wave % 10 !== 0 || game.wave < 10)) return false;
+    cutscene.active = true;
+    cutscene.phase = 0;
+    cutscene.t = 0;
+    cutscene.phaseT = 0;
+    cutscene.durC = 1.8;
+    // Blend in from wherever the gameplay camera is right now.
+    camera.getWorldPosition(cutscene.lastPos);
+    camera.getWorldQuaternion(cutscene.lastQuat);
+    cutscene.lastFov = camera.fov;
+    captureCutsceneBlendFrom(cutscene.lastPos, cutscene.lastQuat, cutscene.lastFov);
+    setCutsceneDomActive(true);
+    ensureCutsceneDom();
+    sfxCutsceneHit();
+    return true;
+  }
+
+  function cancelCutscene() {
+    if (!cutscene.active && !document.body.classList.contains("rb-cutscene")) return;
+    cutscene.active = false;
+    boostCutsceneKeyLight(false);
+    if (cutscene.titleEl) cutscene.titleEl.style.opacity = "0";
+    if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
+    setCutsceneDomActive(false);
+  }
+
+  // Blackout cutscenes are unskippable — this is a no-op left in place for the
+  // test hook (window.__rbCutscene.skipCutscene) and any lingering callers.
+  function requestCutsceneSkip() {
+    return;
+  }
+  // Swallow key/click input during the cutscene so it never leaks into gameplay,
+  // but do NOT skip — the cutscene must play out in full.
+  window.addEventListener("keydown", (e) => {
+    if (cutscene.active && cutscene.phase < 2) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  window.addEventListener("mousedown", (e) => {
+    if (cutscene.active && cutscene.phase < 2) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  // Centroid + spread of live enemies (host: enemies[]; coop guest: proxies).
+  function computeCutsceneEnemyFocus() {
+    // Centroid of everything alive, then pick the HERO: the enemy nearest that
+    // centroid. The pan frames the hero up close (silhouette against the fire
+    // sky / glowing emissives in the dark) — spawn scatter makes a wide "show
+    // them all" shot read as empty blackness, so we show one, dramatically,
+    // with whatever packmates fall into frame behind it.
+    let n = 0;
+    let cx = 0, cz = 0;
+    const collect = [];
+    for (const enemy of enemies) {
+      if (!enemy.alive || !enemy.mesh) continue;
+      collect.push(enemy.mesh.position);
+      cx += enemy.mesh.position.x; cz += enemy.mesh.position.z; n++;
+    }
+    if (typeof coopProxies !== "undefined") {
+      for (const proxy of coopProxies.values()) {
+        if (!proxy?.mesh) continue;
+        collect.push(proxy.mesh.position);
+        cx += proxy.mesh.position.x; cz += proxy.mesh.position.z; n++;
+      }
+    }
+    if (n === 0) {
+      cutscene.focus.set(yaw.position.x, 0, yaw.position.z);
+      cutscene.focusY = 0;
+      cutscene.orbitR = 7;
+      return;
+    }
+    cx /= n; cz /= n;
+    let hero = collect[0];
+    let bestD = Infinity;
+    for (const p of collect) {
+      const d = Math.hypot(p.x - cx, p.z - cz);
+      if (d < bestD) { bestD = d; hero = p; }
+    }
+    cutscene.focus.set(hero.x, 0, hero.z);
+    cutscene.focusY = hero.y;
+    // Slightly wider when more enemies are up, so packmates catch the frame edge.
+    cutscene.orbitR = Math.min(8.5, 5 + n * 0.35);
+  }
+
+  function cutsceneLookQuat(eye, target, outQuat) {
+    cutsceneLookMatTmp.lookAt(eye, target, cutsceneUpTmp);
+    return outQuat.setFromRotationMatrix(cutsceneLookMatTmp);
+  }
+
+  // Writes a WORLD pose into the camera's pitch-local transform (no reparenting).
+  function applyCutsceneWorldPose(pos, quat, fov) {
+    pitch.updateWorldMatrix(true, false);
+    camera.position.copy(pos);
+    pitch.worldToLocal(camera.position);
+    pitch.getWorldQuaternion(cutscenePitchQuatTmp);
+    camera.quaternion.copy(cutscenePitchQuatTmp.invert().multiply(quat));
+    if (Math.abs(camera.fov - fov) > 0.01) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+    cutscene.lastPos.copy(pos);
+    cutscene.lastQuat.copy(quat);
+    cutscene.lastFov = fov;
+  }
+
+  // Runs AFTER updateCameraFX each frame: the camera currently holds the exact
+  // gameplay pose for this frame, which phase C samples live as its landing
+  // target — guaranteeing a seamless handoff even if the player is mid-motion.
+  function updateCutsceneCamera(dt) {
+    if (!cutscene.active) return;
+    if (game.state !== "playing" && game.state !== "transition") { cancelCutscene(); return; }
+    // Live gameplay pose (what the normal TP camera wrote this frame).
+    camera.getWorldPosition(cutsceneLivePosTmp);
+    camera.getWorldQuaternion(cutsceneLiveQuatTmp);
+    const liveFov = camera.fov;
+
+    cutscene.t += dt;
+    cutscene.phaseT += dt;
+
+    // Title card: fades in ~0.4s into phase A, holds, fades out before phase B.
+    if (cutscene.titleEl) {
+      let o = 0;
+      if (cutscene.phase === 0) {
+        const fin = cutsceneEase((cutscene.phaseT - 0.4) / 0.8);
+        const fout = 1 - cutsceneEase((cutscene.phaseT - (cutscene.durA - 0.6)) / 0.55);
+        o = Math.max(0, Math.min(fin, fout));
+      }
+      cutscene.titleEl.style.opacity = o.toFixed(3);
+      if (cutscene.subEl) cutscene.subEl.style.opacity = (o * 0.95).toFixed(3);
+    }
+    // Handheld "breathing": a tiny, slow, irregular positional drift so the
+    // locked-off camera feels alive rather than sterile (applied to A/B eyes).
+    const breatheX = Math.sin(cutscene.t * 0.8) * 0.10 + Math.sin(cutscene.t * 1.7 + 1.1) * 0.035;
+    const breatheY = Math.sin(cutscene.t * 0.7 + 2.0) * 0.07 + Math.sin(cutscene.t * 2.3) * 0.02;
+
+    if (cutscene.phase === 0 && cutscene.phaseT >= cutscene.durA) {
+      cutscene.phase = 1;
+      cutscene.phaseT = 0;
+      captureCutsceneBlendFrom(cutscene.lastPos, cutscene.lastQuat, cutscene.lastFov);
+      computeCutsceneEnemyFocus();
+      boostCutsceneKeyLight(true);
+      // Pick an arc with breathing room. Interior rooms are only 4-8 units wide,
+      // so a blind 130° orbit at r≥5.5 spends most of its sweep clamped against
+      // walls (point-blank framing). Scan azimuths around the hero and centre a
+      // shorter ~80° sweep on the clearest direction instead.
+      cutsceneTargetTmp.set(cutscene.focus.x, cutscene.focusY + 1.35, cutscene.focus.z);
+      let bestAz = 0, bestClear = -1;
+      for (let i = 0; i < 16; i++) {
+        const scanAz = (i / 16) * Math.PI * 2;
+        cutsceneSunDirTmp.set(Math.cos(scanAz), 0, Math.sin(scanAz));
+        const d = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, cutscene.orbitR + 1.5);
+        const clear = Number.isFinite(d) ? d : cutscene.orbitR + 1.5;
+        if (clear > bestClear) { bestClear = clear; bestAz = scanAz; }
+      }
+      cutscene.orbitR = Math.max(3.0, Math.min(cutscene.orbitR, bestClear - 1.0));
+      cutscene.orbitSweep = 1.4;
+      cutscene.orbitA0 = bestAz - cutscene.orbitSweep / 2;
+    } else if (cutscene.phase === 1 && cutscene.phaseT >= cutscene.durB) {
+      cutscene.phase = 2;
+      cutscene.phaseT = 0;
+      captureCutsceneBlendFrom(cutscene.lastPos, cutscene.lastQuat, cutscene.lastFov);
+      boostCutsceneKeyLight(false);
+      sfxCutsceneRiser();
+    }
+
+    if (cutscene.phase === 0) {
+      // PHASE A — the molten sun reveal. KEY: the fire dome is CAMERA-LOCKED
+      // (its horizon band always sits at the camera's own eye level), so a HIGH
+      // camera gets a clean composition — burning sky filling the frame, the
+      // city reduced to a dark silhouette in the bottom third, no rooftop
+      // clutter. Classic reveal move: start tilted down at the dark city, tilt
+      // up to the sun disc while drifting slowly toward it. Tight FOV (44) so
+      // the disc reads as a DISC, not a smear inside the bright band.
+      const k = cutsceneEaseCine(cutscene.phaseT / cutscene.durA);
+      cutsceneSunDirTmp.copy(BLACKOUT_SUN_DIR).normalize();
+      // Fixed high vantage over the arena (independent of where the player is —
+      // they may be deep inside the roofed interior with no sky sightline).
+      const ax = Math.max(-30, Math.min(30, yaw.position.x));
+      const az = Math.max(20, Math.min(160, yaw.position.z));
+      cutsceneEyeTmp.set(
+        ax + cutsceneSunDirTmp.x * 11 * k + breatheX,
+        44 + 3.5 * k + breatheY,
+        az + cutsceneSunDirTmp.z * 11 * k
+      );
+      // Tilt-up: target slides from well below the horizon (dark city) up to the
+      // sun disc's true elevation (BLACKOUT_SUN_DIR already encodes it).
+      const tiltUp = cutsceneEaseCine(Math.min(1, cutscene.phaseT / (cutscene.durA * 0.7)));
+      cutsceneTargetTmp.copy(cutsceneEyeTmp)
+        .addScaledVector(cutsceneSunDirTmp, 300);
+      cutsceneTargetTmp.y = cutsceneEyeTmp.y + (-95 + (cutsceneSunDirTmp.y * 300 + 95) * tiltUp);
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      // Ease in from the gameplay pose over the first ~0.7s (no engage jerk).
+      const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.7));
+      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
+      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (44 - cutscene.blendFov) * w);
+    } else if (cutscene.phase === 1) {
+      // PHASE B — LOW hero-enemy arc. Aerials show nothing in a blacked-out
+      // world; the readable shot is near-ground, close, arcing around the enemy
+      // nearest the pack's centre so it silhouettes against the fire horizon /
+      // shows its glowing emissives, with packmates catching the frame edges.
+      const u = cutsceneEaseCine(cutscene.phaseT / cutscene.durB);
+      const ang = cutscene.orbitA0 + cutscene.orbitSweep * u;
+      // Crane down through the arc: 2.8 → 1.5 (drops to eye level as it circles).
+      const h = 2.8 - 1.3 * u;
+      // Slow dolly-in: radius eases from 1.12× to 0.9× across the sweep so the
+      // shot gains momentum, pressing toward the hero as it settles.
+      const dollyR = cutscene.orbitR * (1.12 - 0.22 * u);
+      cutsceneEyeTmp.set(
+        cutscene.focus.x + Math.cos(ang) * dollyR + breatheX,
+        Math.max(1.1, cutscene.focusY + h - 1.6 + breatheY),
+        cutscene.focus.z + Math.sin(ang) * dollyR
+      );
+      // Look slightly UP at the hero (chest/head height) — low angle against the
+      // sky reads menacing and puts the fire horizon behind it when outdoors.
+      cutsceneTargetTmp.set(cutscene.focus.x, cutscene.focusY + 1.35, cutscene.focus.z);
+      // Rule-of-thirds: nudge the aim point sideways so the hero sits off-centre
+      // (aim along the view's right axis → subject shifts to the left third).
+      cutsceneUpTmp.set(0, 1, 0);
+      cutsceneSunDirTmp.copy(cutsceneTargetTmp).sub(cutsceneEyeTmp).normalize();
+      cutsceneSunDirTmp.cross(cutsceneUpTmp).normalize(); // camera-right
+      cutsceneTargetTmp.addScaledVector(cutsceneSunDirTmp, 0.7);
+      // Keep the arc out of walls: grid-march from the hero toward the desired
+      // eye (cheap MAP walk, same as the TP camera — no raycasts) and pull the
+      // eye in front of the first wall. Outdoors this is a no-op.
+      {
+        cutsceneSunDirTmp.copy(cutsceneEyeTmp).sub(cutsceneTargetTmp);
+        const reach = cutsceneSunDirTmp.length();
+        if (reach > 0.001) {
+          cutsceneSunDirTmp.multiplyScalar(1 / reach);
+          const wallDist = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, reach);
+          if (Number.isFinite(wallDist)) {
+            const clamped = Math.max(2.6, wallDist - 0.9);
+            cutsceneEyeTmp.copy(cutsceneTargetTmp).addScaledVector(cutsceneSunDirTmp, Math.min(reach, clamped));
+          }
+        }
+      }
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      // Cross-blend from phase A's final pose over the first ~0.9s of the pan.
+      const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.9));
+      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
+      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
+    } else {
+      // PHASE C — blend from the pan's final pose to the LIVE third-person pose
+      // (recomputed every frame above, so it lands perfectly mid-motion).
+      const w = cutsceneEase(cutscene.phaseT / cutscene.durC);
+      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneLivePosTmp, w);
+      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneLiveQuatTmp, w);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (liveFov - cutscene.blendFov) * w);
+      if (cutscene.phaseT >= cutscene.durC) {
+        // Land exactly on the gameplay pose, then hand control back.
+        applyCutsceneWorldPose(cutsceneLivePosTmp, cutsceneLiveQuatTmp, liveFov);
+        cancelCutscene();
+      }
+    }
+  }
+
   function updateMovement(dt) {
     if (player.pvpDead) {
+      hud.sprintInd?.classList.remove("active");
+      return { f: 0, s: 0, sprinting: false, jumping: false };
+    }
+    if (cutscene.active) {
       hud.sprintInd?.classList.remove("active");
       return { f: 0, s: 0, sprinting: false, jumping: false };
     }
@@ -12813,7 +14660,9 @@ async function spawnEnemies(wave, options = {}) {
 
     const adsPenalty = GUN_SPECS[currentGun]?.adsMovePenalty ?? 0.14;
     const aimSpeedMul = 1 - adsPenalty * viewState.ads;
-    const speed = (sprinting ? player.sprintSpeed : player.speed) * aimSpeedMul * player.effectSpeedMul;
+    // Per-gun weight: heavy weapons (LMG/railgun) slow the carrier, sidearms speed up.
+    const heldWeightMul = Number.isFinite(GUN_SPECS[currentGun]?.moveSpeedMul) ? GUN_SPECS[currentGun].moveSpeedMul : 1;
+    const speed = (sprinting ? player.sprintSpeed : player.speed) * aimSpeedMul * player.effectSpeedMul * heldWeightMul;
     const len = Math.hypot(f, s) || 1;
     // Keyboard is always full-speed in its direction; analog joystick scales speed
     // by how far the stick is pushed (clamped to 1).
@@ -12900,6 +14749,12 @@ async function spawnEnemies(wave, options = {}) {
   }
 
   function updateEnemies(dt) {
+    // Blackout cutscene: freeze enemy AI/attacks in place (still rendered). The
+    // co-op host keeps broadcasting these frozen positions, so guests stay in sync.
+    if (cutscene.active) {
+      for (const enemy of enemies) if (enemy.alive) ensureLiveEnemyVisible(enemy);
+      return;
+    }
     // Dev preview: freeze all enemy AI/movement in place (still rendered).
     if (devFreezeEnemies) {
       for (const enemy of enemies) if (enemy.alive) ensureLiveEnemyVisible(enemy);
@@ -12965,7 +14820,17 @@ async function spawnEnemies(wave, options = {}) {
       // double-driving the skinned rigs (2× animation speed + walk/run cross-fade
       // thrash), which is what deformed/froze the zombies and dropped them back to
       // sliding. Do not re-add an update here.
-      const enemyTarget = getCoopEnemyTarget(enemy, localPx, localPz);
+      let enemyTarget = getCoopEnemyTarget(enemy, localPx, localPz);
+      // Car-alarm sound lure: while a triggered alarm rings, every brain steers
+      // toward the noise instead of the player (the lure replaces the perceived
+      // target, so nav/brains/aim all follow it without per-brain special cases).
+      if (soundLure.until > 0 && performance.now() / 1000 < soundLure.until) {
+        enemyTarget = { x: soundLure.x, z: soundLure.z, vx: 0, vz: 0 } as any;
+        enemy.aggroed = true;
+        enemy.lastSeenX = soundLure.x;
+        enemy.lastSeenZ = soundLure.z;
+        enemy.lastSeenTimer = Math.max(enemy.lastSeenTimer || 0, 0.5);
+      }
       const px = enemyTarget.x;
       const pz = enemyTarget.z;
       const playerCell = worldToMap(px, pz);
@@ -13724,7 +15589,11 @@ async function spawnEnemies(wave, options = {}) {
 
     const flashT = gunState.muzzleTimer > 0 ? Math.min(1, gunState.muzzleTimer / weaponAnim.animSpec.muzzleFlashDuration) : 0;
     const baseGunColorHex = currentGun === GUNS.SHOTGUN ? 0xffb14d : currentGun === GUNS.SNIPER ? 0xffd37a : 0xffc24f;
-    const rawGunFlashIntensity = Math.max(lightingState.shootFlash * 48, flashT * (currentGun === GUNS.SHOTGUN ? 160 : currentGun === GUNS.SNIPER ? 110 : 95));
+    // Per-gun flash-light intensity pattern — the LIGHT itself is the shared
+    // gunFlash PointLight, intensity-only (never visibility). Legacy trio keeps
+    // its exact values; the roster scales off spec.muzzleFlashScale.
+    const flashLightMul = Number.isFinite(GUN_SPECS[currentGun]?.muzzleFlashScale) ? GUN_SPECS[currentGun].muzzleFlashScale : 1;
+    const rawGunFlashIntensity = Math.max(lightingState.shootFlash * 48, flashT * (currentGun === GUNS.SHOTGUN ? 160 : currentGun === GUNS.SNIPER ? 110 : currentGun === GUNS.RIFLE ? 95 : 95 * flashLightMul));
     const MAX_GUN_FLASH_INTENSITY = 85;
     gunFlash.intensity = Math.min(rawGunFlashIntensity, MAX_GUN_FLASH_INTENSITY);
     gunFlash.color.setHex(baseGunColorHex);
@@ -13744,7 +15613,7 @@ async function spawnEnemies(wave, options = {}) {
     if (gunState.muzzleTimer > 0) {
       gunState.muzzleTimer = Math.max(0, gunState.muzzleTimer - dt);
       const weaponFlashT = Math.min(1, gunState.muzzleTimer / weaponAnim.animSpec.muzzleFlashDuration);
-      weapon.muzzle.intensity = gunState.muzzleTimer > 0 ? (currentGun === GUNS.SHOTGUN ? 19.5 : currentGun === GUNS.SNIPER ? 15.0 : 13.0) * weaponFlashT : 0;
+      weapon.muzzle.intensity = gunState.muzzleTimer > 0 ? (currentGun === GUNS.SHOTGUN ? 19.5 : currentGun === GUNS.SNIPER ? 15.0 : currentGun === GUNS.RIFLE ? 13.0 : 13.0 * flashLightMul) * weaponFlashT : 0;
       const showWeaponFlashMesh = getActiveWeaponForShot() === weapon && gunState.muzzleTimer > 0;
       alignWeaponMuzzleFlash(weapon);
       applyMuzzleFlashSprite(weapon.flash, showWeaponFlashMesh, weaponFlashT, currentGun, 1);
@@ -13781,7 +15650,8 @@ async function spawnEnemies(wave, options = {}) {
     weaponAnim.slideKick = Math.max(0, weaponAnim.slideKick - dt * 1.8);
     weaponAnim.meleeSwing = Math.max(0, weaponAnim.meleeSwing - dt * 3.4);
     weaponAnim.reloadJolt = Math.max(0, weaponAnim.reloadJolt - dt * 4.2);
-    weaponAnim.switchBlend = Math.max(0, weaponAnim.switchBlend - dt * 7.8);
+    // Weapon-switch lower/raise paced by the gun's equipTime (was fixed 7.8/s).
+    weaponAnim.switchBlend = Math.max(0, weaponAnim.switchBlend - dt / Math.max(0.08, weaponAnim.animSpec.equipTime || 0.3));
     if (weaponAnim.packAnim > 0) {
       weaponAnim.packAnim = Math.max(0, weaponAnim.packAnim - dt / (weaponAnim.packAnimTotal || 0.85));
     }
@@ -13804,9 +15674,11 @@ async function spawnEnemies(wave, options = {}) {
     const bobScale = 1 - aimBlend * 0.75;
     const moving = keys.has("KeyW") || keys.has("KeyA") || keys.has("KeyS") || keys.has("KeyD");
     const moveScale = moving ? 1 : 0;
-    const bobX = Math.cos(bobT) * 0.016 * bobScale * moveScale;
-    const bobY = Math.sin(bobT * 2) * 0.013 * bobScale * moveScale;
-    const sway = Math.sin(bobT * 1.3) * 0.055 * bobScale * moveScale;
+    // Per-gun sway weight: heavy guns wander more, light sidearms stay snappy.
+    const specSwayMul = Number.isFinite(GUN_SPECS[currentGun]?.swayMul) ? GUN_SPECS[currentGun].swayMul : 1;
+    const bobX = Math.cos(bobT) * 0.016 * bobScale * moveScale * specSwayMul;
+    const bobY = Math.sin(bobT * 2) * 0.013 * bobScale * moveScale * specSwayMul;
+    const sway = Math.sin(bobT * 1.3) * 0.055 * bobScale * moveScale * specSwayMul;
 
     // Idle breathing — slow deep float when standing still, suppressed when moving or aiming
     const breathT = performance.now() * 0.00145;
@@ -13940,6 +15812,16 @@ async function spawnEnemies(wave, options = {}) {
       weapon.mag.rotation.x += rifleMagOut * 0.28 - rifleMagIn * 0.18;
     }
     if (reloadActive && reloadT > 0.9) weapon.slide.position.x -= 0.05;
+    // SMG-class rattle: high-frequency jitter of the whole FP gun while firing
+    // (mirrors the TP layer so both pipelines stay consistent).
+    const fpAnimSpec = GUN_SPECS[currentGun] || ({} as any);
+    if (fpAnimSpec.fireCycle === "rattle" && gunState.fireCooldown > 0 && !reloadActive) {
+      const tj = performance.now();
+      const jAmp = 0.004 * (Number.isFinite(fpAnimSpec.driftMul) ? fpAnimSpec.driftMul : 1);
+      weapon.gun.position.x += Math.sin(tj * 0.121) * jAmp;
+      weapon.gun.position.y += Math.sin(tj * 0.163) * jAmp * 0.8;
+      weapon.gun.rotation.z += Math.sin(tj * 0.147) * jAmp * 1.4;
+    }
     applyWeaponDesignAnimation(weapon, currentGun, {
       shotT: flashT,
       reloadActive,
@@ -13947,6 +15829,11 @@ async function spawnEnemies(wave, options = {}) {
       actionRack: currentGun === GUNS.SNIPER ? Math.max(sniperBoltBack, sniperBoltForward) : currentGun === GUNS.SHOTGUN ? shotgunPump : reloadRack,
       kick: weaponAnim.kick,
       slideKick: weaponAnim.slideKick,
+      firing: gunState.fireCooldown > 0,
+      cycleT: 1 - gunState.fireCooldown / Math.max(gunState.fireRate || 0.01, 0.01),
+      magEmpty: gunState.mag <= 0,
+      magCount: gunState.mag,
+      magSize: gunState.magSize,
     });
 
     // Pack-a-Punch energy: a slow shimmer on the upgraded metal, plus a bright
@@ -14066,6 +15953,218 @@ async function spawnEnemies(wave, options = {}) {
     camera.rotation.z = cameraFX.roll * 0.035 + Math.sin(noiseT * 0.7) * cameraFX.shake * 0.015 + viewState.lookBack * 0.045 + strafeLean;
   }
 
+  // ── Interact prompt pill ─────────────────────────────────────────────────────
+  // "PRESS E: ..." prompts (pack-a-punch, perk statue, mystery box, car alarm)
+  // used to render as plain text in #pack-prompt (easy to miss). This upgrades
+  // it into a pill: an animated key badge + bold action text + an XP-cost badge
+  // when present, built once from JS (so both HTML entry points share it
+  // without markup edits — CSS for the pill/badge/animations lives in the
+  // <style> of both HTML files). Only touches the DOM when the prompt string
+  // actually changes, so it's a no-op most frames (no per-frame layout thrash).
+  let lastInteractPrompt = null;
+  function ensureInteractPromptParts(el) {
+    if (el.dataset.built) return;
+    el.dataset.built = "1";
+    el.innerHTML = "";
+    const key = document.createElement("span");
+    key.id = "pack-prompt-key";
+    key.textContent = "E";
+    const textWrap = document.createElement("span");
+    textWrap.id = "pack-prompt-text";
+    const action = document.createElement("span");
+    action.id = "pack-prompt-action";
+    const cost = document.createElement("span");
+    cost.id = "pack-prompt-cost";
+    textWrap.append(action, cost);
+    el.append(key, textWrap);
+  }
+  function updateInteractPrompt(raw) {
+    const el = hud.packPrompt;
+    if (!el || raw === lastInteractPrompt) return;
+    const wasActive = !!lastInteractPrompt;
+    lastInteractPrompt = raw;
+    ensureInteractPromptParts(el);
+    if (!raw) {
+      el.classList.remove("active", "has-key");
+      return;
+    }
+    const action = el.querySelector("#pack-prompt-action");
+    const cost = el.querySelector("#pack-prompt-cost");
+    // "PRESS E: <action> (<N> XP)" → key badge + bold action + cost badge.
+    // Anything else (info-only messages like "NEEDS 40 XP" / "MAXED") shows as
+    // plain pill text with no key badge.
+    const m = /^PRESS E:\s*(.+?)(?:\s*\((\d+)\s*XP\)\s*)?$/.exec(raw);
+    if (m) {
+      action.textContent = m[1];
+      cost.textContent = m[2] ? `${m[2]} XP` : "";
+      cost.style.display = m[2] ? "" : "none";
+      el.classList.add("has-key");
+    } else {
+      action.textContent = raw;
+      cost.textContent = "";
+      cost.style.display = "none";
+      el.classList.remove("has-key");
+    }
+    el.classList.add("active");
+    if (!wasActive) {
+      // Retrigger the scale-in "pop" animation on fresh appearance only.
+      el.classList.remove("pop");
+      void el.offsetWidth;
+      el.classList.add("pop");
+    }
+  }
+
+  // ── Weapon-slot indicator ────────────────────────────────────────────────────
+  // Compact row in the weapon (end) hud-block showing every gun in the roster; the
+  // slots you OWN light up (current = accent-filled), un-owned read as dim/locked.
+  // Ties directly into the mystery-box progression. JS-created so both html entry
+  // points get it without markup edits. Rebuilt only on ownership/switch change.
+  const WEAPON_SLOT_CODES = {
+    pistol: "P", rifle: "AR", shotgun: "SG", sniper: "SR", smg: "SMG",
+    lmg: "LMG", dmr: "DMR", akimbo: "MP", railgun: "RL", flak: "FK",
+  };
+  let weaponSlotsRow = null;
+  let weaponSlotsSig = "";
+  function ensureWeaponSlots() {
+    if (weaponSlotsRow) return weaponSlotsRow;
+    const endBlock = document.querySelector("#bottom-hud .hud-block.end");
+    if (!endBlock) return null;
+    weaponSlotsRow = document.createElement("div");
+    weaponSlotsRow.id = "weapon-slots";
+    weaponSlotsRow.style.cssText =
+      "display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;margin-top:7px;" +
+      "pointer-events:none;font:800 9px/1 'Rajdhani','Segoe UI',sans-serif;letter-spacing:0.08em;";
+    for (const gunType of Object.values(GUNS)) {
+      const chip = document.createElement("span");
+      chip.dataset.slot = gunType;
+      chip.textContent = WEAPON_SLOT_CODES[gunType] || gunType.slice(0, 2).toUpperCase();
+      chip.title = GUN_SPECS[gunType]?.name || gunType;
+      chip.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:16px;" +
+        "padding:0 5px;border-radius:2px;border:1px solid rgba(120,150,170,0.28);" +
+        "background:rgba(10,18,26,0.6);color:#5c7480;transition:color .15s,background .15s,border-color .15s;";
+      weaponSlotsRow.appendChild(chip);
+    }
+    endBlock.appendChild(weaponSlotsRow);
+    return weaponSlotsRow;
+  }
+  function updateWeaponSlots() {
+    const row = ensureWeaponSlots();
+    if (!row) return;
+    // Cheap dirty-check so we only touch the DOM when ownership/equip changes.
+    const sig = currentGun + "|" + [...player.ownedWeapons].sort().join(",");
+    if (sig === weaponSlotsSig) return;
+    weaponSlotsSig = sig;
+    for (const chip of row.children) {
+      const g = chip.dataset.slot;
+      const owned = ownsWeapon(g);
+      const equipped = g === currentGun;
+      if (equipped) {
+        chip.style.color = "#06121a";
+        chip.style.background = "linear-gradient(180deg,#67e8f9,#22d3ee)";
+        chip.style.borderColor = "#22d3ee";
+        chip.style.boxShadow = "0 0 9px rgba(34,211,238,0.55)";
+      } else if (owned) {
+        chip.style.color = "#c8dbe6";
+        chip.style.background = "rgba(14,30,40,0.78)";
+        chip.style.borderColor = "rgba(103,232,249,0.4)";
+        chip.style.boxShadow = "none";
+      } else {
+        chip.style.color = "#4a5c66";
+        chip.style.background = "rgba(10,16,22,0.5)";
+        chip.style.borderColor = "rgba(90,110,124,0.22)";
+        chip.style.boxShadow = "none";
+      }
+    }
+  }
+
+  // ── Perk HUD row ─────────────────────────────────────────────────────────────
+  // Small icon row showing owned perks (Overcharge/Vitality/Aegis). Created from JS
+  // and appended to #hud so it works in BOTH html entry points without markup edits.
+  // Styled to match the HUD's cyan/steel aesthetic; each perk keeps its accent color.
+  let perkHudRow = null;
+  function ensurePerkHudRow() {
+    if (perkHudRow) return perkHudRow;
+    // Anchored INSIDE the health hud-block (as an extra in-flow row under the
+    // sprint-status line) instead of absolute-positioned over the HUD, so it can
+    // never overlap the HP bar/label at any viewport size — it just pushes the
+    // block a little taller. `#bottom-hud .hud-block` (first child) is the
+    // health block in both HTML entry points (see index.html / legacy html
+    // #bottom-hud markup — health block is always listed first).
+    const healthBlock = document.querySelector("#bottom-hud .hud-block");
+    if (!healthBlock) return null;
+    perkHudRow = document.createElement("div");
+    perkHudRow.id = "perk-row";
+    perkHudRow.style.cssText =
+      "display:flex;flex-wrap:wrap;gap:6px;pointer-events:none;margin-top:6px;" +
+      "padding-top:6px;border-top:1px solid rgba(120,150,170,0.22);" +
+      "font:600 10px/1 'Rajdhani','Segoe UI',sans-serif;letter-spacing:0.08em;";
+    for (const def of PERK_DEFS) {
+      const chip = document.createElement("div");
+      chip.dataset.perk = def.id;
+      chip.title = `${def.name} — ${def.desc}`;
+      chip.style.cssText =
+        "display:none;align-items:center;gap:5px;padding:4px 8px 4px 5px;" +
+        "background:rgba(10,18,26,0.72);border:1px solid rgba(120,150,170,0.35);" +
+        "border-left:3px solid " + def.color + ";color:#c8dbe6;text-transform:uppercase;";
+      const badge = document.createElement("span");
+      badge.textContent = def.initial;
+      badge.style.cssText =
+        "display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;" +
+        "border-radius:50%;font-weight:800;color:#06121a;background:" + def.color + ";" +
+        "box-shadow:0 0 8px " + def.color + "66;";
+      const label = document.createElement("span");
+      label.textContent = def.name;
+      chip.append(badge, label);
+      perkHudRow.appendChild(chip);
+    }
+    healthBlock.appendChild(perkHudRow);
+    return perkHudRow;
+  }
+  function updatePerkHud() {
+    const row = ensurePerkHudRow();
+    if (!row) return;
+    const owned = player.perkTier || 0;
+    // Collapse the divider row entirely while no perks are owned so the health
+    // block doesn't grow/show a stray hairline before the first perk purchase.
+    row.style.display = owned > 0 ? "flex" : "none";
+    let i = 0;
+    for (const chip of row.children) {
+      chip.style.display = i < owned ? "inline-flex" : "none";
+      i++;
+    }
+  }
+
+  // ── Death fade-to-black ──────────────────────────────────────────────────────
+  // Full-screen DOM fade below the HUD/#state-overlay (z-index 4 < hud's 5) and
+  // above the canvas, created from JS so both html entry points get it. endGame
+  // starts a ~2.5 s CSS opacity transition while the death animation plays; the
+  // stats overlay and HUD stay fully visible above it. Reset on restart/new mission.
+  let deathFadeEl = null;
+  function ensureDeathFade() {
+    if (deathFadeEl) return deathFadeEl;
+    deathFadeEl = document.createElement("div");
+    deathFadeEl.id = "death-fade";
+    deathFadeEl.style.cssText =
+      "position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;" +
+      "z-index:4;transition:opacity 2.5s ease-in;";
+    document.body.appendChild(deathFadeEl);
+    return deathFadeEl;
+  }
+  function startDeathFade() {
+    const el = ensureDeathFade();
+    // Force a style flush so the transition runs even if the div was just created.
+    void el.offsetWidth;
+    el.style.opacity = "1";
+  }
+  function resetDeathFade() {
+    if (!deathFadeEl) return;
+    deathFadeEl.style.transition = "none";
+    deathFadeEl.style.opacity = "0";
+    void deathFadeEl.offsetWidth;
+    deathFadeEl.style.transition = "opacity 2.5s ease-in";
+  }
+
   function updateHUD(dt) {
     if (hud.hpVal) {
       const hp = Math.ceil(player.hp);
@@ -14074,6 +16173,7 @@ async function spawnEnemies(wave, options = {}) {
     }
     if (hud.hpBar) setStyleIfChanged(hud.hpBar.style, "width", (player.hp / player.maxHp) * 100 + "%");
     setTextIfChanged(hud.weaponVal, gunState.displayName);
+    updateWeaponSlots();
     if (hud.xpVal) setTextIfChanged(hud.xpVal, player.xp);
     if (hud.packVal) {
       const level = gunUpgradeLevels[currentGun] || 0;
@@ -14083,10 +16183,8 @@ async function spawnEnemies(wave, options = {}) {
       // Combined interaction prompt: pack station + the exterior stations all
       // share this one HUD line (they're spaced apart, so at most one is ever
       // active at a time). Priority order matches tryInteract().
-      const activeCrate = crateStations.find(c => c.prompt);
-      const combinedPrompt = packState.prompt || (activeCrate ? activeCrate.prompt : "") || perkMachineState.prompt || beaconState.prompt || "";
-      setTextIfChanged(hud.packPrompt, combinedPrompt);
-      hud.packPrompt.classList.toggle("active", !!combinedPrompt);
+      const combinedPrompt = packState.prompt || perkMachineState.prompt || mysteryBoxState.prompt || carAlarmState.prompt || "";
+      updateInteractPrompt(combinedPrompt);
     }
     if (hud.ammoVal) {
       setTextIfChanged(hud.ammoMag, player.unlimitedAmmo ? "INF" : gunState.mag);
@@ -14133,6 +16231,10 @@ async function spawnEnemies(wave, options = {}) {
       if (game.multiKillTimer <= 0) game.multiKillCount = 0;
     }
     if (player.meleeCooldown > 0) player.meleeCooldown = Math.max(0, player.meleeCooldown - dt);
+    // Per-gun spread-bloom recovery (rad/s from the spec).
+    if (gunState.bloom > 0) {
+      gunState.bloom = Math.max(0, gunState.bloom - dt * (GUN_SPECS[currentGun]?.bloomDecay ?? 0.15));
+    }
     if (player.meleeTimer > 0) player.meleeTimer = Math.max(0, player.meleeTimer - dt);
     if (player.pvpDead && player.respawnTimer > 0) {
       player.respawnTimer -= dt;
@@ -14143,184 +16245,294 @@ async function spawnEnemies(wave, options = {}) {
     }
   }
 
+  // ── GTA-style minimap ────────────────────────────────────────────────────
+  // Full-world layout (interior MAP grid + exterior street from exterior_map.js
+  // via window.__extMapFootprints / __extMapLayout) is rasterized ONCE into an
+  // offscreen "world texture" at MM_S px per world unit. Per frame we blit the
+  // relevant rotated/zoomed window of it inside a circular clip — the player
+  // arrow stays fixed (slightly below centre) pointing up and the WORLD rotates
+  // around it, GTA style. Blips are projected manually so off-map ones can be
+  // clamped to the rim.
   let lastMinimapUpdate = 0;
+  const MINIMAP_UPDATE_MS = lowEndMode ? 66 : 33; // ~15 / ~30 Hz
+  const MM_S = 4;                                  // world-texture px per world unit
+  const MM_WX0 = -75, MM_WZ0 = -41, MM_WX1 = 75, MM_WZ1 = 233; // world coverage
   const minimapBaseCanvas = mmCanvas ? document.createElement("canvas") : null;
   const minimapBaseCtx = minimapBaseCanvas?.getContext("2d") ?? null;
-  let minimapBaseWidth = 0;
-  let minimapBaseHeight = 0;
-  let minimapBaseScale = 0;
-  const MINIMAP_UPDATE_MS = lowEndMode ? 180 : 120;
+  let mmBaseBuilt = false;
+  let mmBaseFootprintCount = -1;
+  let mmZoom = 0.85;         // px-on-screen per world-texture px (smoothed)
+  const MM_ZOOM_WALK = 0.85; // ≈ 28 u visible radius
+  const MM_ZOOM_SPRINT = 0.64;
 
-  function refreshMinimapBase(w, h, pad, s) {
+  function mmWorldToBase(x, z) {
+    return { bx: (x - MM_WX0) * MM_S, by: (z - MM_WZ0) * MM_S };
+  }
+
+  // Rasterize the full world layout once (interior grid + exterior street).
+  // Rebuilds only when the exterior footprint count changes (e.g. the landmark
+  // statue registers its collider a few seconds into boot) — never per frame.
+  function buildMinimapWorldTexture() {
     if (!minimapBaseCanvas || !minimapBaseCtx) return;
-    if (minimapBaseWidth === w && minimapBaseHeight === h && Math.abs(minimapBaseScale - s) < 0.001) return;
+    const fp = Array.isArray(window.__extMapFootprints) ? window.__extMapFootprints : [];
+    if (mmBaseBuilt && fp.length === mmBaseFootprintCount) return;
+    mmBaseBuilt = true;
+    mmBaseFootprintCount = fp.length;
 
-    minimapBaseWidth  = w;
-    minimapBaseHeight = h;
-    minimapBaseScale  = s;
-    minimapBaseCanvas.width  = w;
-    minimapBaseCanvas.height = h;
+    const W = (MM_WX1 - MM_WX0) * MM_S;
+    const H = (MM_WZ1 - MM_WZ0) * MM_S;
+    minimapBaseCanvas.width  = W;
+    minimapBaseCanvas.height = H;
     const ctx = minimapBaseCtx;
-    ctx.clearRect(0, 0, w, h);
 
-    // Dark base
-    ctx.fillStyle = "rgba(3,7,10,0.94)";
-    ctx.fillRect(0, 0, w, h);
+    // Dark steel base everywhere (out-of-bounds reads as void)
+    ctx.fillStyle = "#04080c";
+    ctx.fillRect(0, 0, W, H);
 
-    // Subtle radial centre glow
-    const grad = ctx.createRadialGradient(w * 0.5, h * 0.5, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.55);
-    grad.addColorStop(0,   "rgba(34,211,238,0.10)");
-    grad.addColorStop(1,   "rgba(0,0,0,0)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+    const rect = (x0, z0, x1, z1, fill) => {
+      ctx.fillStyle = fill;
+      ctx.fillRect((x0 - MM_WX0) * MM_S, (z0 - MM_WZ0) * MM_S, (x1 - x0) * MM_S, (z1 - z0) * MM_S);
+    };
 
-    for (let y = 0; y < MAP_H; y++) {
-      for (let x = 0; x < MAP_W; x++) {
-        const ch = MAP[y][x];
-        if (ch === "#") {
-          ctx.fillStyle = "rgba(116,146,168,0.62)";
-          ctx.fillRect(pad + x * s, pad + y * s, s - 0.5, s - 0.5);
-          // Top-left highlight for depth
+    // ── Exterior street (exterior_map.js layout export) ──
+    const lay = window.__extMapLayout;
+    const eb  = lay?.bounds || window.__extBounds;
+    if (eb) {
+      // Play-area ground
+      rect(eb.xMin, eb.zNear, eb.xMax, eb.zFar, "rgba(120,150,170,0.10)");
+      // Sidewalks
+      for (const sw of (lay?.sidewalks || [])) {
+        rect(sw.x - sw.w / 2, eb.zNear, sw.x + sw.w / 2, eb.zFar, "rgba(140,170,190,0.16)");
+      }
+      // Road asphalt
+      const rh = lay?.roadHalfW ?? 19;
+      rect(-rh, eb.zNear, rh, eb.zFar, "rgba(70,95,115,0.30)");
+      // Lane markings — centre dashed line + edge lines
+      ctx.fillStyle = "rgba(190,225,240,0.30)";
+      for (let z = eb.zNear + 5; z < eb.zFar; z += 10) {
+        ctx.fillRect((0 - MM_WX0) * MM_S - 1, (z - MM_WZ0) * MM_S, 2, 4.2 * MM_S);
+      }
+      ctx.fillStyle = "rgba(190,225,240,0.18)";
+      ctx.fillRect((-rh + 0.1 - MM_WX0) * MM_S, (eb.zNear - MM_WZ0) * MM_S, 1.5, (eb.zFar - eb.zNear) * MM_S);
+      ctx.fillRect(( rh - 0.1 - MM_WX0) * MM_S - 1.5, (eb.zNear - MM_WZ0) * MM_S, 1.5, (eb.zFar - eb.zNear) * MM_S);
+      // Crosswalk band
+      if (lay?.crosswalkZ) rect(-16, lay.crosswalkZ - 6, 16, lay.crosswalkZ + 6, "rgba(190,225,240,0.10)");
+
+      // Building / prop footprints (AABB colliders). Skip the thin boundary
+      // walls (half-extent > 25 u) and dust off tiny prop colliders.
+      for (const c of fp) {
+        if (c.hw > 25 || c.hd > 25) continue;
+        const big = c.hw >= 1.0 && c.hd >= 1.0;
+        const px = (c.x - c.hw - MM_WX0) * MM_S, py = (c.z - c.hd - MM_WZ0) * MM_S;
+        const pw = c.hw * 2 * MM_S, ph = c.hd * 2 * MM_S;
+        ctx.fillStyle = big ? "rgba(116,146,168,0.62)" : "rgba(116,146,168,0.34)";
+        ctx.fillRect(px, py, pw, ph);
+        if (big) { // top-left highlight for depth (matches interior walls)
           ctx.fillStyle = "rgba(160,220,240,0.16)";
-          ctx.fillRect(pad + x * s, pad + y * s, s - 0.5, 1);
-          ctx.fillRect(pad + x * s, pad + y * s, 1, s - 0.5);
-        } else if (ch === "+") {
-          ctx.fillStyle = "rgba(90,220,150,0.24)";
-          ctx.fillRect(pad + x * s, pad + y * s, s - 0.5, s - 0.5);
-        } else {
-          ctx.fillStyle = "rgba(190,230,245,0.034)";
-          ctx.fillRect(pad + x * s, pad + y * s, s - 0.5, s - 0.5);
+          ctx.fillRect(px, py, pw, 1.5);
+          ctx.fillRect(px, py, 1.5, ph);
         }
       }
     }
 
-    // Thin grid lines over open cells
-    ctx.strokeStyle = "rgba(80,180,210,0.11)";
-    ctx.lineWidth   = 0.5;
-    for (let x = 0; x <= MAP_W; x++) { ctx.beginPath(); ctx.moveTo(pad + x * s, pad); ctx.lineTo(pad + x * s, pad + MAP_H * s); ctx.stroke(); }
-    for (let y = 0; y <= MAP_H; y++) { ctx.beginPath(); ctx.moveTo(pad, pad + y * s); ctx.lineTo(pad + MAP_W * s, pad + y * s); ctx.stroke(); }
-
-    ctx.strokeStyle = "rgba(60,200,230,0.36)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(pad + 0.5, pad + 0.5, MAP_W * s - 1, MAP_H * s - 1);
-
-    ctx.font = "9px 'Share Tech Mono', monospace";
-    ctx.fillStyle = "rgba(150,215,235,0.42)";
-    ctx.textAlign = "center";
-    ctx.fillText("NORTH BLOCK", pad + MAP_W * s * 0.5, pad + 10);
-    ctx.fillText("UNKNW GRID", pad + MAP_W * s * 0.5, pad + MAP_H * s - 6);
+    // ── Interior MAP grid ──
+    for (let my = 0; my < MAP_H; my++) {
+      for (let mx = 0; mx < MAP_W; mx++) {
+        const ch = MAP[my][mx];
+        const wc = mapToWorld(mx, my); // cell centre
+        const px = (wc.x - CELL * 0.5 - MM_WX0) * MM_S;
+        const py = (wc.z - CELL * 0.5 - MM_WZ0) * MM_S;
+        const sz = CELL * MM_S;
+        if (ch === "#") {
+          ctx.fillStyle = "rgba(116,146,168,0.62)";
+          ctx.fillRect(px, py, sz - 1, sz - 1);
+          ctx.fillStyle = "rgba(160,220,240,0.16)";
+          ctx.fillRect(px, py, sz - 1, 1.5);
+          ctx.fillRect(px, py, 1.5, sz - 1);
+        } else if (ch === "+") {
+          ctx.fillStyle = "rgba(90,220,150,0.24)";
+          ctx.fillRect(px, py, sz - 1, sz - 1);
+        } else {
+          ctx.fillStyle = "rgba(190,230,245,0.055)";
+          ctx.fillRect(px, py, sz - 1, sz - 1);
+        }
+      }
+    }
+    // Subtle grid over the interior block
+    const gx0 = (mapToWorld(0, 0).x - CELL * 0.5 - MM_WX0) * MM_S;
+    const gy0 = (mapToWorld(0, 0).z - CELL * 0.5 - MM_WZ0) * MM_S;
+    ctx.strokeStyle = "rgba(80,180,210,0.10)";
+    ctx.lineWidth = 0.6;
+    for (let mx = 0; mx <= MAP_W; mx++) {
+      ctx.beginPath(); ctx.moveTo(gx0 + mx * CELL * MM_S, gy0); ctx.lineTo(gx0 + mx * CELL * MM_S, gy0 + MAP_H * CELL * MM_S); ctx.stroke();
+    }
+    for (let my = 0; my <= MAP_H; my++) {
+      ctx.beginPath(); ctx.moveTo(gx0, gy0 + my * CELL * MM_S); ctx.lineTo(gx0 + MAP_W * CELL * MM_S, gy0 + my * CELL * MM_S); ctx.stroke();
+    }
   }
+  // Dev-preset map reload → force a texture rebuild next frame.
+  window.__rbMinimapRebuild = () => { mmBaseBuilt = false; };
 
   function renderMinimap(now) {
     if (!mmCanvas || !mmCtx) return;
     if (now - lastMinimapUpdate < MINIMAP_UPDATE_MS) return;
+    const dtMs = Math.min(200, now - lastMinimapUpdate);
     lastMinimapUpdate = now;
+    buildMinimapWorldTexture();
 
-    const w   = mmCanvas.width;
-    const h   = mmCanvas.height;
-    const pad = 5;
-    const EXT_STRIP_H = 32;
-    const s   = Math.min((w - pad * 2) / MAP_W, (h - pad * 2 - EXT_STRIP_H) / MAP_H);
-    refreshMinimapBase(w, h, pad, s);
-
+    const w = mmCanvas.width, h = mmCanvas.height;
+    const cx = w * 0.5, cy = h * 0.5;
+    const R  = Math.min(w, h) * 0.5 - 3;   // circle radius
+    const pcx = cx, pcy = cy + R * 0.20;   // player anchor, GTA-style below centre
     const ctx = mmCtx;
-    ctx.clearRect(0, 0, w, h);
-    if (minimapBaseCanvas) ctx.drawImage(minimapBaseCanvas, 0, 0);
+    const nowSec = now / 1000;
 
-    const pvpLayoutOnly = !!(net?.active && gameMode === "pvp");
-    const mapW = MAP_W * s;
-    const mapH = MAP_H * s;
-    const mapCx = pad + mapW * 0.5;
-    const mapCy = pad + mapH * 0.5;
+    // Zoom eases out a touch while sprinting
+    const zoomTarget = thirdPerson?.lastMove?.sprinting ? MM_ZOOM_SPRINT : MM_ZOOM_WALK;
+    mmZoom += (zoomTarget - mmZoom) * Math.min(1, dtMs * 0.004);
 
-    ctx.save();
-    ctx.strokeStyle = "rgba(60,200,230,0.12)";
-    ctx.lineWidth = 1;
-    for (const r of [0.18, 0.32, 0.46]) {
-      ctx.beginPath();
-      ctx.arc(mapCx, mapCy, Math.min(mapW, mapH) * r, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    const sweep = (now * 0.0014) % (Math.PI * 2);
-    ctx.translate(mapCx, mapCy);
-    ctx.rotate(sweep);
-    const sweepGrad = ctx.createLinearGradient(0, 0, Math.min(mapW, mapH) * 0.48, 0);
-    sweepGrad.addColorStop(0, "rgba(34,211,238,0.16)");
-    sweepGrad.addColorStop(1, "rgba(34,211,238,0)");
-    ctx.strokeStyle = sweepGrad;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(Math.min(mapW, mapH) * 0.48, 0);
-    ctx.stroke();
-    ctx.restore();
+    const ang = yaw.rotation.y;            // map rotates by +ang → forward is up
+    const cosA = Math.cos(ang), sinA = Math.sin(ang);
+    const pb = mmWorldToBase(yaw.position.x, yaw.position.z);
 
-    // Pack station — diamond with glow
-    if (!pvpLayoutOnly && packState.station) {
-      const pc = worldToMap(packState.station.position.x, packState.station.position.z);
-      const sx = pad + (pc.mx + 0.5) * s;
-      const sy = pad + (pc.my + 0.5) * s;
-      const active = packState.active;
-      ctx.save();
-      ctx.translate(sx, sy);
-      ctx.rotate(Math.PI * 0.25);
-      if (active) {
-        ctx.shadowColor  = "#ffe26a";
-        ctx.shadowBlur   = 8;
+    // Project a world position into minimap screen space (player-relative,
+    // rotated, zoomed). Clamps to the rim like GTA when out of range.
+    const projectBlip = (wx, wz) => {
+      const b = mmWorldToBase(wx, wz);
+      const dx = (b.bx - pb.bx) * mmZoom, dy = (b.by - pb.by) * mmZoom;
+      let sx = pcx + dx * cosA - dy * sinA;
+      let sy = pcy + dx * sinA + dy * cosA;
+      const ox = sx - cx, oy = sy - cy;
+      const dist = Math.hypot(ox, oy);
+      const lim = R - 9;
+      if (dist > lim) {
+        const k = lim / dist;
+        return { sx: cx + ox * k, sy: cy + oy * k, clamped: true };
       }
-      ctx.fillStyle = active ? "#ffe26a" : "rgba(255,210,85,0.65)";
-      ctx.fillRect(-4, -4, 8, 8);
-      ctx.strokeStyle = active ? "rgba(255,255,200,0.8)" : "rgba(180,140,40,0.6)";
-      ctx.lineWidth   = 0.8;
-      ctx.strokeRect(-4, -4, 8, 8);
+      return { sx, sy, clamped: false };
+    };
+
+    ctx.clearRect(0, 0, w, h);
+
+    // ── Rotated world inside circular clip ──
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = "rgba(3,7,10,0.94)";
+    ctx.fillRect(0, 0, w, h);
+    if (minimapBaseCanvas && mmBaseBuilt) {
+      ctx.save();
+      ctx.translate(pcx, pcy);
+      ctx.rotate(ang);
+      ctx.scale(mmZoom, mmZoom);
+      ctx.translate(-pb.bx, -pb.by);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(minimapBaseCanvas, 0, 0);
       ctx.restore();
     }
 
-    // Enemies
+    const pvpLayoutOnly = !!(net?.active && gameMode === "pvp");
+
+    // ── Interactable blips ──
+    // Pack-a-Punch — yellow diamond
+    if (!pvpLayoutOnly && packState.station) {
+      const p = projectBlip(packState.station.position.x, packState.station.position.z);
+      ctx.save();
+      ctx.translate(p.sx, p.sy);
+      ctx.rotate(Math.PI * 0.25);
+      const sz = p.clamped ? 2.6 : 3.6;
+      if (packState.active && !p.clamped) { ctx.shadowColor = "#ffe26a"; ctx.shadowBlur = 7; }
+      ctx.fillStyle = packState.active ? "#ffe26a" : "rgba(255,210,85,0.65)";
+      ctx.fillRect(-sz, -sz, sz * 2, sz * 2);
+      ctx.restore();
+    }
+    // Perk statue — amber ringed dot
+    if (!pvpLayoutOnly && perkMachineState.station) {
+      const p = projectBlip(perkMachineState.station.position.x, perkMachineState.station.position.z);
+      ctx.fillStyle = perkMachineState.active ? "#ffb020" : "rgba(255,176,32,0.60)";
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, p.clamped ? 2.2 : 3.0, 0, Math.PI * 2); ctx.fill();
+      if (!p.clamped) {
+        ctx.strokeStyle = "rgba(255,205,110,0.7)";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, 5, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    // Mystery box — violet square
+    if (!pvpLayoutOnly && mysteryBoxState.station) {
+      const p = projectBlip(mysteryBoxState.station.position.x, mysteryBoxState.station.position.z);
+      const sz = p.clamped ? 2.2 : 3.2;
+      ctx.fillStyle = mysteryBoxState.rolling ? "#c9a0ff" : "rgba(178,140,255,0.8)";
+      ctx.fillRect(p.sx - sz, p.sy - sz, sz * 2, sz * 2);
+    }
+    // Ringing car alarm — pulsing yellow
+    if (!pvpLayoutOnly && carAlarmState.ringing && nowSec < carAlarmState.ringUntil) {
+      const car = carAlarmState.ringing;
+      const p = projectBlip(car.x, car.z);
+      const pulse = 0.6 + 0.4 * Math.sin(now * 0.02);
+      ctx.fillStyle = `rgba(255,224,80,${(0.55 + pulse * 0.45).toFixed(2)})`;
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 3 + pulse * 1.6, 0, Math.PI * 2); ctx.fill();
+      if (!p.clamped) {
+        ctx.strokeStyle = `rgba(255,224,80,${(0.5 * pulse).toFixed(2)})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, 6 + pulse * 5, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    // Active sound lure — expanding ring ping
+    if (!pvpLayoutOnly && soundLure.until > nowSec) {
+      const p = projectBlip(soundLure.x, soundLure.z);
+      const t = (now * 0.0012) % 1;
+      ctx.strokeStyle = `rgba(255,240,140,${(0.65 * (1 - t)).toFixed(2)})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 3 + t * 13, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // ── Enemy blips — red; angels are triangles, ground units dots ──
     const minimapEnemies = pvpLayoutOnly ? [] : isCoopGuest() && coopMinimapEnemies.length ? coopMinimapEnemies : enemies;
     const tPulse = (now * 0.003) % (Math.PI * 2);
     for (const enemy of minimapEnemies) {
       if (!enemy.alive) continue;
       const exW = enemy.mesh?.position?.x ?? enemy.x;
       const ezW = enemy.mesh?.position?.z ?? enemy.z;
-      const c   = worldToMap(exW, ezW);
-      const ex  = pad + (c.mx + 0.5) * s;
-      const ey  = pad + (c.my + 0.5) * s;
-
-      if (enemy.aggroed) {
-        // Pulsing outer ring on aggroed enemies
+      const p = projectBlip(exW, ezW);
+      const dim = p.clamped ? 0.55 : 1;
+      if (enemy.aggroed && !p.clamped) {
         const pulse = 3.5 + Math.sin(tPulse + (enemy.animSeed || 0)) * 1.0;
         ctx.strokeStyle = "rgba(255,40,60,0.55)";
-        ctx.lineWidth   = 1;
-        ctx.beginPath();
-        ctx.arc(ex, ey, pulse, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, pulse, 0, Math.PI * 2); ctx.stroke();
       }
-      ctx.fillStyle = enemy.aggroed ? "#ff2244" : "#ff8822";
-      ctx.beginPath();
-      ctx.arc(ex, ey, 2.8, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fillStyle = enemy.aggroed ? `rgba(255,34,68,${dim})` : `rgba(255,136,34,${dim})`;
+      if (enemy.type?.angelModel) {
+        const sz = p.clamped ? 2.6 : 3.4;
+        ctx.beginPath();
+        ctx.moveTo(p.sx, p.sy - sz);
+        ctx.lineTo(p.sx + sz * 0.9, p.sy + sz * 0.8);
+        ctx.lineTo(p.sx - sz * 0.9, p.sy + sz * 0.8);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(p.sx, p.sy, p.clamped ? 2.0 : 2.8, 0, Math.PI * 2); ctx.fill();
+      }
     }
 
-    // Player — solid chevron/arrow pointing in facing direction
+    // ── Remote players — green arrows (coop) / reveal-only amber (pvp) ──
     if (net?.active && remotePlayers?.size) {
       const pvpRevealOnly = gameMode === "pvp";
       for (const avatar of remotePlayers.values()) {
         if (!avatar?.root || avatar.id === myNetId) continue;
         if (pvpRevealOnly && now > (avatar.minimapRevealUntil || 0)) continue;
-        const c = worldToMap(avatar.root.position.x, avatar.root.position.z);
-        const rx = pad + (c.mx + 0.5) * s;
-        const ry = pad + (c.my + 0.5) * s;
+        const p = projectBlip(avatar.root.position.x, avatar.root.position.z);
         ctx.save();
-        ctx.translate(rx, ry);
-        ctx.rotate(-avatar.root.rotation.y);
-        ctx.fillStyle = avatar.dead || avatar.hp <= 0 ? "rgba(140,140,140,0.72)" : pvpRevealOnly ? "#ffb35f" : "#72c8ff";
-        ctx.strokeStyle = pvpRevealOnly ? "rgba(255,225,180,0.88)" : "rgba(230,250,255,0.8)";
+        ctx.translate(p.sx, p.sy);
+        ctx.rotate(ang - avatar.root.rotation.y); // world-rotated frame
+        ctx.fillStyle = avatar.dead || avatar.hp <= 0 ? "rgba(140,140,140,0.72)" : pvpRevealOnly ? "#ffb35f" : "#5eff8a";
+        ctx.strokeStyle = pvpRevealOnly ? "rgba(255,225,180,0.88)" : "rgba(220,255,230,0.8)";
         ctx.lineWidth = 0.9;
         ctx.beginPath();
-        ctx.moveTo(0, -5.5);
-        ctx.lineTo(4.3, 4);
-        ctx.lineTo(-4.3, 4);
+        ctx.moveTo(0, -5.2);
+        ctx.lineTo(4.0, 3.8);
+        ctx.lineTo(-4.0, 3.8);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
@@ -14328,60 +16540,66 @@ async function spawnEnemies(wave, options = {}) {
       }
     }
 
-    const cell = worldToMap(yaw.position.x, yaw.position.z);
-    const px   = pad + (cell.mx + 0.5) * s;
-    const py   = pad + (cell.my + 0.5) * s;
-    const ang  = yaw.rotation.y;
-    const arrowLen = 7.5;
-    const wingLen  = 4.0;
-    const wingAng  = 2.4;
-
+    // ── Player arrow — fixed, pointing up ──
     ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(-ang);
-    const cone = ctx.createRadialGradient(0, 0, 0, 0, -arrowLen * 2.8, arrowLen * 4.2);
+    ctx.translate(pcx, pcy);
+    const cone = ctx.createRadialGradient(0, 0, 0, 0, -21, 32);
     cone.addColorStop(0, "rgba(140,225,245,0.18)");
     cone.addColorStop(1, "rgba(140,225,245,0)");
     ctx.fillStyle = cone;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(-arrowLen * 1.25, -arrowLen * 4.1);
-    ctx.lineTo(arrowLen * 1.25, -arrowLen * 4.1);
+    ctx.lineTo(-9.5, -31);
+    ctx.lineTo(9.5, -31);
     ctx.closePath();
     ctx.fill();
-    // Glow
-    ctx.shadowColor  = "#67e8f9";
-    ctx.shadowBlur   = 6;
-    ctx.strokeStyle  = "rgba(220,245,252,0.96)";
-    ctx.lineWidth    = 1.6;
-    ctx.lineCap      = "round";
-    ctx.lineJoin     = "round";
+    ctx.shadowColor = "#67e8f9";
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = "rgba(220,245,252,0.96)";
+    ctx.lineWidth = 1.7;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(-Math.sin(wingAng) * wingLen,  arrowLen - Math.cos(wingAng) * wingLen);
-    ctx.lineTo(0, -arrowLen);
-    ctx.lineTo( Math.sin(wingAng) * wingLen,  arrowLen - Math.cos(wingAng) * wingLen);
+    ctx.moveTo(-Math.sin(2.4) * 4.2, 7.5 - Math.cos(2.4) * 4.2);
+    ctx.lineTo(0, -7.5);
+    ctx.lineTo(Math.sin(2.4) * 4.2, 7.5 - Math.cos(2.4) * 4.2);
     ctx.stroke();
-    // Centre dot
-    ctx.shadowBlur  = 4;
-    ctx.fillStyle   = "#eafcff";
-    ctx.beginPath();
-    ctx.arc(0, 0, 1.8, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = "#eafcff";
+    ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    ctx.save();
+    // Soft vignette toward the circle edge (still clipped)
+    const vig = ctx.createRadialGradient(cx, cy, R * 0.62, cx, cy, R);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(1, "rgba(0,0,0,0.52)");
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, w, h);
+
+    // Wave/hostiles readout inside lower rim
     ctx.font = "9px 'Share Tech Mono', monospace";
-    ctx.fillStyle = "rgba(150,215,235,0.66)";
-    ctx.textAlign = "left";
-    ctx.fillText("TACTICAL MAP", 8, 12);
-    ctx.textAlign = "right";
-    ctx.fillText(`W${game.wave} / ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`, w - 8, h - 8);
-    ctx.restore();
+    ctx.fillStyle = "rgba(150,215,235,0.78)";
+    ctx.textAlign = "center";
+    ctx.fillText(`W${game.wave} · ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`, cx, h - 9);
+    ctx.restore(); // end circular clip
 
-    // Exterior zone player-dot overlay (drawn when player is south of MAP)
-    if (window.__extDrawMinimapOverlay) {
-      window.__extDrawMinimapOverlay(ctx, pad, s, w, h);
-    }
+    // ── Rim ring + north indicator (unclipped) ──
+    ctx.strokeStyle = "rgba(60,200,230,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(34,211,238,0.14)";
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.arc(cx, cy, R - 2.5, 0, Math.PI * 2); ctx.stroke();
+
+    // North marker rides the rim (world −z direction, rotated with the map)
+    const nx = cx + sinA * (R - 8);
+    const ny = cy - cosA * (R - 8);
+    ctx.font = "bold 10px 'Share Tech Mono', monospace";
+    ctx.fillStyle = "rgba(230,250,255,0.92)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("N", nx, ny);
+    ctx.textBaseline = "alphabetic";
   }
 
   function renderOverlayScan() {
@@ -14480,7 +16698,7 @@ async function spawnEnemies(wave, options = {}) {
     hud.hitMarker?.classList.add("active");
   }
 
-  function showDamageFlash(options = {}) {
+  function showDamageFlash(options: any = {}) {
     const duration = options.duration ?? 0.22;
     const opacity = options.opacity ?? 1;
     const danger = options.danger === true;
@@ -14695,8 +16913,8 @@ async function spawnEnemies(wave, options = {}) {
     const enabled = !!avatar.runtime.flashlightOn && !avatar.dead;
     rig.light.visible = enabled;
     rig.light.intensity = enabled ? 85 : 0;
-    rig.light.distance = 32;
-    rig.light.decay = 1.5;
+    rig.light.distance = 90;
+    rig.light.decay = 1.1;
     rig.glow.visible = enabled;
   }
 
@@ -14725,7 +16943,7 @@ async function spawnEnemies(wave, options = {}) {
       obj.frustumCulled = true;
     });
 
-    const runtime = createHumanoidEnemyActions(model);
+    const runtime: any = createHumanoidEnemyActions(model);
     runtime.model = model;
     runtime.rightHand = findRightHandBone(model);
     runtime.leftHand = findLeftHandBone(model);
@@ -14867,7 +17085,7 @@ async function spawnEnemies(wave, options = {}) {
     });
   }
 
-  function broadcastVisualFx(fx, payload = {}) {
+  function broadcastVisualFx(fx, payload: any = {}) {
     if (!net?.active || !myNetId) return;
     net.send({
       t: "vfx",
@@ -14909,10 +17127,28 @@ async function spawnEnemies(wave, options = {}) {
       spawnBulletHole(netTmpA, netTmpB, msg.gun || GUNS.RIFLE);
     } else if (msg.fx === "pack") {
       applyCoopPackFx(msg, sourceId);
+    } else if (msg.fx === "carAlarm") {
+      // Host-triggered car alarm: play the sound + emissive flash locally. The
+      // lure only drives locally-simulated enemies, so on guests (host-simulated
+      // enemies) it is inert; on the host it is set by the local trigger path.
+      const cars = getExtCars();
+      if (!cars) return;
+      const ax = clampNetPosition(msg.x), az = clampNetPosition(msg.z);
+      let best = null, bd = 6;
+      for (const car of cars) {
+        const d = Math.hypot(car.x - ax, car.z - az);
+        if (d < bd) { best = car; bd = d; }
+      }
+      if (best) startCarAlarmFx(best, { lure: false });
+    } else if (msg.fx === "mysteryBox") {
+      // Another player bought from the box — play the lid/rise shimmer locally
+      // (visual-only: no XP change, no weapon grant on this client).
+      const g = msg.gun === "teddy" ? null : (VALID_GUN_NAMES.has(msg.gun) ? msg.gun : GUNS.PISTOL);
+      if (!mysteryBoxState.rolling) startMysteryBoxRoll(g || GUNS.PISTOL, msg.gun === "teddy", true);
     }
   }
 
-  function spawnRemoteShotImpact(origin, end, gunType = GUNS.RIFLE) {
+  function spawnRemoteShotImpact(origin, end, gunType: GunType = GUNS.RIFLE) {
     enemyShotDirTmp.copy(end).sub(origin);
     const dist = enemyShotDirTmp.length();
     if (dist < 0.05) return;
@@ -14935,7 +17171,7 @@ async function spawnEnemies(wave, options = {}) {
     if (startBtnMp) startBtnMp.textContent = gameMode === "pvp" ? "Launch PvP FFA" : "Launch Co-op";
   }
 
-  function enterHostLaunchedGame(msg = {}) {
+  function enterHostLaunchedGame(msg: any = {}) {
     gameMode = msg.mode || gameMode || "coop";
     syncMultiplayerModeLabels();
     if (gameMode === "pvp") forceCinematicOffForPvp();
@@ -15673,6 +17909,7 @@ async function spawnEnemies(wave, options = {}) {
     for (const id of [...coopProxies.keys()]) removeCoopProxy(id);
     // Dispose any remaining non-proxy enemies (solo enemies on the host side).
     for (const enemy of enemies.splice(0, enemies.length)) {
+      unregisterEnemy(enemy);
       disposeEnemy(enemy);
     }
     coopMinimapEnemies.length = 0;
@@ -15710,7 +17947,7 @@ async function spawnEnemies(wave, options = {}) {
     if (!proxy) return;
     proxy.alive = false;
     const idx = enemies.indexOf(proxy);
-    if (idx >= 0) enemies.splice(idx, 1);
+    if (idx >= 0) { enemies.splice(idx, 1); unregisterEnemy(proxy); }
     scene.remove(proxy.mesh);
     if (proxy.hpBar) scene.remove(proxy.hpBar.mesh);
     disposeEnemy(proxy);
@@ -15742,6 +17979,10 @@ async function spawnEnemies(wave, options = {}) {
       player.hp = Math.min(100, player.maxHp);
       placePlayerForWave(game.wave);
       updateHUD(0);
+      // Guest-side blackout cutscene: fires locally when the host's snapshot
+      // advances us onto a blackout wave (proxies land this same snapshot, so
+      // the enemy pan — which samples positions at phase B entry — sees them).
+      if (game.wave % 10 === 0) startBlackoutCutscene();
     }
     updateScoreHud();
     updateObjective();
@@ -15765,7 +18006,7 @@ async function spawnEnemies(wave, options = {}) {
         proxy.targetPos = new THREE.Vector3(sx, sy, sz);
         proxy.targetYaw = clamp(finiteNumber(s.r, 0), -Math.PI * 2, Math.PI * 2);
         coopProxies.set(enemyId, proxy);
-        enemies.push(proxy);
+        enemies.push(proxy); registerEnemy(proxy);
         scene.add(proxy.mesh);
         if (proxy.hpBar) scene.add(proxy.hpBar.mesh);
       }
@@ -16158,7 +18399,10 @@ async function spawnEnemies(wave, options = {}) {
       clipPos: clip && clip.visible ? at(clip) : null,
       rightHand: at(thirdPerson.rightHand),
       leftHand: at(thirdPerson.leftHand),
+      rightUpperArm: at(thirdPerson.aimBones?.rightUpperArm),
+      leftUpperArm: at(thirdPerson.aimBones?.leftUpperArm),
       gunPos: at(w && w.gun),
+      gun: currentGun,
     };
   };
 
@@ -16182,7 +18426,7 @@ async function spawnEnemies(wave, options = {}) {
   // program). A plain scene.traverse() over-reports and hides exactly that bug.
   // If this number is not constant while playing, you have a stall.
   window.__rbCountLights = function (detail) {
-    const counts = { PointLight: 0, SpotLight: 0, DirectionalLight: 0, HemisphereLight: 0, AmbientLight: 0, RectAreaLight: 0, other: 0, total: 0 };
+    const counts: any = { PointLight: 0, SpotLight: 0, DirectionalLight: 0, HemisphereLight: 0, AmbientLight: 0, RectAreaLight: 0, other: 0, total: 0 };
     const owners = new Map();
     const walk = (o) => {
       if (o.visible === false) return; // an invisible parent hides its lights from three
@@ -16230,7 +18474,7 @@ async function spawnEnemies(wave, options = {}) {
       updatePackUpgradeEffects(dt);
 
       if (game.state === "playing") {
-        if (mouse.down && gunState.fireCooldown <= 0) fireGun();
+        if (mouse.down && gunState.fireCooldown <= 0 && !cutscene.active) fireGun();
         const moveState = updateMovement(dt);
         updateThirdPersonCharacter(dt, moveState);
         if (net?.active) sendLocalState(now, moveState);
@@ -16280,9 +18524,10 @@ async function spawnEnemies(wave, options = {}) {
         updateParticles(dt);
         updateDamageNumbers(dt);
         updatePackStation(dt);
-        updateWallBuyCrates(dt);
         updatePerkMachine(dt);
-        updateHordeBeacon(dt);
+        updateMysteryBox(dt);
+        updateKnifeVisual();
+        updateCarAlarms(dt);
         // Allow larger removal budgets when wave is clearing; internal function also respects a small time budget
         processEnemyRemovals(game.killed >= game.totalEnemies ? 4 : 1);
         updateTracers(dt);
@@ -16300,6 +18545,10 @@ async function spawnEnemies(wave, options = {}) {
           renderOverlayScan();
         }
       }
+
+      // Blackout cutscene camera: runs AFTER updateCameraFX so it can sample the
+      // live gameplay pose (its phase-C landing target) before overwriting it.
+      updateCutsceneCamera(dt);
 
       if (exteriorCityRoot) exteriorCityRoot.visible = true;
 
@@ -16387,7 +18636,7 @@ async function spawnEnemies(wave, options = {}) {
     window.__rbTest = {
       // Debug: live-tune the unified first-person rig (camera eye + arm pose + gun fit).
       // Pass any subset of keys; returns the resulting values. Prod never calls this.
-      setFpTune: (t = {}) => {
+      setFpTune: (t: any = {}) => {
         if (t.eyeForward   !== undefined) UNIFIED_FP_EYE_FORWARD   = t.eyeForward;
         if (t.eyeUp        !== undefined) UNIFIED_FP_EYE_UP        = t.eyeUp;
         if (t.armRaiseBias !== undefined) UNIFIED_FP_ARM_RAISE_BIAS= t.armRaiseBias;
@@ -16420,6 +18669,33 @@ async function spawnEnemies(wave, options = {}) {
         pitch.rotation.x = pitchRad;
         return { x: yaw.position.x, z: yaw.position.z, yaw: yaw.rotation.y };
       },
+      // Test/diagnostic: force the lighting state of a given wave (10 → blackout
+      // fire sky + repositioned ember sun, anything else → golden hour).
+      setWaveLighting: (w) => { applyWaveLighting(w); return { darkWaveActive, sun: window.__extSun?.position.toArray() }; },
+      // Blackout cutscene test hooks: force-start (applies blackout lighting
+      // first so phase A frames the fire dome), and inspect live state.
+      startBlackoutCutscene: () => {
+        applyWaveLighting(10, false);
+        return startBlackoutCutscene(true);
+      },
+      skipCutscene: () => { requestCutsceneSkip(); return cutscene.phase; },
+      // Distance between the camera's world position and the expected TP camera
+      // world position (resolver local → world via pitch). ~0 after a clean landing.
+      getCutsceneLandingDelta: () => {
+        const local = resolveThirdPersonCameraPosition(0, 0, 0).clone();
+        pitch.updateWorldMatrix(true, false);
+        const expected = pitch.localToWorld(local);
+        return camera.getWorldPosition(new THREE.Vector3()).distanceTo(expected);
+      },
+      getCutsceneState: () => ({
+        active: cutscene.active,
+        phase: cutscene.phase,
+        t: cutscene.t,
+        letterbox: document.body.classList.contains("rb-cutscene"),
+        camPos: camera.getWorldPosition(new THREE.Vector3()).toArray(),
+        camFov: camera.fov,
+        tpLocalPos: resolveThirdPersonCameraPosition(0, 0, 0).toArray(),
+      }),
       getFpState: () => {
         const cw = new THREE.Vector3();
         camera.getWorldPosition(cw);
@@ -16473,6 +18749,11 @@ async function spawnEnemies(wave, options = {}) {
       getScore: () => game.score,
       getBestScore: () => game.bestScore,
       getKills: () => game.killed,
+      // Test/diagnostic: grant XP so specs can reach perk/pack purchases without
+      // grinding kills. Prod never calls this.
+      giveXp: (amount = 1000) => { player.xp += amount; updateHUD(0); return player.xp; },
+      getXp: () => player.xp,
+      getDebugState: () => ({ xp: player.xp, hp: player.hp, state: game.state, y: yaw.position.y }),
       getEnemyCount: () => enemies.filter(e => e.alive).length,
       getState: () => game.state,
       getFrameStats: () => ({
@@ -16763,7 +19044,7 @@ async function spawnEnemies(wave, options = {}) {
         enemy.alive = true;
         enemy.aggroed = true;
         if (enemy.hpBar?.mesh) scene.add(enemy.hpBar.mesh);
-        enemies.push(enemy);
+        enemies.push(enemy); registerEnemy(enemy);
         game.totalEnemies = game.killed + enemies.filter(e => e.alive).length;
         updateObjective();
         return true;
@@ -16872,6 +19153,13 @@ async function spawnEnemies(wave, options = {}) {
     if (e.code === "Digit1") switchGun(GUNS.RIFLE);
     if (e.code === "Digit2") switchGun(GUNS.SHOTGUN);
     if (e.code === "Digit3") switchGun(GUNS.SNIPER);
+    if (e.code === "Digit4") switchGun(GUNS.PISTOL);
+    if (e.code === "Digit5") switchGun(GUNS.SMG);
+    if (e.code === "Digit6") switchGun(GUNS.LMG);
+    if (e.code === "Digit7") switchGun(GUNS.DMR);
+    if (e.code === "Digit8") switchGun(GUNS.AKIMBO);
+    if (e.code === "Digit9") switchGun(GUNS.RAILGUN);
+    if (e.code === "Digit0") switchGun(GUNS.FLAK);
   });
 
   window.addEventListener("keyup", e => keys.delete(e.code));
@@ -17372,11 +19660,11 @@ async function spawnEnemies(wave, options = {}) {
         if (!obj) continue;
         if (Array.isArray(def.scale)) obj.scale.set(def.scale[0], def.scale[1], def.scale[2]);
         else if (typeof def.scale === "number") obj.scale.setScalar(def.scale);
-        obj.position.set(def.x || 0, def.y || 0, def.z || 0);
+        obj.position.set(def.x || 0, (def as any).y || 0, def.z || 0);
         obj.rotation.y = def.rotationY || 0;
         obj.traverse(o => {
           if (o.isMesh) {
-            o.castShadow = def.castShadow !== false; // buildings/landmarks cast daytime shadows
+            o.castShadow = (def as any).castShadow !== false; // buildings/landmarks cast daytime shadows
             o.receiveShadow = true;
             o.frustumCulled = true;
           }
@@ -17386,9 +19674,46 @@ async function spawnEnemies(wave, options = {}) {
         if (def.collider && typeof window.__extAddCollider === "function") {
           window.__extAddCollider(def.x || 0, def.z || 0, def.collider.w, def.collider.d);
         }
+        // The plaza statue IS the perk machine: anchor the interaction to it and
+        // collect its materials for the purchasable emissive pulse (uniform-only —
+        // no new lights, no shader relink; see updatePerkMachine).
+        if (def.url.includes("landmark-statue")) {
+          const mats = [];
+          obj.traverse(o => {
+            if (o.isMesh && o.material && !Array.isArray(o.material) && o.material.emissive) {
+              if (!mats.includes(o.material)) {
+                o.material.emissive.setHex(0x22d3ee); // signature cyan
+                o.material.emissiveIntensity = 0;
+                mats.push(o.material);
+              }
+            }
+          });
+          perkMachineState.station = obj;
+          perkMachineState.pulseMats = mats;
+          // Soft additive "this is interactive" beacon: reuses the muzzle-flash
+          // sprite pipeline (same material/texture already linked elsewhere —
+          // no new GL program). Opacity is distance-faded in updatePerkMachine
+          // so it reads from range without a real-time light.
+          const glowSprite = createMuzzleFlash(0x22d3ee, 3.2);
+          glowSprite.position.set(0, 2.4, 0);
+          glowSprite.visible = true;
+          glowSprite.material.opacity = 0;
+          obj.add(glowSprite);
+          perkMachineState.glowSprite = glowSprite;
+        }
       } catch (e) {
         console.warn(`[landmarks] failed to load ${def.url}`, e);
       }
+    }
+    // Fallback: if the statue GLB failed to load, perks must stay buyable — anchor
+    // the machine to an invisible point at the statue's manifest position.
+    if (!perkMachineState.station) {
+      const anchor = new THREE.Object3D();
+      anchor.name = "Perk Machine Anchor (statue missing)";
+      anchor.position.set(0, 0, 175);
+      scene.add(anchor);
+      perkMachineState.station = anchor;
+      perkMachineState.pulseMats = null;
     }
     warmObjectTextures(scene);
   }
@@ -17413,11 +19738,14 @@ async function spawnEnemies(wave, options = {}) {
       // on scene.background / scene.environment (buildLevel and the exterior both set
       // their own backgrounds during construction).
       await buildSkyEnvironment();
+      // Pre-build the blackout fire-sky dome now (hidden) so compileStartupScene /
+      // compileAllWarmables links its shader during boot — the first blackout wave
+      // must not pay a link hitch. renderer.compile walks the whole graph, visible
+      // or not, so the dome only needs to exist in the scene.
+      buildFireSkyDome();
       loadAudioAssets(); // async, non-blocking; SFX/VO fall back to synth until buffers load
       createPackStation();
-      createWallBuyCrates();
-      createPerkMachine();
-      createHordeBeacon();
+      createMysteryBox();
       warmObjectTextures(scene);
       await waitFrame();
 

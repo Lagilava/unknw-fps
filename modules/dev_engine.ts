@@ -150,19 +150,91 @@ export const DEFAULTS = {
       magazine: 24, ammo: 120, fireRate: 0.074, reloadTime: 1.05,
       adsFov: 68, adsInSpeed: 11.5, adsOutSpeed: 8.5, adsMovePenalty: 0.14,
       damage: 34.5, pellets: 1, spread: 0,
+      moveSpeedMul: 1, swayMul: 1, shakeMul: 1, driftMul: 1,
+      bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
+      equipTime: 0.3, muzzleFlashScale: 1, muzzleFlashTime: 0.08,
       recoilKick: 42, recoilYaw: 76, recoilRoll: 64,
     },
     shotgun: {
       magazine: 10, ammo: 80, fireRate: 0.34, reloadTime: 1.45,
       adsFov: 72, adsInSpeed: 10.5, adsOutSpeed: 7.5, adsMovePenalty: 0.12,
       damage: 195, pellets: 14, spread: 0.068,
+      moveSpeedMul: 1, swayMul: 1, shakeMul: 1, driftMul: 1,
+      bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
+      equipTime: 0.36, muzzleFlashScale: 1.35, muzzleFlashTime: 0.105,
       recoilKick: 96, recoilYaw: 112, recoilRoll: 98,
     },
     sniper: {
       magazine: 6, ammo: 30, fireRate: 1.05, reloadTime: 1.55,
       adsFov: 18, adsInSpeed: 8.4, adsOutSpeed: 7.0, adsMovePenalty: 0.2,
       damage: 205.54, pellets: 1, spread: 0.004,
+      moveSpeedMul: 1, swayMul: 1, shakeMul: 1, driftMul: 1,
+      bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
+      equipTime: 0.42, muzzleFlashScale: 0.95, muzzleFlashTime: 0.075,
       recoilKick: 64, recoilYaw: 145, recoilRoll: 88,
+    },
+    pistol: {
+      magazine: 12, ammo: 96, fireRate: 0.19, reloadTime: 0.85,
+      adsFov: 66, adsInSpeed: 13.5, adsOutSpeed: 10.5, adsMovePenalty: 0.06,
+      damage: 52, pellets: 1, spread: 0.006,
+      moveSpeedMul: 1.06, swayMul: 0.7, shakeMul: 0.7, driftMul: 0.8,
+      bloomGrow: 0.004, bloomMax: 0.02, bloomDecay: 0.12,
+      equipTime: 0.18, muzzleFlashScale: 0.8, muzzleFlashTime: 0.07,
+      recoilKick: 34, recoilYaw: 58, recoilRoll: 46,
+    },
+    smg: {
+      magazine: 32, ammo: 192, fireRate: 0.055, reloadTime: 0.95,
+      adsFov: 70, adsInSpeed: 12.5, adsOutSpeed: 9.5, adsMovePenalty: 0.08,
+      damage: 21, pellets: 1, spread: 0.022,
+      moveSpeedMul: 1.05, swayMul: 0.85, shakeMul: 0.8, driftMul: 1.3,
+      bloomGrow: 0.006, bloomMax: 0.045, bloomDecay: 0.16,
+      equipTime: 0.24, muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
+      recoilKick: 30, recoilYaw: 62, recoilRoll: 52,
+    },
+    lmg: {
+      magazine: 75, ammo: 225, fireRate: 0.092, reloadTime: 2.6,
+      adsFov: 66, adsInSpeed: 7.8, adsOutSpeed: 6.5, adsMovePenalty: 0.24,
+      damage: 31, pellets: 1, spread: 0.014,
+      moveSpeedMul: 0.85, swayMul: 1.5, shakeMul: 1.25, driftMul: 1.4,
+      bloomGrow: 0.005, bloomMax: 0.05, bloomDecay: 0.08,
+      equipTime: 0.5, muzzleFlashScale: 1.25, muzzleFlashTime: 0.09,
+      recoilKick: 52, recoilYaw: 92, recoilRoll: 74,
+    },
+    dmr: {
+      magazine: 10, ammo: 60, fireRate: 0.32, reloadTime: 1.3,
+      adsFov: 42, adsInSpeed: 9.5, adsOutSpeed: 8.0, adsMovePenalty: 0.16,
+      damage: 118, pellets: 1, spread: 0.002,
+      moveSpeedMul: 0.97, swayMul: 1.1, shakeMul: 1.05, driftMul: 0.9,
+      bloomGrow: 0.004, bloomMax: 0.02, bloomDecay: 0.2,
+      equipTime: 0.34, muzzleFlashScale: 1, muzzleFlashTime: 0.085,
+      recoilKick: 55, recoilYaw: 108, recoilRoll: 76,
+    },
+    akimbo: {
+      magazine: 26, ammo: 156, fireRate: 0.08, reloadTime: 1.15,
+      adsFov: 72, adsInSpeed: 12.0, adsOutSpeed: 9.0, adsMovePenalty: 0.07,
+      damage: 26, pellets: 1, spread: 0.03,
+      moveSpeedMul: 1.06, swayMul: 0.8, shakeMul: 0.85, driftMul: 1.6,
+      bloomGrow: 0.007, bloomMax: 0.05, bloomDecay: 0.18,
+      equipTime: 0.24, muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
+      recoilKick: 36, recoilYaw: 84, recoilRoll: 66,
+    },
+    railgun: {
+      magazine: 3, ammo: 18, fireRate: 1.45, reloadTime: 1.9,
+      adsFov: 24, adsInSpeed: 7.6, adsOutSpeed: 6.6, adsMovePenalty: 0.24,
+      damage: 430, pellets: 1, spread: 0.001,
+      moveSpeedMul: 0.82, swayMul: 1.6, shakeMul: 1.5, driftMul: 0.6,
+      bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
+      equipTime: 0.55, muzzleFlashScale: 1.2, muzzleFlashTime: 0.14,
+      recoilKick: 78, recoilYaw: 150, recoilRoll: 96,
+    },
+    flak: {
+      magazine: 8, ammo: 64, fireRate: 0.52, reloadTime: 1.7,
+      adsFov: 74, adsInSpeed: 9.8, adsOutSpeed: 7.4, adsMovePenalty: 0.14,
+      damage: 150, pellets: 10, spread: 0.088,
+      moveSpeedMul: 0.9, swayMul: 1.3, shakeMul: 1.3, driftMul: 1.2,
+      bloomGrow: 0.01, bloomMax: 0.06, bloomDecay: 0.1,
+      equipTime: 0.4, muzzleFlashScale: 1.4, muzzleFlashTime: 0.11,
+      recoilKick: 84, recoilYaw: 104, recoilRoll: 90,
     },
   },
   enemies: {
@@ -292,11 +364,11 @@ export function sanitizeCategory(category, raw) {
         unlimitedHealth: bool(src.unlimitedHealth, def.unlimitedHealth),
         unlimitedSprint: bool(src.unlimitedSprint, def.unlimitedSprint),
         unlimitedAmmo: bool(src.unlimitedAmmo, def.unlimitedAmmo),
-        startingWeapon: ["rifle", "shotgun", "sniper"].includes(w) ? w : def.startingWeapon,
+        startingWeapon: Object.keys(DEFAULTS.weapons).includes(w) ? w : def.startingWeapon,
       };
     }
     case "camera": {
-      const out = {};
+      const out: Record<string, any> = {};
       for (const k of Object.keys(def)) out[k] = num(src[k], def[k]);
       out.fpWalkFov = Math.max(30, Math.min(140, out.fpWalkFov));
       out.fpSprintFov = Math.max(30, Math.min(160, out.fpSprintFov));
@@ -307,11 +379,11 @@ export function sanitizeCategory(category, raw) {
       return out;
     }
     case "weapons": {
-      const out = {};
-      for (const gun of ["rifle", "shotgun", "sniper"]) {
+      const out: Record<string, any> = {};
+      for (const gun of Object.keys(def)) {
         const gd = def[gun];
         const gs = isObj(src[gun]) ? src[gun] : {};
-        const o = {};
+        const o: Record<string, any> = {};
         for (const k of Object.keys(gd)) o[k] = num(gs[k], gd[k]);
         o.magazine = Math.max(1, Math.round(o.magazine));
         o.ammo = Math.max(0, Math.round(o.ammo));
@@ -320,13 +392,16 @@ export function sanitizeCategory(category, raw) {
         o.reloadTime = Math.max(0.05, o.reloadTime);
         o.damage = Math.max(0, o.damage);
         o.spread = Math.max(0, o.spread);
+        o.equipTime = Math.max(0.05, Math.min(3, o.equipTime));
+        o.muzzleFlashScale = Math.max(0, Math.min(5, o.muzzleFlashScale));
+        o.muzzleFlashTime = Math.max(0.01, Math.min(1, o.muzzleFlashTime));
         out[gun] = o;
       }
       return out;
     }
     case "enemies": {
       const hex = (v, fb) => (/^#[0-9a-fA-F]{6}$/.test(String(v)) ? String(v) : fb);
-      const out = {};
+      const out: Record<string, any> = {};
       for (const name of Object.keys(def)) {
         const ed = def[name];
         const es = isObj(src[name]) ? src[name] : {};
@@ -346,7 +421,7 @@ export function sanitizeCategory(category, raw) {
       return out;
     }
     case "gameplay": {
-      const out = {};
+      const out: Record<string, any> = {};
       for (const k of Object.keys(def)) out[k] = num(src[k], def[k]);
       out.waveCountMax = Math.max(1, Math.round(out.waveCountMax));
       out.playerDamageMult = Math.max(0, out.playerDamageMult);
@@ -371,7 +446,7 @@ export function sanitizeCategory(category, raw) {
       };
     }
     case "lighting": {
-      const out = {};
+      const out: Record<string, any> = {};
       for (const k of Object.keys(def)) {
         if (typeof def[k] === "string") out[k] = /^#/.test(String(src[k])) ? String(src[k]) : def[k];
         else out[k] = num(src[k], def[k]);
@@ -465,7 +540,7 @@ function migrateStore(raw) {
     for (const mName of Object.keys(raw.masters)) {
       const m = raw.masters[mName];
       const cats = isObj(m?.categories) ? m.categories : {};
-      const clean = {};
+      const clean: Record<string, any> = {};
       for (const cat of CATEGORIES) {
         const ref = cats[cat];
         clean[cat] = ref && store.presets[cat] && store.presets[cat][ref] ? ref : null;
@@ -513,7 +588,7 @@ export function renamePreset(store, category, oldName, newName) {
   bank[newName] = bank[oldName];
   delete bank[oldName];
   if (store.active[category] === oldName) store.active[category] = newName;
-  for (const m of Object.values(store.masters)) {
+  for (const m of Object.values(store.masters) as any[]) {
     if (m.categories[category] === oldName) m.categories[category] = newName;
   }
   return store;
@@ -532,7 +607,7 @@ export function deletePreset(store, category, name) {
   if (!bank || name === "Default") return store; // Default is the protected fallback
   delete bank[name];
   if (store.active[category] === name) store.active[category] = null;
-  for (const m of Object.values(store.masters)) {
+  for (const m of Object.values(store.masters) as any[]) {
     if (m.categories[category] === name) m.categories[category] = null;
   }
   return store;
@@ -659,7 +734,7 @@ export function importCategoryPreset(text) {
 // Classic-script bridge — environment.js (a non-module script) reads this.
 // ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== "undefined") {
-  window.RB_DEV_ENGINE = {
+  (window as any).RB_DEV_ENGINE = {
     version: DEV_ENGINE_VERSION,
     STORE_KEY,
     ACTIVE_KEY,

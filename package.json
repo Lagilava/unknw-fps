@@ -10,10 +10,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "multiplayer": "node server.js",
-    "optimize:textures": "node scripts/optimize-textures.mjs"
+    "optimize:textures": "node scripts/optimize-textures.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "express": "^4.22.2",
+    "miniplex": "^2.0.0",
     "peer": "^1.0.2",
     "peerjs": "^1.5.4",
     "three": "^0.166.1"
@@ -23,9 +25,11 @@
     "@gltf-transform/extensions": "^4.4.0",
     "@gltf-transform/functions": "^4.4.0",
     "@playwright/test": "^1.61.1",
+    "@types/three": "^0.166.0",
     "fbx2gltf": "^0.9.7-p1",
     "meshoptimizer": "^1.1.1",
     "sharp": "^0.35.2",
+    "typescript": "^5.7.0",
     "vite": "7.3.2"
   }
 }

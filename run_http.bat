@@ -31,8 +31,10 @@ if not errorlevel 1 (
 	timeout /t 2 /nobreak >nul
 )
 
-:: Start HTTP server on all interfaces so LAN players can connect
-start "Room Breach HTTP Server" /D "%~dp0" cmd /k %PY_CMD% -m http.server 8000 --bind 0.0.0.0
+:: Start HTTP server on all interfaces so LAN players can connect.
+:: Uses the Node server (.tools/static-server.cjs), which transpiles .ts sources
+:: on the fly — Python's http.server cannot serve the TypeScript modules.
+start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=0.0.0.0&& set PORT=8000&& node .tools\static-server.cjs"
 
 set "SERVER_READY=0"
 for /l %%I in (1,1,30) do (

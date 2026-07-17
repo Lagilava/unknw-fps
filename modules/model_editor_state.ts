@@ -1,7 +1,13 @@
 const MODEL_EDITOR_STORAGE_KEY = "room-breach-model-editor-v1";
 const MODEL_EDITOR_CHANGE_EVENT = "room-breach-model-editor-change";
 
-function cloneVector3(next = {}) {
+interface Vec3Like { x?: number; y?: number; z?: number; }
+interface PresetLike {
+  position?: Vec3Like; rotation?: Vec3Like;
+  scale?: number; fitHeight?: number; rootYaw?: number;
+}
+
+function cloneVector3(next: Vec3Like = {}) {
   return {
     x: Number.isFinite(next.x) ? next.x : 0,
     y: Number.isFinite(next.y) ? next.y : 0,
@@ -9,8 +15,8 @@ function cloneVector3(next = {}) {
   };
 }
 
-function clonePreset(next = {}, fallback = null) {
-  const source = fallback || {};
+function clonePreset(next: PresetLike = {}, fallback: PresetLike | null = null) {
+  const source: PresetLike = fallback || {};
   return {
     position: cloneVector3(next.position || source.position),
     rotation: cloneVector3(next.rotation || source.rotation),
