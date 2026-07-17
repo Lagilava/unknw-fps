@@ -19,7 +19,7 @@ import {
   setTextIfChanged,
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
-import { registerEnemy, unregisterEnemy, enemies as ecsEnemies } from "./modules/ecs";
+import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -9118,7 +9118,7 @@ function createLightningEffect() {
     enemy.lightningStreamTimer = type.lightning ? Math.random() * 0.12 : 0;
     enemy.lightningDamageTimer = 0;
     enemy.lightningSfxTimer = 0;
-    enemy.alive = true;
+    setEnemyAlive(enemy, true);
     enemy.bobSeed = Math.random() * Math.PI * 2;
     enemy.aggroRange = getEnemyAggroRange(type);
     enemy.aggroed = false;
@@ -9254,7 +9254,7 @@ function createLightningEffect() {
 
   function recycleEnemiesToPool(oldEnemies) {
     for (const enemy of oldEnemies) {
-      enemy.alive = false;
+      setEnemyAlive(enemy, false);
       hideMegaBlast(enemy);
       resetEnemyAura(enemy);
       deactivateEnemyRuntimeLights(enemy);
@@ -9283,7 +9283,7 @@ async function spawnEnemies(wave, options: any = {}) {
   if (smooth && oldEnemies.length) {
     for (let i = 0; i < oldEnemies.length; i++) {
       const enemy = oldEnemies[i];
-      enemy.alive = false;
+      setEnemyAlive(enemy, false);
       hideMegaBlast(enemy);
       resetEnemyAura(enemy);
       deactivateEnemyRuntimeLights(enemy);
@@ -9347,8 +9347,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function activatePrimedFirstWave() {
     if (game.wave !== 1 || enemies.length === 0) return false;
-    for (const enemy of enemies) {
-      if (!enemy.alive) continue;
+    for (const enemy of liveEnemies) {
       ensureLiveEnemyVisible(enemy);
       if (enemy.mesh.userData.clonedGhost) setHumanoidEnemyAction(enemy, "idle", 0);
     }
@@ -9377,7 +9376,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (options.compile) compileSceneForCurrentRenderer();
 
     for (const enemy of warmed) {
-      enemy.alive = false;
+      setEnemyAlive(enemy, false);
       enemy.mesh.visible = false;
       scene.remove(enemy.mesh);
       pool.push(enemy);
@@ -9417,7 +9416,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
       // move warmed enemies into pool (keep them hidden)
       for (const e of warmed) {
-        e.alive = false;
+        setEnemyAlive(e, false);
         e.mesh.visible = false;
         scene.remove(e.mesh);
         (enemyPools[type.name] = enemyPools[type.name] || []).push(e);
@@ -9448,7 +9447,7 @@ async function spawnEnemies(wave, options: any = {}) {
       compileSceneForCurrentRenderer();
     }
     for (const enemy of warmed) {
-      enemy.alive = false;
+      setEnemyAlive(enemy, false);
       enemy.mesh.visible = false;
       scene.remove(enemy.mesh);
       pool.push(enemy);
@@ -10680,8 +10679,8 @@ async function spawnEnemies(wave, options: any = {}) {
     // register/unregister seam keeps it in lock-step), so this is behaviourally
     // identical — it's the proof-of-pattern for iterating `world.with(...)`.
     let count = 0;
-    for (const enemy of ecsEnemies) {
-      if (enemy.alive && enemy.lightning && enemy.aggroed) count++;
+    for (const enemy of liveEnemies) {
+      if (enemy.lightning && enemy.aggroed) count++; // `live` archetype = alive already
     }
     return count;
   }
@@ -13562,7 +13561,7 @@ async function spawnEnemies(wave, options: any = {}) {
         applyEnemyHitFeedback(enemy, damage, pendingHeadshot.has(enemy), hitDir?.x || 0, hitDir?.z || 0);
         if (enemy.hp <= 0 && !enemy._optimisticDead) {
           enemy._optimisticDead = true;
-          enemy.alive = false;
+          setEnemyAlive(enemy, false);
           if (enemy.mesh.userData.clonedGhost) setHumanoidEnemyAction(enemy, "death", 0.05);
         }
         continue;
@@ -13577,7 +13576,7 @@ async function spawnEnemies(wave, options: any = {}) {
         if (currentGun === GUNS.SNIPER) {
           if (!enemy.deathQueued) pendingEnemyDeaths.push(enemy);
           enemy.deathQueued = true;
-          enemy.alive = false;
+          setEnemyAlive(enemy, false);
           deactivateEnemyRuntimeLights(enemy);
           enemy.mesh.visible = false;
         } else {
@@ -13669,7 +13668,7 @@ async function spawnEnemies(wave, options: any = {}) {
         applyEnemyHitFeedback(enemy, MELEE_DAMAGE, false, enemyShotDirTmp.x, enemyShotDirTmp.z, { melee: true });
         if (enemy.hp <= 0 && !enemy._optimisticDead) {
           enemy._optimisticDead = true;
-          enemy.alive = false;
+          setEnemyAlive(enemy, false);
           if (enemy.mesh.userData.clonedGhost) setHumanoidEnemyAction(enemy, "death", 0.05);
         }
         continue;
@@ -13704,7 +13703,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function killEnemy(enemy, killerId = myNetId) {
     if (!enemy.alive) return;
-    enemy.alive = false;
+    setEnemyAlive(enemy, false);
     deactivateEnemyRuntimeLights(enemy);
     // Died mid-ability: drop any telegraph rings it was holding.
     if (enemy.telegraphRing) { fadeTelegraphRing(enemy.telegraphRing); enemy.telegraphRing = null; }
@@ -14756,12 +14755,12 @@ async function spawnEnemies(wave, options: any = {}) {
     // Blackout cutscene: freeze enemy AI/attacks in place (still rendered). The
     // co-op host keeps broadcasting these frozen positions, so guests stay in sync.
     if (cutscene.active) {
-      for (const enemy of enemies) if (enemy.alive) ensureLiveEnemyVisible(enemy);
+      for (const enemy of liveEnemies) ensureLiveEnemyVisible(enemy);
       return;
     }
     // Dev preview: freeze all enemy AI/movement in place (still rendered).
     if (devFreezeEnemies) {
-      for (const enemy of enemies) if (enemy.alive) ensureLiveEnemyVisible(enemy);
+      for (const enemy of liveEnemies) ensureLiveEnemyVisible(enemy);
       return;
     }
     const localPx = yaw.position.x;
@@ -17949,7 +17948,7 @@ async function spawnEnemies(wave, options: any = {}) {
   function removeCoopProxy(id) {
     const proxy = coopProxies.get(id);
     if (!proxy) return;
-    proxy.alive = false;
+    setEnemyAlive(proxy, false);
     const idx = enemies.indexOf(proxy);
     if (idx >= 0) { enemies.splice(idx, 1); unregisterEnemy(proxy); }
     scene.remove(proxy.mesh);
@@ -18020,7 +18019,7 @@ async function spawnEnemies(wave, options: any = {}) {
       // restore it — the host hasn't confirmed the kill yet.
       if (proxy._optimisticDead) {
         proxy._optimisticDead = false;
-        proxy.alive = true;
+        setEnemyAlive(proxy, true);
         proxy.mesh.visible = true;
         if (proxy.hpBar?.mesh) proxy.hpBar.mesh.visible = true;
       }
@@ -18032,7 +18031,7 @@ async function spawnEnemies(wave, options: any = {}) {
       proxy.lungeBoost = Math.max(proxy.lungeBoost || 0, s.lb || 0);
       proxy.verticalLift = s.vl || 0;
       proxy.netMegaBlast = s.mb || null;
-      proxy.alive = true;
+      setEnemyAlive(proxy, true);
       proxy.removed = false;
       proxy.deathQueued = false;
       proxy.mesh.visible = true;
@@ -19045,7 +19044,7 @@ async function spawnEnemies(wave, options: any = {}) {
           pos = found;
         }
         const enemy = createEnemy(type, pos, Math.max(2, game.wave), getWaveHpScale(game.wave));
-        enemy.alive = true;
+        setEnemyAlive(enemy, true);
         enemy.aggroed = true;
         if (enemy.hpBar?.mesh) scene.add(enemy.hpBar.mesh);
         enemies.push(enemy); registerEnemy(enemy);
