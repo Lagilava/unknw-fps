@@ -20,6 +20,7 @@ import {
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
+import { initPhysics } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -19724,6 +19725,10 @@ async function spawnEnemies(wave, options: any = {}) {
   async function bootGame() {
     try {
       setLoadingProgress("Initializing renderer", 0.04);
+      // Phase 3: bring up the Rapier physics runtime (WASM). Foundation only —
+      // the world exists but does not drive gameplay yet (collision still runs
+      // through wallAtWorldRadius). Init here so the WASM load is part of boot.
+      await initPhysics();
       await preloadStartupFileCache();
       await loadCoreModelAssets();
       await preloadStartupTextureAssets();

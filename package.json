@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
     "express": "^4.22.2",
     "miniplex": "^2.0.0",
     "peer": "^1.0.2",
