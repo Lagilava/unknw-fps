@@ -8949,7 +8949,7 @@ function createLightningEffect() {
   }
 
   function ensureAllLiveEnemiesVisible() {
-    for (const enemy of enemies) ensureLiveEnemyVisible(enemy);
+    for (const enemy of ecsEnemies) ensureLiveEnemyVisible(enemy);
   }
 
   function createEnemy(type, pos, wave, hpScale) {
@@ -9325,7 +9325,7 @@ async function spawnEnemies(wave, options: any = {}) {
     }
 
     await spawnEnemies(1, { smooth: false, minDistance: 8, preferVisible: true });
-    for (const enemy of enemies) {
+    for (const enemy of ecsEnemies) {
       enemy.mesh.visible = true;
       enemy.mesh.userData.mixer?.update?.(0.016);
       const ghost = enemy.mesh.userData.clonedGhost;
@@ -9334,7 +9334,7 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     warmObjectTextures(scene);
     compileSceneForCurrentRenderer();
-    for (const enemy of enemies) {
+    for (const enemy of ecsEnemies) {
       enemy.mesh.visible = false;
       if (enemy.hpBar?.mesh) enemy.hpBar.mesh.visible = false;
     }
@@ -10329,8 +10329,8 @@ async function spawnEnemies(wave, options: any = {}) {
 
     let bestEnemy = null;
     let bestScore = 0;
-    for (const enemy of enemies) {
-      if (!enemy.alive || !enemy.aggroed) continue;
+    for (const enemy of liveEnemies) {
+      if (!enemy.aggroed) continue;
       const dist = Math.hypot(enemy.mesh.position.x - yaw.position.x, enemy.mesh.position.z - yaw.position.z);
       const auraBonus = enemy.aura ? 0.35 : 0;
       const score = Math.max(0, 1 - dist / 26) + auraBonus + enemy.attackPulse * 0.4;
@@ -13469,8 +13469,7 @@ async function spawnEnemies(wave, options: any = {}) {
       let bestEnemyDist = Infinity;
       let bestEnemyPart = null;
       const pierceHits = specPhys.pierce ? [] : null; // railgun: every enemy on the line
-      for (const enemy of enemies) {
-        if (!enemy.alive) continue;
+      for (const enemy of liveEnemies) {
         const d = getEnemyShotDistance(enemy, raycaster.ray.origin, raycaster.ray.direction, shotRange, currentGun, shotHitInfoTmp);
         if (pierceHits && d < wallDist && d <= shotRange) {
           pierceHits.push({ enemy, part: shotHitInfoTmp.part });
@@ -13648,6 +13647,10 @@ async function spawnEnemies(wave, options: any = {}) {
     let hitAny = false;
     let best = null;
     let bestDist = Infinity;
+    // Stays on enemies[] (not the liveEnemies archetype): this loop kills enemies
+    // (setEnemyAlive false) mid-iteration, which removes them from the live
+    // archetype and would corrupt archetype iteration. The array isn't spliced on
+    // death, so iterating it with the .alive guard is safe.
     for (const enemy of enemies) {
       if (!enemy.alive) continue;
       getEnemyHitCenter(enemy, enemyHitCenterTmp);
@@ -13692,6 +13695,8 @@ async function spawnEnemies(wave, options: any = {}) {
         spawnImpactParticles(enemyHitCenterTmp, impactNormalTmp, 3);
       }
       // Resolve deaths after applying all damage so multi-kills register.
+      // Stays on enemies[] (not the live archetype): killEnemy() below removes the
+      // entity from the live archetype mid-iteration — iterate the array instead.
       for (const enemy of enemies) {
         if (enemy.alive && enemy.hp <= 0) {
           enemy.killHeadshot = false;
@@ -14414,8 +14419,8 @@ async function spawnEnemies(wave, options: any = {}) {
     let n = 0;
     let cx = 0, cz = 0;
     const collect = [];
-    for (const enemy of enemies) {
-      if (!enemy.alive || !enemy.mesh) continue;
+    for (const enemy of liveEnemies) {
+      if (!enemy.mesh) continue;
       collect.push(enemy.mesh.position);
       cx += enemy.mesh.position.x; cz += enemy.mesh.position.z; n++;
     }
@@ -14782,8 +14787,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const lowEndWaveBudget = lowEndMode && game.wave >= 6 ? 3 : lowEndMode ? 2 : 1;
     let enemyIndex = 0;
 
-    for (const enemy of enemies) {
-      if (!enemy.alive) continue;
+    for (const enemy of liveEnemies) {
       ensureLiveEnemyVisible(enemy);
       const farEnemy = lowEndMode && game.wave >= 6 && enemyIndex > 2;
       enemyIndex++;
@@ -14968,8 +14972,8 @@ async function spawnEnemies(wave, options: any = {}) {
         enemy.lastSeenTimer = 3.2;
         if (dist < enemy.aggroRange) enemy.aggroed = true;
       } else if (!enemy.aggroed) {
-        for (const ally of enemies) {
-          if (ally === enemy || !ally.alive || !ally.aggroed) continue;
+        for (const ally of liveEnemies) {
+          if (ally === enemy || !ally.aggroed) continue;
           if (Math.hypot(ally.mesh.position.x - enemy.mesh.position.x, ally.mesh.position.z - enemy.mesh.position.z) > 13) continue;
           enemy.aggroed = true;
           enemy.lastSeenX = ally.lastSeenX ?? px;
@@ -17923,8 +17927,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (now - lastEnemyBroadcast < ENEMY_BROADCAST_INTERVAL) return;
     lastEnemyBroadcast = now;
     const list = [];
-    for (const e of enemies) {
-      if (!e.alive) continue;
+    for (const e of liveEnemies) {
       ensureCoopEnemyNetId(e);
       const ty = ENEMY_TYPE_INDEX.get(e.typeName) ?? 0;
       list.push({
@@ -18795,8 +18798,7 @@ async function spawnEnemies(wave, options: any = {}) {
       getNearestEnemy: () => {
         let best = null;
         let bestDist = Infinity;
-        for (const enemy of enemies) {
-          if (!enemy.alive) continue;
+        for (const enemy of liveEnemies) {
           const d = Math.hypot(enemy.mesh.position.x - yaw.position.x, enemy.mesh.position.z - yaw.position.z);
           if (d < bestDist) {
             bestDist = d;
@@ -18850,8 +18852,7 @@ async function spawnEnemies(wave, options: any = {}) {
       aimAtNearest: () => {
         let best = null;
         let bestDist = Infinity;
-        for (const enemy of enemies) {
-          if (!enemy.alive) continue;
+        for (const enemy of liveEnemies) {
           const d = Math.hypot(enemy.mesh.position.x - yaw.position.x, enemy.mesh.position.z - yaw.position.z);
           if (d < bestDist) { bestDist = d; best = enemy; }
         }
@@ -18900,8 +18901,7 @@ async function spawnEnemies(wave, options: any = {}) {
         let best = null;
         let bestDist = Infinity;
         camera.getWorldPosition(cameraWorldTmp);
-        for (const enemy of enemies) {
-          if (!enemy.alive) continue;
+        for (const enemy of liveEnemies) {
           const d = getEnemyHitCenter(enemy, enemyHitCenterTmp).distanceTo(cameraWorldTmp);
           if (d < bestDist) { bestDist = d; best = enemy; }
         }
