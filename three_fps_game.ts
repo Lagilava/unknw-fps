@@ -1010,6 +1010,13 @@ declare module "three" {
   // Phase 3 showcase: physics-driven debris burst on enemy death (Rapier dynamic
   // bodies rendered by one InstancedMesh — 1 draw call, no lights). Set false off.
   const PHYSICS_DEBRIS = true;
+  // Per-weapon shell-casing size (scale on the 0.16 debris cube). Smaller = tighter
+  // brass; shotgun/sniper eject visibly bigger shells than pistol/SMG.
+  const CASING_SCALES = {
+    [GUNS.PISTOL]: 0.13, [GUNS.SMG]: 0.12, [GUNS.AKIMBO]: 0.12,
+    [GUNS.RIFLE]: 0.16, [GUNS.DMR]: 0.19, [GUNS.SNIPER]: 0.24,
+    [GUNS.SHOTGUN]: 0.26, [GUNS.FLAK]: 0.24, [GUNS.LMG]: 0.20, [GUNS.RAILGUN]: 0.22,
+  };
   // Scale applied to the head bone to hide it in unified FP (the eye camera sits
   // inside the head). Skinned meshes ignore bone .visible, so we collapse the head
   // bone to a near-zero point instead. Re-applied every frame in applyViewModeVisibility.
@@ -13388,13 +13395,15 @@ async function spawnEnemies(wave, options: any = {}) {
     player.shotsFired++;
     lightingState.shootFlash = 1;
     // Phase 3: eject a physics shell casing from the gun's side on each shot.
+    // Size varies by weapon (pistol/SMG tiny brass, shotgun/sniper big shells).
     if (PHYSICS_DEBRIS && physicsDebrisMesh) {
       const _g = thirdPerson.weapon?.gun;
       if (_g) _g.getWorldPosition(_casingPos); else camera.getWorldPosition(_casingPos);
       const _ry = yaw.rotation.y, _rx = Math.cos(_ry), _rz = -Math.sin(_ry); // world right
       const _spd = 2 + Math.random() * 1.2;
       spawnCasing(_casingPos.x, _casingPos.y + 0.05, _casingPos.z,
-        _rx * _spd + (Math.random() - 0.5) * 0.8, 1.8 + Math.random(), _rz * _spd + (Math.random() - 0.5) * 0.8);
+        _rx * _spd + (Math.random() - 0.5) * 0.8, 1.8 + Math.random(), _rz * _spd + (Math.random() - 0.5) * 0.8,
+        CASING_SCALES[currentGun] ?? 0.16);
     }
 
     const burstActive = weaponAnim.recoilBurstTimer > 0;
@@ -18553,6 +18562,8 @@ async function spawnEnemies(wave, options: any = {}) {
   const GRENADE_FUSE = 1.6;      // s from throw to detonation
   const GRENADE_RADIUS = 7.5;    // world units
   const GRENADE_DAMAGE = 1200;   // at the centre, linear falloff to the edge
+  const GRENADE_KNOCKBACK = 18;  // blast impulse at the centre (enemies + player)
+  const GRENADE_PLAYER_DAMAGE = 85; // self-damage at the centre (realistic)
   const GRENADE_THROW_SPEED = 15;
   const GRENADE_COOLDOWN = 1.1;  // s between throws
   let grenadeMesh = null;
@@ -18639,25 +18650,51 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function explodeGrenade(x, y, z) {
-    // Radius damage via the ECS live-enemy archetype. Snapshot first: killEnemy
-    // removes entities from the archetype, so we must not mutate it mid-iteration.
+    // Radius damage + knockback via the ECS live-enemy archetype. Snapshot first:
+    // killEnemy removes entities from the archetype, so we must not mutate it
+    // mid-iteration.
     const targets = [];
     for (const enemy of liveEnemies) {
       if (!enemy.mesh) continue;
       const dx = enemy.mesh.position.x - x, dz = enemy.mesh.position.z - z;
       const dist = Math.hypot(dx, dz);
-      if (dist <= GRENADE_RADIUS) targets.push({ enemy, dist });
+      if (dist <= GRENADE_RADIUS) targets.push({ enemy, dist, dx, dz });
     }
-    for (const { enemy, dist } of targets) {
-      const dmg = GRENADE_DAMAGE * (1 - dist / GRENADE_RADIUS);
-      enemy.hp -= dmg;
+    for (const { enemy, dist, dx, dz } of targets) {
+      const falloff = 1 - dist / GRENADE_RADIUS;
+      // Blast knockback away from the centre (reuses the hit-knock system).
+      const inv = dist > 0.001 ? 1 / dist : 0;
+      const nx = inv ? dx * inv : (Math.random() - 0.5);
+      const nz = inv ? dz * inv : (Math.random() - 0.5);
+      const push = GRENADE_KNOCKBACK * falloff;
+      enemy.hitKnockX = (enemy.hitKnockX || 0) + nx * push;
+      enemy.hitKnockZ = (enemy.hitKnockZ || 0) + nz * push;
+      enemy.hitStagger = Math.max(enemy.hitStagger || 0, 0.55 * falloff);
+      enemy.hp -= GRENADE_DAMAGE * falloff;
       enemy.aggroed = true;
       if (enemy.hp <= 0 && enemy.alive) killEnemy(enemy);
     }
-    // Feel: fireball flash + shockwave ring + fiery debris + strong shake + boom.
+    // Self-damage + knockback: a grenade hurts YOU too (realistic). The upward pop
+    // + airborne flag mean the movement damping doesn't immediately eat the shove.
+    const pdx = yaw.position.x - x, pdz = yaw.position.z - z;
+    const pdist = Math.hypot(pdx, pdz);
+    if (pdist <= GRENADE_RADIUS) {
+      const falloff = 1 - pdist / GRENADE_RADIUS;
+      const inv = pdist > 0.001 ? 1 / pdist : 0;
+      const nx = inv ? pdx * inv : 0, nz = inv ? pdz * inv : 0;
+      const push = GRENADE_KNOCKBACK * 0.7 * falloff;
+      player.velX = (player.velX || 0) + nx * push;
+      player.velZ = (player.velZ || 0) + nz * push;
+      player.jumpVel = Math.max(player.jumpVel || 0, 3.6 * falloff);
+      player.grounded = false;
+      const died = damagePlayer(GRENADE_PLAYER_DAMAGE * falloff);
+      cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.7 * falloff);
+      showDamageFlash();
+      sfxDamage();
+      if (died) endGame("dead");
+    }
+    // Feel: fireball flash + shockwave ring + strong shake + boom.
     spawnExplosionFlash(x, y, z);
-    spawnDebrisBurst(x, y, z, 12, 0xff7a1a, 1.6);
-    spawnDebrisBurst(x, y, z, 6, 0xffd050, 1.0);
     cameraFX.shake = Math.min(1.5, cameraFX.shake + 1.25);
     playEventSound("explosion", { volume: 0.95 });
   }

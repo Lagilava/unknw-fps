@@ -23,5 +23,5 @@ test("firing ejects brass physics shell casings", async ({ page }) => {
   console.log("CASINGS", JSON.stringify(s));
   expect(s.active).toBeGreaterThan(0);              // casings ejected on fire
   expect(s.sample.color).toBe(0xc9a227);            // brass
-  expect(s.sample.scale).toBeLessThan(0.5);         // small (casing-sized)
+  expect(s.sample.scale).toBeLessThan(0.18);        // small, pistol-sized (0.13)
 });

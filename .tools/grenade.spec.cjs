@@ -29,4 +29,15 @@ test("grenade: physics throw + fuse detonation + AoE damage via ECS", async ({ p
   const after = await page.evaluate(() => ({ n: window.__rbTest.getEnemyDebug().length, kills: window.__rbTest.getKills() }));
   console.log("DAMAGE", JSON.stringify({ nBefore: before.n, nAfter: after.n, killsBefore: before.kills, killsAfter: after.kills }));
   expect(after.kills).toBeGreaterThan(before.kills); // a direct hit killed at least one enemy
+
+  // --- Self-damage + knockback: detonate at the players feet (god-mode OFF) ---
+  await page.evaluate(() => window.__rbTest.setUnlimitedHealth(false));
+  const p0 = await page.evaluate(() => ({ hp: window.__rbTest.getDebugState().hp, pos: window.__rbTest.getPlayerPosition() }));
+  await page.evaluate((p) => window.__rbTest.detonateGrenadeAt(p.x + 2, p.y, p.z), p0.pos); // 2u to the side
+  await page.waitForTimeout(200);
+  const p1 = await page.evaluate(() => ({ hp: window.__rbTest.getDebugState().hp, pos: window.__rbTest.getPlayerPosition() }));
+  const shoved = Math.hypot(p1.pos.x - p0.pos.x, p1.pos.z - p0.pos.z);
+  console.log("SELF", JSON.stringify({ hpBefore: p0.hp, hpAfter: p1.hp, shoved: +shoved.toFixed(3) }));
+  expect(p1.hp).toBeLessThan(p0.hp);   // grenade hurt the player (realistic self-damage)
+  expect(shoved).toBeGreaterThan(0.05); // and shoved them (knockback)
 });
