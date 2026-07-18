@@ -18551,8 +18551,8 @@ async function spawnEnemies(wave, options: any = {}) {
 
   // ── Grenades (physics projectiles) ─────────────────────────────────────────
   const GRENADE_FUSE = 1.6;      // s from throw to detonation
-  const GRENADE_RADIUS = 6.5;    // world units
-  const GRENADE_DAMAGE = 260;    // at the centre, linear falloff to the edge
+  const GRENADE_RADIUS = 7.5;    // world units
+  const GRENADE_DAMAGE = 1200;   // at the centre, linear falloff to the edge
   const GRENADE_THROW_SPEED = 15;
   const GRENADE_COOLDOWN = 1.1;  // s between throws
   let grenadeMesh = null;
@@ -18565,6 +18565,7 @@ async function spawnEnemies(wave, options: any = {}) {
   function initGrenadeSystem() {
     if (grenadeMesh) return;
     initGrenadePool();
+    initExplosionPool();
     const geo = new THREE.SphereGeometry(0.14, 12, 10);
     const mat = new THREE.MeshStandardMaterial({ color: 0x2f3a34, roughness: 0.5, metalness: 0.55, emissive: 0x1a2f22, emissiveIntensity: 0.4 });
     grenadeMesh = new THREE.InstancedMesh(geo, mat, GRENADE_POOL_SIZE);
@@ -18592,6 +18593,51 @@ async function spawnEnemies(wave, options: any = {}) {
     playEventSound("equip_light", { volume: 0.4, rate: 1.5 }); // soft throw click
   }
 
+  // Explosion flash pool: additive fireball + ground shockwave ring. Reads as a
+  // bright light burst but uses NO real lights (which would relink every shader —
+  // see the light-count invariant), just transparent additive meshes that only
+  // draw while visible. Each has its own material so opacities are independent.
+  const EXPLOSION_POOL = 5;
+  const explosionFlashes = []; // { ball, ring, life, maxLife }
+  function initExplosionPool() {
+    if (explosionFlashes.length) return;
+    const ballGeo = new THREE.SphereGeometry(1, 16, 12);
+    const ringGeo = new THREE.RingGeometry(0.82, 1, 40);
+    for (let i = 0; i < EXPLOSION_POOL; i++) {
+      const ball = new THREE.Mesh(ballGeo, new THREE.MeshBasicMaterial({ color: 0xffb552, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2; // lay flat
+      ball.visible = false; ring.visible = false;
+      ball.frustumCulled = false; ring.frustumCulled = false;
+      scene.add(ball); scene.add(ring);
+      explosionFlashes.push({ ball, ring, life: 0, maxLife: 0.42 });
+    }
+  }
+  function spawnExplosionFlash(x, y, z) {
+    for (const fx of explosionFlashes) {
+      if (fx.life > 0) continue;
+      fx.life = fx.maxLife;
+      fx.ball.position.set(x, y, z); fx.ball.visible = true;
+      fx.ring.position.set(x, 0.12, z); fx.ring.visible = true;
+      return;
+    }
+  }
+  function updateExplosionFlashes(dt) {
+    for (const fx of explosionFlashes) {
+      if (fx.life <= 0) continue;
+      fx.life -= dt;
+      if (fx.life <= 0) { fx.ball.visible = false; fx.ring.visible = false; continue; }
+      const t = 1 - fx.life / fx.maxLife;              // 0 -> 1
+      const eo = 1 - (1 - t) * (1 - t);                 // ease-out
+      const ballS = 0.8 + eo * GRENADE_RADIUS * 0.85;
+      fx.ball.scale.setScalar(ballS);
+      fx.ball.material.opacity = (1 - t) * 0.9;
+      const ringS = 0.8 + eo * GRENADE_RADIUS * 1.15;
+      fx.ring.scale.set(ringS, ringS, ringS);
+      fx.ring.material.opacity = (1 - t) * 0.7;
+    }
+  }
+
   function explodeGrenade(x, y, z) {
     // Radius damage via the ECS live-enemy archetype. Snapshot first: killEnemy
     // removes entities from the archetype, so we must not mutate it mid-iteration.
@@ -18608,11 +18654,12 @@ async function spawnEnemies(wave, options: any = {}) {
       enemy.aggroed = true;
       if (enemy.hp <= 0 && enemy.alive) killEnemy(enemy);
     }
-    // Feel: a fiery debris burst + strong shake + boom.
+    // Feel: fireball flash + shockwave ring + fiery debris + strong shake + boom.
+    spawnExplosionFlash(x, y, z);
     spawnDebrisBurst(x, y, z, 12, 0xff7a1a, 1.6);
     spawnDebrisBurst(x, y, z, 6, 0xffd050, 1.0);
-    cameraFX.shake = Math.min(1.4, cameraFX.shake + 1.1);
-    playEventSound("explosion", { volume: 0.9 });
+    cameraFX.shake = Math.min(1.5, cameraFX.shake + 1.25);
+    playEventSound("explosion", { volume: 0.95 });
   }
 
   function updateGrenades(dt) {
@@ -18662,6 +18709,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updatePackUpgradeEffects(dt);
       updatePhysicsDebris(dt);
       updateGrenades(dt);
+      updateExplosionFlashes(dt);
 
       if (game.state === "playing") {
         if (mouse.down && gunState.fireCooldown <= 0 && !cutscene.active) fireGun();

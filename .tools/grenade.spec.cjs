@@ -21,17 +21,12 @@ test("grenade: physics throw + fuse detonation + AoE damage via ECS", async ({ p
   // --- AoE damage via ECS: detonate on the enemy centroid, total enemy hp drops ---
   const before = await page.evaluate(() => {
     const es = window.__rbTest.getEnemyDebug();
-    const c = es.reduce((a, e) => ({ x: a.x + e.x, y: a.y + e.y, z: a.z + e.z }), { x: 0, y: 0, z: 0 });
-    const n = es.length || 1;
-    return { totalHp: es.reduce((a, e) => a + e.hp, 0), n: es.length, cx: c.x / n, cy: c.y / n, cz: c.z / n };
+    return { n: es.length, kills: window.__rbTest.getKills(), target: es[0] };
   });
-  await page.evaluate(({ x, y, z }) => window.__rbTest.detonateGrenadeAt(x, y + 1, z), { x: before.cx, y: before.cy, z: before.cz });
-  await page.waitForTimeout(120);
-  const after = await page.evaluate(() => {
-    const es = window.__rbTest.getEnemyDebug();
-    return { totalHp: es.reduce((a, e) => a + e.hp, 0), n: es.length, kills: window.__rbTest.getKills() };
-  });
-  console.log("HP", JSON.stringify({ before: before.totalHp, after: after.totalHp, nBefore: before.n, nAfter: after.n, kills: after.kills }));
-  // damage landed: either total hp fell or some enemies died
-  expect(after.totalHp < before.totalHp || after.n < before.n).toBe(true);
+  // Detonate directly on an enemy: a centre hit (1200) must KILL an 820-HP drone.
+  await page.evaluate((t) => window.__rbTest.detonateGrenadeAt(t.x, t.y + 0.8, t.z), before.target);
+  await page.waitForTimeout(150);
+  const after = await page.evaluate(() => ({ n: window.__rbTest.getEnemyDebug().length, kills: window.__rbTest.getKills() }));
+  console.log("DAMAGE", JSON.stringify({ nBefore: before.n, nAfter: after.n, killsBefore: before.kills, killsAfter: after.kills }));
+  expect(after.kills).toBeGreaterThan(before.kills); // a direct hit killed at least one enemy
 });
