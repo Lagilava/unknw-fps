@@ -20,7 +20,8 @@ import {
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
-import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt } from "./modules/physics";
+import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt,
+         initDebrisPool, spawnDebrisBurst, updateDebris, forEachDebris, DEBRIS_POOL_SIZE } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -1005,6 +1006,9 @@ declare module "three" {
   const PLAYER_PHYSICS_COLLISION = true;
   // Same for enemy movement collision (enemyBlockedAt). Set false to revert.
   const ENEMY_PHYSICS_COLLISION = true;
+  // Phase 3 showcase: physics-driven debris burst on enemy death (Rapier dynamic
+  // bodies rendered by one InstancedMesh — 1 draw call, no lights). Set false off.
+  const PHYSICS_DEBRIS = true;
   // Scale applied to the head bone to hide it in unified FP (the eye camera sits
   // inside the head). Skinned meshes ignore bone .visible, so we collapse the head
   // bone to a near-zero point instead. Re-applied every frame in applyViewModeVisibility.
@@ -13729,6 +13733,8 @@ async function spawnEnemies(wave, options: any = {}) {
     if (enemy.blinkRing) { fadeTelegraphRing(enemy.blinkRing); enemy.blinkRing = null; }
     if (enemy.barrageQueue) { for (const s of enemy.barrageQueue) fadeTelegraphRing(s.ring); enemy.barrageQueue.length = 0; }
     enemy.barrageActive = false;
+    // Phase 3 showcase: fling a physics-debris burst from the death point.
+    if (PHYSICS_DEBRIS) spawnDebrisBurst(enemy.mesh.position.x, enemy.mesh.position.y + 0.9, enemy.mesh.position.z, 6);
     enemy.mesh.visible = false;
     enemyRemovalQueue.push(enemy);
     game.killed++;
@@ -18476,6 +18482,41 @@ async function spawnEnemies(wave, options: any = {}) {
     return counts;
   };
 
+  // ── Physics debris (Phase 3 showcase) ──────────────────────────────────────
+  // One InstancedMesh renders the whole Rapier debris pool (1 draw call, no
+  // lights). Inactive slots are scaled to 0. Bodies are driven by updateDebris.
+  let physicsDebrisMesh = null;
+  const _dbP = new THREE.Vector3(), _dbQ = new THREE.Quaternion(), _dbM = new THREE.Matrix4();
+  const _dbScaleOn = new THREE.Vector3(1, 1, 1), _dbScaleOff = new THREE.Vector3(0, 0, 0);
+  const _dbHidden = new THREE.Vector3(0, -1000, 0);
+  function initPhysicsDebrisMesh() {
+    if (!PHYSICS_DEBRIS || physicsDebrisMesh) return;
+    initDebrisPool();
+    const geo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x5b6570, roughness: 0.72, metalness: 0.28 });
+    physicsDebrisMesh = new THREE.InstancedMesh(geo, mat, DEBRIS_POOL_SIZE);
+    physicsDebrisMesh.frustumCulled = false;
+    physicsDebrisMesh.castShadow = false;
+    physicsDebrisMesh.receiveShadow = false;
+    physicsDebrisMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < DEBRIS_POOL_SIZE; i++) {
+      _dbM.compose(_dbHidden, _dbQ.identity(), _dbScaleOff);
+      physicsDebrisMesh.setMatrixAt(i, _dbM);
+    }
+    physicsDebrisMesh.instanceMatrix.needsUpdate = true;
+    scene.add(physicsDebrisMesh);
+  }
+  function updatePhysicsDebris(dt) {
+    if (!PHYSICS_DEBRIS || !physicsDebrisMesh) return;
+    updateDebris(dt);
+    forEachDebris((i, t, r) => {
+      if (t) { _dbP.set(t.x, t.y, t.z); _dbQ.set(r.x, r.y, r.z, r.w); _dbM.compose(_dbP, _dbQ, _dbScaleOn); }
+      else { _dbM.compose(_dbHidden, _dbQ.identity(), _dbScaleOff); }
+      physicsDebrisMesh.setMatrixAt(i, _dbM);
+    });
+    physicsDebrisMesh.instanceMatrix.needsUpdate = true;
+  }
+
   function animate(now) {
     // Skip rendering while the WebGL context is lost (handler will resume us).
     if (canvas.parentElement && document.getElementById("rb-context-lost-msg")) {
@@ -18499,6 +18540,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updateLightningEffects(dt);
       updateTelegraphRings(dt);
       updatePackUpgradeEffects(dt);
+      updatePhysicsDebris(dt);
 
       if (game.state === "playing") {
         if (mouse.down && gunState.fireCooldown <= 0 && !cutscene.active) fireGun();
@@ -19786,6 +19828,9 @@ async function spawnEnemies(wave, options: any = {}) {
       // Phase 3: mirror the exterior AABB footprints (buildings, boundary walls,
       // cars, statue) into Rapier — after landmarks so the statue is included.
       try { buildExteriorColliders(window.__extMapFootprints); } catch (e) { console.warn("physics ext colliders:", e); }
+      // Build the physics-debris InstancedMesh now so its shader warms during
+      // compileStartupScene (avoids a first-kill hitch).
+      try { initPhysicsDebrisMesh(); } catch (e) { console.warn("physics debris mesh:", e); }
       warmObjectTextures(scene);
       // Bake the static sun shadow map now that the level, buildings and cover all exist.
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;

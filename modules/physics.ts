@@ -99,12 +99,92 @@ export function physicsBlocksAt(x: number, z: number, radius: number, y = 1): bo
   return world.intersectionWithShape({ x, y, z }, _identQuat, shape) !== null;
 }
 
+// ── Physics debris (Phase 3 showcase) ────────────────────────────────────────
+// A fixed pool of small dynamic bodies. On enemy death a burst is flung from the
+// death point; they bounce off the static wall/ground colliders and are recycled
+// after a short lifetime. Rendered by ONE InstancedMesh on the game side (1 draw
+// call, no lights) — cheap and additive.
+export const DEBRIS_POOL_SIZE = 48;
+interface Debris { body: any; life: number; }
+const debrisPool: Debris[] = [];
+let debrisReady = false;
+const DEBRIS_MAX_LIFE = 2.6;
+
+export function initDebrisPool(): void {
+  if (!world || debrisReady) return;
+  for (let i = 0; i < DEBRIS_POOL_SIZE; i++) {
+    const body = world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(0, -1000, 0)
+        .setLinearDamping(0.15)
+        .setAngularDamping(0.25),
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(0.08, 0.08, 0.08).setRestitution(0.4).setFriction(0.9),
+      body,
+    );
+    body.sleep();
+    debrisPool.push({ body, life: 0 });
+  }
+  debrisReady = true;
+}
+
+/** Fling a burst of debris from (x, y, z). No-op until the pool is built. */
+export function spawnDebrisBurst(x: number, y: number, z: number, n = 6): void {
+  if (!debrisReady) return;
+  let spawned = 0;
+  for (const d of debrisPool) {
+    if (spawned >= n) break;
+    if (d.life > 0) continue;
+    d.life = DEBRIS_MAX_LIFE * (0.7 + Math.random() * 0.6);
+    d.body.setTranslation({ x: x + (Math.random() - 0.5) * 0.3, y: y + Math.random() * 0.25, z: z + (Math.random() - 0.5) * 0.3 }, true);
+    d.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, false);
+    const sp = 2.4 + Math.random() * 3.2;
+    d.body.setLinvel({ x: (Math.random() - 0.5) * sp, y: 2.6 + Math.random() * 3, z: (Math.random() - 0.5) * sp }, true);
+    d.body.setAngvel({ x: (Math.random() - 0.5) * 12, y: (Math.random() - 0.5) * 12, z: (Math.random() - 0.5) * 12 }, true);
+    d.body.wakeUp();
+    spawned++;
+  }
+}
+
+/** Step the world (drives debris) and expire finished debris. Cheap when idle
+ *  (static + sleeping bodies). Call once per frame. */
+export function updateDebris(dt: number): void {
+  if (!world) return;
+  world.timestep = Math.min(dt, 1 / 30);
+  world.step();
+  for (const d of debrisPool) {
+    if (d.life <= 0) continue;
+    d.life -= dt;
+    if (d.life <= 0) {
+      d.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+      d.body.setTranslation({ x: 0, y: -1000, z: 0 }, false);
+      d.body.sleep();
+    }
+  }
+}
+
+/** Visit each pool slot with its live transform (or null if inactive) so the
+ *  renderer can drive an InstancedMesh. */
+export function forEachDebris(cb: (i: number, t: any, r: any) => void): void {
+  for (let i = 0; i < debrisPool.length; i++) {
+    const d = debrisPool[i];
+    if (d.life <= 0) cb(i, null, null);
+    else cb(i, d.body.translation(), d.body.rotation());
+  }
+}
+
 /** Initialise the Rapier WASM runtime + a physics world (idempotent, async). */
 export async function initPhysics(gravityY = -9.81): Promise<any> {
   if (ready) return world;
   await RAPIER.init(); // loads the inlined WASM runtime
   world = new RAPIER.World({ x: 0, y: gravityY, z: 0 });
   ready = true;
+
+  // Ground plane so debris rests on the floor (top at y=0). Sits below the y>=~0.5
+  // heights that physicsBlocksAt queries at, so it never affects wall collision.
+  const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
+  world.createCollider(RAPIER.ColliderDesc.cuboid(400, 0.5, 400).setFriction(0.9), ground);
 
   if (typeof window !== "undefined") {
     (window as any).__physics = {
@@ -114,6 +194,8 @@ export async function initPhysics(gravityY = -9.81): Promise<any> {
       bodyCount: () => (world ? world.bodies.len() : 0),
       staticColliderCount: () => staticColliderCount,
       blocksAt: (x: number, z: number, r = 0.32, y = 1) => physicsBlocksAt(x, z, r, y),
+      debrisActive: () => { let n = 0; forEachDebris((_i, t) => { if (t) n++; }); return n; },
+      debrisSample: () => { let s: any = null; forEachDebris((_i, t) => { if (t && !s) s = { x: t.x, y: t.y, z: t.z }; }); return s; },
       // Is world point (x, y, z) inside any collider? Used to verify the static
       // wall colliders line up with the MAP grid (compare against wallAtWorld).
       probe: (x: number, z: number, y = 1) => {
