@@ -151,6 +151,25 @@ export function spawnDebrisBurst(x: number, y: number, z: number, n = 6, color =
   }
 }
 
+const CASING_COLOR = 0xc9a227; // brass
+/** Eject a single spent shell casing at (x,y,z) with velocity (vx,vy,vz). Reuses
+ *  the debris pool/mesh (a small brass piece with a short life). */
+export function spawnCasing(x: number, y: number, z: number, vx: number, vy: number, vz: number): void {
+  if (!debrisReady) return;
+  for (const d of debrisPool) {
+    if (d.life > 0) continue;
+    d.color = CASING_COLOR;
+    d.scale = 0.34;
+    d.life = 1.7 + Math.random() * 0.5; // short — recycles fast so it never starves death debris
+    d.body.setTranslation({ x, y, z }, true);
+    d.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, false);
+    d.body.setLinvel({ x: vx, y: vy, z: vz }, true);
+    d.body.setAngvel({ x: (Math.random() - 0.5) * 22, y: (Math.random() - 0.5) * 22, z: (Math.random() - 0.5) * 22 }, true);
+    d.body.wakeUp();
+    return;
+  }
+}
+
 /** Step the world (drives debris) and expire finished debris. Cheap when idle
  *  (static + sleeping bodies). Call once per frame. */
 export function updateDebris(dt: number): void {

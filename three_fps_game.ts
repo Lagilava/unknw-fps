@@ -21,7 +21,7 @@ import {
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
 import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt,
-         initDebrisPool, spawnDebrisBurst, updateDebris, forEachDebris, DEBRIS_POOL_SIZE } from "./modules/physics";
+         initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -13386,6 +13386,15 @@ async function spawnEnemies(wave, options: any = {}) {
     thirdPerson.fireTimer = Math.max(thirdPerson.fireTimer, 0.18);
     player.shotsFired++;
     lightingState.shootFlash = 1;
+    // Phase 3: eject a physics shell casing from the gun's side on each shot.
+    if (PHYSICS_DEBRIS && physicsDebrisMesh) {
+      const _g = thirdPerson.weapon?.gun;
+      if (_g) _g.getWorldPosition(_casingPos); else camera.getWorldPosition(_casingPos);
+      const _ry = yaw.rotation.y, _rx = Math.cos(_ry), _rz = -Math.sin(_ry); // world right
+      const _spd = 2 + Math.random() * 1.2;
+      spawnCasing(_casingPos.x, _casingPos.y + 0.05, _casingPos.z,
+        _rx * _spd + (Math.random() - 0.5) * 0.8, 1.8 + Math.random(), _rz * _spd + (Math.random() - 0.5) * 0.8);
+    }
 
     const burstActive = weaponAnim.recoilBurstTimer > 0;
     const burstIndex = burstActive ? weaponAnim.recoilBurst : 0;
@@ -18498,6 +18507,7 @@ async function spawnEnemies(wave, options: any = {}) {
   const _dbScaleV = new THREE.Vector3(1, 1, 1), _dbScaleOff = new THREE.Vector3(0, 0, 0);
   const _dbHidden = new THREE.Vector3(0, -1000, 0);
   const _dbColor = new THREE.Color();
+  const _casingPos = new THREE.Vector3();
   function initPhysicsDebrisMesh() {
     if (!PHYSICS_DEBRIS || physicsDebrisMesh) return;
     initDebrisPool();
