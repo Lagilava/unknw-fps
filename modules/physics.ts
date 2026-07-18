@@ -215,7 +215,7 @@ export function initGrenadePool(): void {
         .setLinearDamping(0.06).setAngularDamping(0.18),
     );
     world.createCollider(
-      RAPIER.ColliderDesc.ball(0.13).setRestitution(0.5).setFriction(0.55),
+      RAPIER.ColliderDesc.ball(0.06).setRestitution(0.42).setFriction(0.6),
       body,
     );
     body.sleep();
@@ -246,6 +246,12 @@ export function throwGrenade(x: number, y: number, z: number, vx: number, vy: nu
 export function grenadeTranslation(i: number): any {
   const g = grenadePool[i];
   return g && g.active ? g.body.translation() : null;
+}
+
+/** Current world rotation (quaternion) of grenade `i` — for the tumble. */
+export function grenadeRotation(i: number): any {
+  const g = grenadePool[i];
+  return g && g.active ? g.body.rotation() : null;
 }
 
 /** Park + sleep grenade `i` (called on detonation). */

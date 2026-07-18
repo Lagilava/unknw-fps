@@ -22,7 +22,7 @@ import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_con
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
 import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt,
          initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE,
-         initGrenadePool, throwGrenade, grenadeTranslation, despawnGrenade, GRENADE_POOL_SIZE } from "./modules/physics";
+         initGrenadePool, throwGrenade, grenadeTranslation, grenadeRotation, despawnGrenade, GRENADE_POOL_SIZE } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -18561,8 +18561,8 @@ async function spawnEnemies(wave, options: any = {}) {
   // ── Grenades (physics projectiles) ─────────────────────────────────────────
   const GRENADE_FUSE = 1.6;      // s from throw to detonation
   const GRENADE_RADIUS = 7.5;    // world units
-  const GRENADE_DAMAGE = 1200;   // at the centre, linear falloff to the edge
-  const GRENADE_KNOCKBACK = 18;  // blast impulse at the centre (enemies + player)
+  const GRENADE_DAMAGE = 800;    // at the centre, linear falloff to the edge
+  const GRENADE_KNOCKBACK = 22;  // blast impulse at the centre (enemies + player)
   const GRENADE_PLAYER_DAMAGE = 85; // self-damage at the centre (realistic)
   const GRENADE_THROW_SPEED = 15;
   const GRENADE_COOLDOWN = 1.1;  // s between throws
@@ -18573,12 +18573,27 @@ async function spawnEnemies(wave, options: any = {}) {
   const _grHidden = new THREE.Vector3(0, -1000, 0);
   const _grThrowDir = new THREE.Vector3();
 
+  function buildGrenadeGeometry() {
+    // Hand-sized frag: an ovoid body (~0.05 r, ~0.12 tall), a fuse cap on top, and
+    // a safety spoon down the side. Merged into ONE geometry so the InstancedMesh
+    // stays a single draw call. Falls back to a small sphere if merge is missing.
+    const body = new THREE.SphereGeometry(0.05, 14, 12); body.scale(1, 1.22, 1);
+    const cap = new THREE.CylinderGeometry(0.02, 0.026, 0.03, 12); cap.translate(0, 0.066, 0);
+    const neck = new THREE.CylinderGeometry(0.015, 0.015, 0.012, 10); neck.translate(0, 0.05, 0);
+    const spoon = new THREE.BoxGeometry(0.009, 0.055, 0.016); spoon.translate(0.031, 0.05, 0);
+    try {
+      const merged = mergeGeometries([body, cap, neck, spoon], false);
+      if (merged) { [cap, neck, spoon].forEach(g => g.dispose()); return merged; }
+    } catch (e) { /* fall through */ }
+    return body;
+  }
+
   function initGrenadeSystem() {
     if (grenadeMesh) return;
     initGrenadePool();
     initExplosionPool();
-    const geo = new THREE.SphereGeometry(0.14, 12, 10);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x2f3a34, roughness: 0.5, metalness: 0.55, emissive: 0x1a2f22, emissiveIntensity: 0.4 });
+    const geo = buildGrenadeGeometry();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x37432a, roughness: 0.82, metalness: 0.28, emissive: 0x0e160c, emissiveIntensity: 0.25 });
     grenadeMesh = new THREE.InstancedMesh(geo, mat, GRENADE_POOL_SIZE);
     grenadeMesh.frustumCulled = false;
     grenadeMesh.castShadow = false;
@@ -18714,7 +18729,9 @@ async function spawnEnemies(wave, options: any = {}) {
         activeGrenades.splice(i, 1);
       } else {
         _grP.set(t.x, t.y, t.z);
-        _grM.compose(_grP, _grQ.identity(), _grScaleOn);
+        const r = grenadeRotation(g.index);
+        if (r) _grQ.set(r.x, r.y, r.z, r.w); else _grQ.identity();
+        _grM.compose(_grP, _grQ, _grScaleOn);
         grenadeMesh.setMatrixAt(g.index, _grM);
       }
     }

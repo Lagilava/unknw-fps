@@ -21,14 +21,15 @@ test("grenade: physics throw + fuse detonation + AoE damage via ECS", async ({ p
   // --- AoE damage via ECS: detonate on the enemy centroid, total enemy hp drops ---
   const before = await page.evaluate(() => {
     const es = window.__rbTest.getEnemyDebug();
-    return { n: es.length, kills: window.__rbTest.getKills(), target: es[0] };
+    return { n: es.length, totalHp: es.reduce((a, e) => a + e.hp, 0), target: es[0] };
   });
-  // Detonate directly on an enemy: a centre hit (1200) must KILL an 820-HP drone.
+  // Detonate on an enemy: 800 centre dmg wont one-shot a full 820-HP drone (by
+  // design now) but must do heavy AoE damage across the cluster.
   await page.evaluate((t) => window.__rbTest.detonateGrenadeAt(t.x, t.y + 0.8, t.z), before.target);
   await page.waitForTimeout(150);
-  const after = await page.evaluate(() => ({ n: window.__rbTest.getEnemyDebug().length, kills: window.__rbTest.getKills() }));
-  console.log("DAMAGE", JSON.stringify({ nBefore: before.n, nAfter: after.n, killsBefore: before.kills, killsAfter: after.kills }));
-  expect(after.kills).toBeGreaterThan(before.kills); // a direct hit killed at least one enemy
+  const after = await page.evaluate(() => { const es = window.__rbTest.getEnemyDebug(); return { n: es.length, totalHp: es.reduce((a, e) => a + e.hp, 0), kills: window.__rbTest.getKills() }; });
+  console.log("DAMAGE", JSON.stringify({ nBefore: before.n, nAfter: after.n, hpDrop: +(before.totalHp - after.totalHp).toFixed(0), kills: after.kills }));
+  expect((before.totalHp - after.totalHp) > 400 || after.n < before.n).toBe(true); // heavy blast damage
 
   // --- Self-damage + knockback: detonate at the players feet (god-mode OFF) ---
   await page.evaluate(() => window.__rbTest.setUnlimitedHealth(false));
