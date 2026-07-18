@@ -20,7 +20,7 @@ import {
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
-import { initPhysics } from "./modules/physics";
+import { initPhysics, buildStaticWallColliders } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -19735,6 +19735,9 @@ async function spawnEnemies(wave, options: any = {}) {
 
       setLoadingProgress("Building breach room", 0.58);
       buildLevel(THREE, scene, renderer, wallMeshes);
+      // Phase 3: mirror the interior wall grid into the Rapier world as fixed
+      // colliders (additive — not yet queried for gameplay collision).
+      try { buildStaticWallColliders(window.RoomBreachEnvironment); } catch (e) { console.warn("physics colliders:", e); }
       if (window.buildExteriorPlayArea) {
         setLoadingProgress("Building exterior zone", 0.62);
         // Share wallMeshes so exterior surfaces receive bullet decals + enemy LOS

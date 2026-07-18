@@ -14,6 +14,49 @@ import RAPIER from "@dimforge/rapier3d-compat";
 
 let world: any = null;
 let ready = false;
+let staticColliderCount = 0;
+
+/**
+ * Build fixed wall colliders from the interior MAP grid. Additive foundation:
+ * the colliders exist in the Rapier world but nothing queries them for gameplay
+ * yet (player/enemy collision still runs through wallAtWorldRadius). Merges
+ * horizontal runs of `#` cells per row into single cuboids to keep the collider
+ * count low. `env` = window.RoomBreachEnvironment.
+ */
+export function buildStaticWallColliders(env: any): number {
+  if (!world || !env?.MAP) return 0;
+  const { MAP, MAP_W, MAP_H, CELL, WALL_H, mapToWorld } = env;
+  const hy = (WALL_H ?? 8) / 2;
+  const hz = CELL / 2;
+  let count = 0;
+  for (let my = 0; my < MAP_H; my++) {
+    let mx = 0;
+    while (mx < MAP_W) {
+      if (MAP[my][mx] === "#") {
+        let run = 1;
+        while (mx + run < MAP_W && MAP[my][mx + run] === "#") run++;
+        const a = mapToWorld(mx, my);
+        const b = mapToWorld(mx + run - 1, my);
+        const cx = (a.x + b.x) / 2;
+        const hx = (run * CELL) / 2;
+        const body = world.createRigidBody(
+          RAPIER.RigidBodyDesc.fixed().setTranslation(cx, hy, a.z),
+        );
+        world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz), body);
+        count++;
+        mx += run;
+      } else {
+        mx++;
+      }
+    }
+  }
+  staticColliderCount += count;
+  // Step once so Rapier builds its query pipeline / broad-phase for the new
+  // colliders — spatial queries (projectPoint, castRay) panic otherwise. All
+  // bodies here are fixed, so this doesn't move anything.
+  world.step();
+  return count;
+}
 
 /** Initialise the Rapier WASM runtime + a physics world (idempotent, async). */
 export async function initPhysics(gravityY = -9.81): Promise<any> {
@@ -28,6 +71,14 @@ export async function initPhysics(gravityY = -9.81): Promise<any> {
       world,
       ready: () => ready,
       bodyCount: () => (world ? world.bodies.len() : 0),
+      staticColliderCount: () => staticColliderCount,
+      // Is world point (x, y, z) inside any collider? Used to verify the static
+      // wall colliders line up with the MAP grid (compare against wallAtWorld).
+      probe: (x: number, z: number, y = 1) => {
+        if (!world) return false;
+        const proj = world.projectPoint({ x, y, z }, true);
+        return !!proj?.isInside;
+      },
       // Self-test: drop a dynamic body (with a collider, so it has mass) a few
       // steps and confirm gravity moved it. Proves the WASM runtime is live.
       selfTest: () => {
