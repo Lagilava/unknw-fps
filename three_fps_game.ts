@@ -4898,8 +4898,10 @@ function createLightningEffect() {
 
     for (const preview of loadoutPreviews) {
       resizeLoadoutPreview(preview);
-      preview.pivot.rotation.y = preview.offset + now * 0.00038;
-      preview.pivot.rotation.x = Math.sin(now * 0.0005 + preview.offset) * 0.055;
+      // Restraint pass: one slow, steady turntable rotation — no wobble. The
+      // calm confidence of an AAA armoury screen, not a screensaver.
+      preview.pivot.rotation.y = preview.offset + now * 0.00022;
+      preview.pivot.rotation.x = 0;
       preview.renderer.render(preview.scene, preview.camera);
     }
   }

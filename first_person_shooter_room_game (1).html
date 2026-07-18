@@ -2482,6 +2482,57 @@
   ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
 </style>
+
+  <style id="rb-restraint">
+  /* ══ RESTRAINT PASS — AAA polish: one accent, clean panels, calm motion. ══
+     Overrides the earlier decorative styling (grids/rings/scanlines/brackets/
+     notches/glows) without touching markup or IDs. Keep this block LAST. */
+
+  /* Loading screen: dark field, wordmark, one thin bar. Nothing else moves. */
+  .ls-grid, .ls-rings-wrap, .ls-scan, .ls-bracket, .ls-glow { display: none !important; }
+  #loading-screen { background: linear-gradient(180deg, #0a0e14 0%, #07090c 100%) !important; }
+  .ls-title-breach { color: var(--accent) !important; -webkit-text-stroke: 0 !important; }
+  .ls-eyebrow { letter-spacing: 0.34em !important; }
+  .ls-divider { width: 210px !important; }
+  .ls-divider::after { content: '' !important; padding: 0 !important; }
+  .ls-seg-row { display: none !important; }
+  #loading-fill::after { display: none !important; }
+
+  /* Main menu: flat dark field, hairline column edge, no grid/glow wallpaper. */
+  .ov-bg-grid { display: none !important; }
+  .ov-bg-glow { opacity: 0.3 !important; }
+  #overlay { background: linear-gradient(160deg, #0a0e14 0%, #07090c 100%) !important; }
+  .ov-left::before { width: 1px !important; background: var(--line-strong) !important; box-shadow: none !important; }
+  .ov-action-btn.primary:hover { box-shadow: none !important; }
+
+  /* Model previews: clean surface — no radial glow, no scanline texture. */
+  .loadout-preview::before, .loadout-preview::after { display: none !important; }
+
+  /* HUD: quiet rectangular panels, one hairline accent, minimal glow. */
+  .hud-block {
+    clip-path: none !important;
+    border: 1px solid rgba(140,165,185,0.20) !important;
+    border-radius: 3px !important;
+    background: rgba(8,12,17,0.78) !important;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.40) !important;
+    position: relative;
+  }
+  .hud-block::after {
+    content: ''; position: absolute; left: 10px; right: 10px; top: 0; height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent); opacity: 0.55;
+  }
+  .hud-block.end::after { background: linear-gradient(270deg, var(--accent), transparent); }
+  .hud-value { text-shadow: 0 1px 0 rgba(0,0,0,0.6) !important; }
+  #weapon-val { text-shadow: 0 1px 0 rgba(0,0,0,0.6) !important; }
+  #minimap-canvas { box-shadow: 0 0 0 1px rgba(0,0,0,0.55), 0 10px 26px rgba(0,0,0,0.45) !important; }
+  #bottom-hud { background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.30) 55%, transparent 100%) !important; }
+  #hp-bar, #reload-bar { box-shadow: none !important; }
+  /* Restraint additions: kill the CRT scanline wash, menu corner brackets and
+     the flavor status chips (Power/Seal/Echo) — polish over pastiche. */
+  #loading-screen::before, #overlay::before, #state-overlay::before { display: none !important; }
+  .ov-bracket { display: none !important; }
+  .ov-status-strip { display: none !important; }
+  </style>
 </head>
 <body>
 
