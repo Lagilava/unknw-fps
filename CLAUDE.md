@@ -127,11 +127,29 @@ category + layered master presets. See **`DEV_MANUAL.md`** for the full guide.
 **Exterior** (exterior_map.js):
 - Sets `window.__extWallAt(x, z)` with AABB checks against registered building footprints + boundary walls
 
-**Player collision** (three_fps_game.js ~line 9826):
+**Player collision** (three_fps_game.ts, in the movement resolver):
 ```js
-if (!wallAtWorldRadius(nx, yaw.position.z, r) && !propBlocksAt(...)) yaw.position.x = nx;
-if (!wallAtWorldRadius(yaw.position.x, nz, r) && !propBlocksAt(...)) yaw.position.z = nz;
+if (!wallBlock(nx, yaw.position.z) && !propBlocksAt(...)) yaw.position.x = nx;
+if (!wallBlock(yaw.position.x, nz) && !propBlocksAt(...)) yaw.position.z = nz;
 ```
+
+**Physics-backed collision (Phase 3 — Rapier).** World-geometry collision now runs
+through the Rapier physics world (`modules/physics.ts`), not the MAP-grid sampler:
+- `buildStaticWallColliders` / `buildExteriorColliders` mirror the interior MAP walls
+  and exterior AABB footprints into Rapier as fixed cuboids at boot.
+- `physicsBlocksAt(x, z, r)` (a Rapier `intersectionWithShape` ball query) replaces
+  `wallAtWorldRadius` inside the **player** movement resolver (`PLAYER_PHYSICS_COLLISION`)
+  and **enemy** `enemyBlockedAt` (`ENEMY_PHYSICS_COLLISION`). Both flags default true;
+  set false to revert to the pure grid path. Verified 100% identical to
+  `wallAtWorldRadius` across thousands of samples, so the feel is unchanged.
+- The movement *integrator* (momentum, jump, axis-sliding, sub-stepping) is NOT on
+  Rapier — this is deliberate (query-based collision preserves the tuned FPS feel; a
+  full KinematicCharacterController was rejected).
+- **`propBlocksAt` stays on its own 3D-aware AABB check** (props have vertical extent —
+  you can stand on / jump over them — which a 2D ball query can't model). Grid-native
+  systems (pathfinding, LOS sampling) also stay on the MAP grid intentionally.
+- Rapier is `@dimforge/rapier3d-compat` (inlined WASM), served locally from
+  `node_modules` via the importmaps (CDN was flaky for the 2.2MB module).
 
 ## MAP Grid
 
