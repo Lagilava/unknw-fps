@@ -197,6 +197,68 @@ export function forEachDebris(cb: (i: number, t: any, r: any, color: number, sca
   }
 }
 
+// ── Grenades (physics projectiles) ───────────────────────────────────────────
+// A small pool of dynamic bodies thrown by the player. They bounce off the same
+// static wall/ground colliders as everything else (the real payoff of building
+// them), then the game explodes them on a fuse. Driven by the same per-frame
+// world.step() in updateDebris — no separate stepping needed.
+export const GRENADE_POOL_SIZE = 6;
+interface Grenade { body: any; active: boolean; }
+const grenadePool: Grenade[] = [];
+let grenadeReady = false;
+
+export function initGrenadePool(): void {
+  if (!world || grenadeReady) return;
+  for (let i = 0; i < GRENADE_POOL_SIZE; i++) {
+    const body = world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0)
+        .setLinearDamping(0.06).setAngularDamping(0.18),
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.ball(0.13).setRestitution(0.5).setFriction(0.55),
+      body,
+    );
+    body.sleep();
+    grenadePool.push({ body, active: false });
+  }
+  grenadeReady = true;
+}
+
+/** Throw a grenade from (x,y,z) with velocity (vx,vy,vz). Returns its pool index
+ *  (or -1 if none free). */
+export function throwGrenade(x: number, y: number, z: number, vx: number, vy: number, vz: number): number {
+  if (!grenadeReady) return -1;
+  for (let i = 0; i < grenadePool.length; i++) {
+    const g = grenadePool[i];
+    if (g.active) continue;
+    g.active = true;
+    g.body.setTranslation({ x, y, z }, true);
+    g.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, false);
+    g.body.setLinvel({ x: vx, y: vy, z: vz }, true);
+    g.body.setAngvel({ x: (Math.random() - 0.5) * 8, y: (Math.random() - 0.5) * 8, z: (Math.random() - 0.5) * 8 }, true);
+    g.body.wakeUp();
+    return i;
+  }
+  return -1;
+}
+
+/** Current world position of grenade `i`, or null if inactive. */
+export function grenadeTranslation(i: number): any {
+  const g = grenadePool[i];
+  return g && g.active ? g.body.translation() : null;
+}
+
+/** Park + sleep grenade `i` (called on detonation). */
+export function despawnGrenade(i: number): void {
+  const g = grenadePool[i];
+  if (!g) return;
+  g.active = false;
+  g.body.setLinvel({ x: 0, y: 0, z: 0 }, false);
+  g.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+  g.body.setTranslation({ x: 0, y: -1000, z: 0 }, false);
+  g.body.sleep();
+}
+
 /** Initialise the Rapier WASM runtime + a physics world (idempotent, async). */
 export async function initPhysics(gravityY = -9.81): Promise<any> {
   if (ready) return world;

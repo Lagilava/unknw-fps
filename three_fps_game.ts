@@ -21,7 +21,8 @@ import {
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
 import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt,
-         initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE } from "./modules/physics";
+         initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE,
+         initGrenadePool, throwGrenade, grenadeTranslation, despawnGrenade, GRENADE_POOL_SIZE } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -18548,6 +18549,94 @@ async function spawnEnemies(wave, options: any = {}) {
     if (colorDirty && physicsDebrisMesh.instanceColor) physicsDebrisMesh.instanceColor.needsUpdate = true;
   }
 
+  // ── Grenades (physics projectiles) ─────────────────────────────────────────
+  const GRENADE_FUSE = 1.6;      // s from throw to detonation
+  const GRENADE_RADIUS = 6.5;    // world units
+  const GRENADE_DAMAGE = 260;    // at the centre, linear falloff to the edge
+  const GRENADE_THROW_SPEED = 15;
+  const GRENADE_COOLDOWN = 1.1;  // s between throws
+  let grenadeMesh = null;
+  const activeGrenades = [];      // { index, fuse }
+  const _grP = new THREE.Vector3(), _grM = new THREE.Matrix4(), _grQ = new THREE.Quaternion();
+  const _grScaleOn = new THREE.Vector3(1, 1, 1), _grScaleOff = new THREE.Vector3(0, 0, 0);
+  const _grHidden = new THREE.Vector3(0, -1000, 0);
+  const _grThrowDir = new THREE.Vector3();
+
+  function initGrenadeSystem() {
+    if (grenadeMesh) return;
+    initGrenadePool();
+    const geo = new THREE.SphereGeometry(0.14, 12, 10);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2f3a34, roughness: 0.5, metalness: 0.55, emissive: 0x1a2f22, emissiveIntensity: 0.4 });
+    grenadeMesh = new THREE.InstancedMesh(geo, mat, GRENADE_POOL_SIZE);
+    grenadeMesh.frustumCulled = false;
+    grenadeMesh.castShadow = false;
+    grenadeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < GRENADE_POOL_SIZE; i++) { _grM.compose(_grHidden, _grQ.identity(), _grScaleOff); grenadeMesh.setMatrixAt(i, _grM); }
+    grenadeMesh.instanceMatrix.needsUpdate = true;
+    scene.add(grenadeMesh);
+  }
+
+  function throwGrenadeAction() {
+    if (!grenadeMesh || game.state !== "playing" || player.pvpDead) return;
+    if ((player.grenadeCooldown || 0) > 0) return;
+    camera.getWorldPosition(_grP);
+    camera.getWorldDirection(_grThrowDir); // look direction (unit)
+    const ox = _grP.x + _grThrowDir.x * 0.6, oy = _grP.y + _grThrowDir.y * 0.6, oz = _grP.z + _grThrowDir.z * 0.6;
+    const idx = throwGrenade(ox, oy, oz,
+      _grThrowDir.x * GRENADE_THROW_SPEED,
+      _grThrowDir.y * GRENADE_THROW_SPEED + 2.6, // slight lob
+      _grThrowDir.z * GRENADE_THROW_SPEED);
+    if (idx < 0) return;
+    activeGrenades.push({ index: idx, fuse: GRENADE_FUSE });
+    player.grenadeCooldown = GRENADE_COOLDOWN;
+    playEventSound("equip_light", { volume: 0.4, rate: 1.5 }); // soft throw click
+  }
+
+  function explodeGrenade(x, y, z) {
+    // Radius damage via the ECS live-enemy archetype. Snapshot first: killEnemy
+    // removes entities from the archetype, so we must not mutate it mid-iteration.
+    const targets = [];
+    for (const enemy of liveEnemies) {
+      if (!enemy.mesh) continue;
+      const dx = enemy.mesh.position.x - x, dz = enemy.mesh.position.z - z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= GRENADE_RADIUS) targets.push({ enemy, dist });
+    }
+    for (const { enemy, dist } of targets) {
+      const dmg = GRENADE_DAMAGE * (1 - dist / GRENADE_RADIUS);
+      enemy.hp -= dmg;
+      enemy.aggroed = true;
+      if (enemy.hp <= 0 && enemy.alive) killEnemy(enemy);
+    }
+    // Feel: a fiery debris burst + strong shake + boom.
+    spawnDebrisBurst(x, y, z, 12, 0xff7a1a, 1.6);
+    spawnDebrisBurst(x, y, z, 6, 0xffd050, 1.0);
+    cameraFX.shake = Math.min(1.4, cameraFX.shake + 1.1);
+    playEventSound("explosion", { volume: 0.9 });
+  }
+
+  function updateGrenades(dt) {
+    if (!grenadeMesh) return;
+    if (player.grenadeCooldown > 0) player.grenadeCooldown = Math.max(0, player.grenadeCooldown - dt);
+    for (let i = activeGrenades.length - 1; i >= 0; i--) {
+      const g = activeGrenades[i];
+      g.fuse -= dt;
+      const t = grenadeTranslation(g.index);
+      if (g.fuse <= 0 || !t) {
+        if (t) explodeGrenade(t.x, t.y, t.z);
+        despawnGrenade(g.index);
+        _grM.compose(_grHidden, _grQ.identity(), _grScaleOff);
+        grenadeMesh.setMatrixAt(g.index, _grM);
+        activeGrenades.splice(i, 1);
+      } else {
+        _grP.set(t.x, t.y, t.z);
+        _grM.compose(_grP, _grQ.identity(), _grScaleOn);
+        grenadeMesh.setMatrixAt(g.index, _grM);
+      }
+    }
+    grenadeMesh.instanceMatrix.needsUpdate = true;
+  }
+
   function animate(now) {
     // Skip rendering while the WebGL context is lost (handler will resume us).
     if (canvas.parentElement && document.getElementById("rb-context-lost-msg")) {
@@ -18572,6 +18661,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updateTelegraphRings(dt);
       updatePackUpgradeEffects(dt);
       updatePhysicsDebris(dt);
+      updateGrenades(dt);
 
       if (game.state === "playing") {
         if (mouse.down && gunState.fireCooldown <= 0 && !cutscene.active) fireGun();
@@ -18975,6 +19065,10 @@ async function spawnEnemies(wave, options: any = {}) {
         setUnlimitedHealth(!!enabled);
         return player.unlimitedHealth;
       },
+      // Grenade test hooks.
+      throwGrenade: () => { player.grenadeCooldown = 0; throwGrenadeAction(); return activeGrenades.length; },
+      grenadeCount: () => activeGrenades.length,
+      detonateGrenadeAt: (x, y, z) => explodeGrenade(x, y, z),
       restart: async () => {
         await restartGame();
         return { state: game.state, wave: game.wave, enemies: enemies.filter(e => e.alive).length };
@@ -19238,6 +19332,10 @@ async function spawnEnemies(wave, options: any = {}) {
       tryInteract();
     }
     if (e.code === "KeyR") tryReload();
+    if (e.code === "KeyG") {
+      if (e.repeat) return;
+      throwGrenadeAction();
+    }
     if (e.code === "KeyV") {
       if (e.repeat) return;
       meleeAttack();
@@ -19862,6 +19960,7 @@ async function spawnEnemies(wave, options: any = {}) {
       // Build the physics-debris InstancedMesh now so its shader warms during
       // compileStartupScene (avoids a first-kill hitch).
       try { initPhysicsDebrisMesh(); } catch (e) { console.warn("physics debris mesh:", e); }
+      try { initGrenadeSystem(); } catch (e) { console.warn("grenade system:", e); }
       warmObjectTextures(scene);
       // Bake the static sun shadow map now that the level, buildings and cover all exist.
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
