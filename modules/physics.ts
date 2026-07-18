@@ -58,6 +58,29 @@ export function buildStaticWallColliders(env: any): number {
   return count;
 }
 
+/**
+ * Build fixed colliders for the exterior zone from its AABB footprints
+ * (window.__extMapFootprints: buildings, boundary walls, parked cars, the
+ * landmark statue). Each is `{ x, z, hw, hd }` (centre + half-extents in XZ).
+ * Call AFTER loadWorldLandmarks so late registrations are included. Additive.
+ */
+export function buildExteriorColliders(footprints: any[], height = 16): number {
+  if (!world || !Array.isArray(footprints)) return 0;
+  const hy = height / 2;
+  let count = 0;
+  for (const c of footprints) {
+    if (!c || !Number.isFinite(c.hw) || !Number.isFinite(c.hd) || c.hw <= 0 || c.hd <= 0) continue;
+    const body = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(c.x, hy, c.z),
+    );
+    world.createCollider(RAPIER.ColliderDesc.cuboid(c.hw, hy, c.hd), body);
+    count++;
+  }
+  staticColliderCount += count;
+  world.step(); // rebuild query pipeline for the new colliders
+  return count;
+}
+
 /** Initialise the Rapier WASM runtime + a physics world (idempotent, async). */
 export async function initPhysics(gravityY = -9.81): Promise<any> {
   if (ready) return world;

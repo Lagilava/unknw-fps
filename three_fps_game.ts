@@ -20,7 +20,7 @@ import {
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
-import { initPhysics, buildStaticWallColliders } from "./modules/physics";
+import { initPhysics, buildStaticWallColliders, buildExteriorColliders } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -19763,6 +19763,9 @@ async function spawnEnemies(wave, options: any = {}) {
       setLoadingProgress("Loading exterior scene", 0.68);
       await loadExteriorCityScene();
       await loadWorldLandmarks();
+      // Phase 3: mirror the exterior AABB footprints (buildings, boundary walls,
+      // cars, statue) into Rapier — after landmarks so the statue is included.
+      try { buildExteriorColliders(window.__extMapFootprints); } catch (e) { console.warn("physics ext colliders:", e); }
       warmObjectTextures(scene);
       // Bake the static sun shadow map now that the level, buildings and cover all exist.
       if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
