@@ -105,7 +105,7 @@ export function physicsBlocksAt(x: number, z: number, radius: number, y = 1): bo
 // after a short lifetime. Rendered by ONE InstancedMesh on the game side (1 draw
 // call, no lights) — cheap and additive.
 export const DEBRIS_POOL_SIZE = 48;
-interface Debris { body: any; life: number; }
+interface Debris { body: any; life: number; color: number; scale: number; }
 const debrisPool: Debris[] = [];
 let debrisReady = false;
 const DEBRIS_MAX_LIFE = 2.6;
@@ -124,18 +124,22 @@ export function initDebrisPool(): void {
       body,
     );
     body.sleep();
-    debrisPool.push({ body, life: 0 });
+    debrisPool.push({ body, life: 0, color: 0x8a94a0, scale: 1 });
   }
   debrisReady = true;
 }
 
-/** Fling a burst of debris from (x, y, z). No-op until the pool is built. */
-export function spawnDebrisBurst(x: number, y: number, z: number, n = 6): void {
+/** Fling a burst of debris from (x, y, z), tinted `color` and sized by `scale`
+ *  (per-enemy). No-op until the pool is built. */
+export function spawnDebrisBurst(x: number, y: number, z: number, n = 6, color = 0x8a94a0, scale = 1): void {
   if (!debrisReady) return;
   let spawned = 0;
   for (const d of debrisPool) {
     if (spawned >= n) break;
     if (d.life > 0) continue;
+    d.color = color;
+    // Per-piece size variation around the enemy's scale.
+    d.scale = scale * (0.7 + Math.random() * 0.6);
     d.life = DEBRIS_MAX_LIFE * (0.7 + Math.random() * 0.6);
     d.body.setTranslation({ x: x + (Math.random() - 0.5) * 0.3, y: y + Math.random() * 0.25, z: z + (Math.random() - 0.5) * 0.3 }, true);
     d.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, false);
@@ -166,11 +170,11 @@ export function updateDebris(dt: number): void {
 
 /** Visit each pool slot with its live transform (or null if inactive) so the
  *  renderer can drive an InstancedMesh. */
-export function forEachDebris(cb: (i: number, t: any, r: any) => void): void {
+export function forEachDebris(cb: (i: number, t: any, r: any, color: number, scale: number) => void): void {
   for (let i = 0; i < debrisPool.length; i++) {
     const d = debrisPool[i];
-    if (d.life <= 0) cb(i, null, null);
-    else cb(i, d.body.translation(), d.body.rotation());
+    if (d.life <= 0) cb(i, null, null, 0, 0);
+    else cb(i, d.body.translation(), d.body.rotation(), d.color, d.scale);
   }
 }
 
@@ -195,7 +199,7 @@ export async function initPhysics(gravityY = -9.81): Promise<any> {
       staticColliderCount: () => staticColliderCount,
       blocksAt: (x: number, z: number, r = 0.32, y = 1) => physicsBlocksAt(x, z, r, y),
       debrisActive: () => { let n = 0; forEachDebris((_i, t) => { if (t) n++; }); return n; },
-      debrisSample: () => { let s: any = null; forEachDebris((_i, t) => { if (t && !s) s = { x: t.x, y: t.y, z: t.z }; }); return s; },
+      debrisSample: () => { let s: any = null; forEachDebris((_i, t, _r, color, scale) => { if (t && !s) s = { x: t.x, y: t.y, z: t.z, color, scale }; }); return s; },
       // Is world point (x, y, z) inside any collider? Used to verify the static
       // wall colliders line up with the MAP grid (compare against wallAtWorld).
       probe: (x: number, z: number, y = 1) => {

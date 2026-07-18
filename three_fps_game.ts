@@ -9021,6 +9021,9 @@ function createLightningEffect() {
       aggroed: false,
       typeName: type.name,
       xp: type.xp,
+      // Physics-debris tint/size per enemy type (Phase 3 showcase refinement).
+      debrisColor: type.color ?? 0x8a94a0,
+      debrisScale: Number.isFinite(type.scale) ? type.scale : 1,
       aura: type.aura,
       navPath: [],
       navGoal: null,
@@ -13733,8 +13736,13 @@ async function spawnEnemies(wave, options: any = {}) {
     if (enemy.blinkRing) { fadeTelegraphRing(enemy.blinkRing); enemy.blinkRing = null; }
     if (enemy.barrageQueue) { for (const s of enemy.barrageQueue) fadeTelegraphRing(s.ring); enemy.barrageQueue.length = 0; }
     enemy.barrageActive = false;
-    // Phase 3 showcase: fling a physics-debris burst from the death point.
-    if (PHYSICS_DEBRIS) spawnDebrisBurst(enemy.mesh.position.x, enemy.mesh.position.y + 0.9, enemy.mesh.position.z, 6);
+    // Phase 3 showcase: fling a physics-debris burst from the death point, tinted
+    // and sized per enemy type (bigger enemies throw more, larger, coloured chunks).
+    if (PHYSICS_DEBRIS) {
+      const dScale = enemy.debrisScale || 1;
+      const dCount = Math.max(3, Math.min(10, Math.round(4 + dScale * 3)));
+      spawnDebrisBurst(enemy.mesh.position.x, enemy.mesh.position.y + 0.9 * dScale, enemy.mesh.position.z, dCount, enemy.debrisColor ?? 0x8a94a0, dScale);
+    }
     enemy.mesh.visible = false;
     enemyRemovalQueue.push(enemy);
     game.killed++;
@@ -18487,13 +18495,15 @@ async function spawnEnemies(wave, options: any = {}) {
   // lights). Inactive slots are scaled to 0. Bodies are driven by updateDebris.
   let physicsDebrisMesh = null;
   const _dbP = new THREE.Vector3(), _dbQ = new THREE.Quaternion(), _dbM = new THREE.Matrix4();
-  const _dbScaleOn = new THREE.Vector3(1, 1, 1), _dbScaleOff = new THREE.Vector3(0, 0, 0);
+  const _dbScaleV = new THREE.Vector3(1, 1, 1), _dbScaleOff = new THREE.Vector3(0, 0, 0);
   const _dbHidden = new THREE.Vector3(0, -1000, 0);
+  const _dbColor = new THREE.Color();
   function initPhysicsDebrisMesh() {
     if (!PHYSICS_DEBRIS || physicsDebrisMesh) return;
     initDebrisPool();
     const geo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x5b6570, roughness: 0.72, metalness: 0.28 });
+    // White base so per-instance instanceColor shows the true per-enemy tint.
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.35 });
     physicsDebrisMesh = new THREE.InstancedMesh(geo, mat, DEBRIS_POOL_SIZE);
     physicsDebrisMesh.frustumCulled = false;
     physicsDebrisMesh.castShadow = false;
@@ -18502,19 +18512,30 @@ async function spawnEnemies(wave, options: any = {}) {
     for (let i = 0; i < DEBRIS_POOL_SIZE; i++) {
       _dbM.compose(_dbHidden, _dbQ.identity(), _dbScaleOff);
       physicsDebrisMesh.setMatrixAt(i, _dbM);
+      physicsDebrisMesh.setColorAt(i, _dbColor.setHex(0x8a94a0)); // also creates the instanceColor buffer
     }
     physicsDebrisMesh.instanceMatrix.needsUpdate = true;
+    if (physicsDebrisMesh.instanceColor) physicsDebrisMesh.instanceColor.needsUpdate = true;
     scene.add(physicsDebrisMesh);
   }
   function updatePhysicsDebris(dt) {
     if (!PHYSICS_DEBRIS || !physicsDebrisMesh) return;
     updateDebris(dt);
-    forEachDebris((i, t, r) => {
-      if (t) { _dbP.set(t.x, t.y, t.z); _dbQ.set(r.x, r.y, r.z, r.w); _dbM.compose(_dbP, _dbQ, _dbScaleOn); }
-      else { _dbM.compose(_dbHidden, _dbQ.identity(), _dbScaleOff); }
+    let colorDirty = false;
+    forEachDebris((i, t, r, color, scale) => {
+      if (t) {
+        _dbP.set(t.x, t.y, t.z); _dbQ.set(r.x, r.y, r.z, r.w);
+        _dbScaleV.set(scale, scale, scale);
+        _dbM.compose(_dbP, _dbQ, _dbScaleV);
+        physicsDebrisMesh.setColorAt(i, _dbColor.setHex(color));
+        colorDirty = true;
+      } else {
+        _dbM.compose(_dbHidden, _dbQ.identity(), _dbScaleOff);
+      }
       physicsDebrisMesh.setMatrixAt(i, _dbM);
     });
     physicsDebrisMesh.instanceMatrix.needsUpdate = true;
+    if (colorDirty && physicsDebrisMesh.instanceColor) physicsDebrisMesh.instanceColor.needsUpdate = true;
   }
 
   function animate(now) {
