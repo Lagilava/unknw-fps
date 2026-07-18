@@ -2532,6 +2532,26 @@
   #loading-screen::before, #overlay::before, #state-overlay::before { display: none !important; }
   .ov-bracket { display: none !important; }
   .ov-status-strip { display: none !important; }
+
+  /* Intel: animated neural brain (SVG + CSS only - no runtime cost off-menu). */
+  .mind-brain { display: flex; justify-content: center; margin-bottom: 10px; }
+  .mind-brain .mb-outline { stroke: rgba(140,165,185,0.45); stroke-width: 1.2; }
+  .mind-brain .mb-stem { stroke: rgba(140,165,185,0.35); stroke-width: 1.2; }
+  .mind-brain .mb-syn {
+    stroke: var(--accent); stroke-width: 1; opacity: 0.5;
+    stroke-dasharray: 4 7; animation: mbFlow 3.2s linear infinite;
+  }
+  .mind-brain .s2 { animation-delay: -0.6s; } .mind-brain .s3 { animation-delay: -1.2s; }
+  .mind-brain .s4 { animation-delay: -1.8s; } .mind-brain .s5 { animation-delay: -2.4s; }
+  .mind-brain .s6 { animation-delay: -3.0s; }
+  @keyframes mbFlow { to { stroke-dashoffset: -22; } }
+  .mind-brain .mb-node { fill: var(--accent); opacity: 0.4; animation: mbPulse 2.6s ease-in-out infinite; }
+  .mind-brain .n2 { animation-delay: -0.4s; } .mind-brain .n3 { animation-delay: -0.8s; }
+  .mind-brain .n4 { animation-delay: -1.2s; } .mind-brain .n5 { animation-delay: -1.6s; }
+  .mind-brain .n6 { animation-delay: -2.0s; } .mind-brain .n7 { animation-delay: -2.2s; }
+  .mind-brain .n8 { animation-delay: -1.0s; } .mind-brain .n9 { animation-delay: -1.4s; }
+  .mind-brain .n10 { animation-delay: -0.6s; }
+  @keyframes mbPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -2849,9 +2869,7 @@
 
       <div class="loadout-grid">
         <div class="loadout-card selected" data-loadout="pistol">
-          <div class="loadout-tag starter">STARTER</div>
-          <div class="loadout-preview"><canvas id="loadout-preview-pistol" width="320" height="180" aria-label="Service Pistol preview"></canvas></div>
-          <div class="loadout-name">Service Pistol</div>
+          <div class="loadout-tag starter">STARTER</div>          <div class="loadout-name">Service Pistol</div>
           <div class="loadout-role">Standard Issue Sidearm</div>
           <div class="loadout-stat"><span>Damage</span><span>52 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>12 rds</span></div>
@@ -2859,9 +2877,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Fast Handling</span></div>
         </div>
         <div class="loadout-card" data-loadout="rifle">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><canvas id="loadout-preview-rifle" width="320" height="180" aria-label="Assault Rifle preview"></canvas></div>
-          <div class="loadout-name">Assault Rifle</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Assault Rifle</div>
           <div class="loadout-role">All-Range Control</div>
           <div class="loadout-stat"><span>Damage</span><span>35 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>24 rds</span></div>
@@ -2869,9 +2885,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Versatile</span></div>
         </div>
         <div class="loadout-card" data-loadout="shotgun">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><canvas id="loadout-preview-shotgun" width="320" height="180" aria-label="Combat Shotgun preview"></canvas></div>
-          <div class="loadout-name">Combat Shotgun</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Combat Shotgun</div>
           <div class="loadout-role">Breach Dominance</div>
           <div class="loadout-stat"><span>Damage</span><span>195 / pellet</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>10 shells</span></div>
@@ -2879,9 +2893,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Close-Range Dominance</span></div>
         </div>
         <div class="loadout-card" data-loadout="sniper">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><canvas id="loadout-preview-sniper" width="320" height="180" aria-label="Precision Rifle preview"></canvas></div>
-          <div class="loadout-name">Precision Rifle</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Precision Rifle</div>
           <div class="loadout-role">Priority Target Removal</div>
           <div class="loadout-stat"><span>Damage</span><span>206 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>6 rds</span></div>
@@ -2889,9 +2901,7 @@
           <div class="loadout-stat"><span>Profile</span><span>High Skill / Punish</span></div>
         </div>
         <div class="loadout-card" data-loadout="smg">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">SMG</div></div>
-          <div class="loadout-name">Hornet SMG</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Hornet SMG</div>
           <div class="loadout-role">Close-Range Saturation</div>
           <div class="loadout-stat"><span>Damage</span><span>21 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>32 rds</span></div>
@@ -2899,9 +2909,7 @@
           <div class="loadout-stat"><span>Profile</span><span>High ROF / High Spread</span></div>
         </div>
         <div class="loadout-card" data-loadout="lmg">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">LMG</div></div>
-          <div class="loadout-name">Bastion LMG</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Bastion LMG</div>
           <div class="loadout-role">Sustained Suppression</div>
           <div class="loadout-stat"><span>Damage</span><span>31 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>75 rds</span></div>
@@ -2909,9 +2917,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Big Mag / Heavy</span></div>
         </div>
         <div class="loadout-card" data-loadout="dmr">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">DMR</div></div>
-          <div class="loadout-name">Verdict DMR</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Verdict DMR</div>
           <div class="loadout-role">Mid-Range Precision</div>
           <div class="loadout-stat"><span>Damage</span><span>118 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>10 rds</span></div>
@@ -2919,9 +2925,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Deliberate / Punchy</span></div>
         </div>
         <div class="loadout-card" data-loadout="akimbo">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">MP</div></div>
-          <div class="loadout-name">Gemini Machine Pistol</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Gemini Machine Pistol</div>
           <div class="loadout-role">Mobile Skirmisher</div>
           <div class="loadout-stat"><span>Damage</span><span>26 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>26 rds</span></div>
@@ -2929,9 +2933,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Run &amp; Gun</span></div>
         </div>
         <div class="loadout-card" data-loadout="railgun">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">RAIL</div></div>
-          <div class="loadout-name">Lancer Railgun</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Lancer Railgun</div>
           <div class="loadout-role">Heavy Target Deletion</div>
           <div class="loadout-stat"><span>Damage</span><span>430 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>3 cells</span></div>
@@ -2939,9 +2941,7 @@
           <div class="loadout-stat"><span>Profile</span><span>Slow / Devastating</span></div>
         </div>
         <div class="loadout-card" data-loadout="flak">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-preview"><div class="loadout-emblem">FLAK</div></div>
-          <div class="loadout-name">Mauler Auto-Shotgun</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Mauler Auto-Shotgun</div>
           <div class="loadout-role">Crowd Erasure</div>
           <div class="loadout-stat"><span>Damage</span><span>150 / burst</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>8 shells</span></div>
@@ -2972,60 +2972,82 @@
       </div>
 
       <div class="ov-panel-title">Breach Dossier</div>
-      <div class="ov-panel-copy">You were declared KIA at 03:14 during the initial breach. Something brought you back. It calls itself the Echo. It doesn't offer explanations — it offers a second trigger pull and one instruction: go back in and find out what the room is hiding.</div>
+      <div class="ov-panel-copy">In 1994 the city went dark for eleven minutes. Every light, every clock, every heart monitor. The official record calls it a grid failure. The record is wrong. Something was rewiring the block — and it has been rewiring it every tenth wave since. You died finding that out. The Echo restarted you to finish the report.</div>
 
       <div class="op-strip">
         <div class="op-pill"><b>01</b>Operator Status: Revived</div>
-        <div class="op-pill"><b>02</b>Threat: Active / Escalating</div>
-        <div class="op-pill"><b>03</b>Room Seal: Compromised</div>
-        <div class="op-pill"><b>04</b>Echo Contact: Confirmed</div>
+        <div class="op-pill"><b>02</b>Grid: Compromised</div>
+        <div class="op-pill"><b>03</b>Blackout Cycle: Every 10th Wave</div>
+        <div class="op-pill"><b>04</b>The Choir: Active</div>
       </div>
 
-      <div class="ov-section-title">Field Intelligence</div>
+      <div class="ov-section-title">Echo — Neural Reconstruction</div>
       <div class="mind-map">
         <div class="mind-branch left">
           <div class="mind-node">
-            <strong>Your Condition</strong>
-            <span>Clinically dead for an unknown interval. Motor function, memory, and weapon handling restored by the Echo at reactivation. Your body is a borrowed tool. The Echo will return it when the job is done — or it won't.</span>
+            <strong>The Blackouts</strong>
+            <span>Every tenth wave the power dies and the sky catches fire. Instruments log it as a solar event happening below the roofline, which is impossible, which is the point. It is not weather. It is maintenance. The city is a machine that must be stopped to be adjusted — and the things that adjust it do not leave witnesses. They hunt faster in the dark. They hit harder. And the Echo pays double for every one you drop while the grid is open. It believes they are exposed mid-shift. Prove it.</span>
           </div>
           <div class="mind-node">
             <strong>The Echo</strong>
-            <span>Non-human intelligence of unknown origin. It does not communicate in full sentences. It communicates in urgency. It revived you because the room requires a living witness with the clearance to fire — and because the dead remember what killed them.</span>
+            <span>It lives between stations, on a frequency the war decommissioned. It does not speak in sentences — it speaks in urgency, straight into the wet parts of your skull. It restarted your heart for a reason it has not fully disclosed: the dead carry a clean copy of the signal that killed them, and you are the only copy left that can still hold a rifle.</span>
           </div>
           <div class="mind-node">
-            <strong>The Wave Pattern</strong>
-            <span>Hostile contact follows a repeating escalation cycle. Each wave is harder, faster, and better informed about your position than the last. The room is feeding the enemy your signature. It has been doing this since the original breach.</span>
+            <strong>The City</strong>
+            <span>Walk to the barricades and look past them. The district runs for miles and nobody lives there. Windows lit on timers. Cars that never rust. Rain that never lands. It is a set — an antenna dressed as a skyline. The block you can walk is the only part of the machine that is real. Or the only part they let render. The Echo will not say which possibility scares it more.</span>
           </div>
         </div>
 
         <div class="mind-core">
+          <div class="mind-brain" aria-hidden="true">
+            <svg viewBox="0 0 220 150" width="100%" height="132" fill="none">
+              <path class="mb-outline" d="M32 84 C24 58 44 32 72 28 C84 12 122 10 136 24 C168 16 196 34 198 60 C214 74 208 100 192 108 C188 124 166 136 146 131 C130 145 96 146 82 134 C56 140 32 126 30 106 C20 100 18 92 32 84 Z"/>
+              <path class="mb-stem" d="M112 138 L112 150 M104 144 L120 144"/>
+              <path class="mb-syn s1" d="M50 80 C70 60 92 66 108 52"/>
+              <path class="mb-syn s2" d="M108 52 C132 44 152 58 172 66"/>
+              <path class="mb-syn s3" d="M60 104 C86 96 112 104 138 92"/>
+              <path class="mb-syn s4" d="M138 92 C156 86 170 94 182 88"/>
+              <path class="mb-syn s5" d="M76 44 C82 66 74 88 88 112"/>
+              <path class="mb-syn s6" d="M148 40 C142 62 152 84 142 110"/>
+              <circle class="mb-node n1" cx="50" cy="80" r="3"/>
+              <circle class="mb-node n2" cx="108" cy="52" r="4"/>
+              <circle class="mb-node n3" cx="172" cy="66" r="3"/>
+              <circle class="mb-node n4" cx="60" cy="104" r="3"/>
+              <circle class="mb-node n5" cx="138" cy="92" r="4"/>
+              <circle class="mb-node n6" cx="182" cy="88" r="2.5"/>
+              <circle class="mb-node n7" cx="76" cy="44" r="2.5"/>
+              <circle class="mb-node n8" cx="148" cy="40" r="3"/>
+              <circle class="mb-node n9" cx="88" cy="112" r="3"/>
+              <circle class="mb-node n10" cx="142" cy="110" r="2.5"/>
+            </svg>
+          </div>
           <div class="mind-core-tag">Primary Objective</div>
           <strong>The Room</strong>
-          <span>Designation classified. Originally built as a sealed containment chamber — not to hold prisoners, but to hold information. Something inside it transmitted a signal that drew the first wave in. The door that opened wasn't broken. It was invited open. You are here to find out who sent that invitation.</span>
+          <span>A sealed chamber under the plaza, built to hold information, not prisoners. Thirty years ago it broadcast a single word on the dead frequency, and the first wave answered. The door was not broken open. It was invited open. Clear the waves, keep the block, and find out who sent the invitation — because the Echo is certain of exactly one thing: it was not us.</span>
         </div>
 
         <div class="mind-branch right">
           <div class="mind-node">
             <strong>Siege Drones</strong>
-            <span>Former escort and recovery units, re-tasked. They were designed to retrieve assets from hostile environments. Now the hostile environment is you. Engage at range. Their melee radius is wider than it looks and their lightning doesn't miss at contact distance.</span>
+            <span>Recovery units from the original grid crews, re-tasked by whatever runs the schedule now. They were built to retrieve assets from hostile environments. Tonight the hostile environment is you. Engage at range — their arc weaponry does not miss at contact distance, and they always know where you are standing. The room tells them.</span>
           </div>
           <div class="mind-node">
             <strong>Cloned Ghosts</strong>
-            <span>The chamber read your biometric signature and produced unauthorized copies. They move like you, shoot like a version of you that died afraid, and they know every angle in this room because they were printed from your own memory of it. Pressure them. Copies break under pressure.</span>
+            <span>The chamber read your biometrics while you were dead on its floor, and it printed copies. They move like you. They shoot like a version of you that died afraid. They know every angle of the block because they were compiled from your memory of it. Pressure them — copies break under pressure. Try not to think about what that implies.</span>
           </div>
           <div class="mind-node">
-            <strong>The Pack Station</strong>
-            <span>Emergency weapons upgrade terminal, already active when you arrived. The Echo pre-authorized it. Spend XP, press E, upgrade. The room gets harder — your weapon ceiling rises with it. Do not let the enemy own the space around the station.</span>
+            <strong>The Returned</strong>
+            <span>The crews that worked the grid before your team. The city does not bury its dead — it re-tasks them, and after thirty years of blackout shifts there is not much left to re-task. They come in close, they come in numbers, and they scream on the way. The Echo asks that you be efficient. Some of them were colleagues.</span>
           </div>
           <div class="mind-node">
-            <strong>End Condition</strong>
-            <span>The breach closes when the pattern breaks. The pattern breaks when you clear every wave without dying. No extraction protocol exists. The Echo says you'll know what to do when the last one falls. It is not the most reassuring briefing you've ever received.</span>
+            <strong>The Choir</strong>
+            <span>Warden. Seraph. Cherub. They arrive when the sky burns — the shift supervisors of the blackout. The field teams called them angels because of the light. The survivors called them nothing at all, because survivors of the Choir do not talk. The Warden judges from range. The Seraph flanks through folded space. The Cherub collapses the safe ground under your feet. They are not defending the city. They are defending the schedule.</span>
           </div>
         </div>
 
         <div class="mind-foot">
           <strong>Last Transmission — Echo, timestamp unknown</strong>
-          <span>"The room kept your name in its teeth after you died. That means it isn't finished with you. Neither am I. Go back in. Clear the waves. When the signal stops, you'll understand what we were both trying to find."</span>
+          <span>"Eleven minutes, every cycle, for thirty years. Eight million people and nobody noticed. You noticed. That is why they stopped your heart, and that is why I started it again. When the sky burns, the machine is open. Aim at the light."</span>
         </div>
       </div>
     </div>
