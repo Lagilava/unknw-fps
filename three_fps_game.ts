@@ -5634,6 +5634,53 @@ function createLightningEffect() {
     thirdPerson.aimOffsets.push({ bone, quat: _aimOffsetQuat.clone() });
   }
 
+  // ── Measured shortest-arc arm aiming ────────────────────────────────────────
+  // Instead of driving the arms with a linear camPitch offset (which over-rotates
+  // at steep pitches — arms end up pointing at the sky), measure where the arm
+  // actually points in the animated pose (shoulder→hand) and rotate it by the
+  // shortest arc toward the aim point. The delta is zero when on-target, so it
+  // can never over-rotate, composes with the locomotion layers, and introduces
+  // no roll (setFromUnitVectors). Undone each frame via aimOffsets like every
+  // other procedural offset.
+  const _aimParentInvQuat = new THREE.Quaternion();
+  const _aimIdentityQuat = new THREE.Quaternion();
+  const _aimDeltaQuat = new THREE.Quaternion();
+  const _aimPointTmp = new THREE.Vector3();
+  const _aimFwdTmp = new THREE.Vector3();
+  const _aimShoulderTmp = new THREE.Vector3();
+  const _aimHandTmp = new THREE.Vector3();
+  const _aimCurDirTmp = new THREE.Vector3();
+  const _aimWantDirTmp = new THREE.Vector3();
+  const MAX_ARM_AIM_ANGLE = 0.95; // rad — soften instead of going vertical at extremes
+
+  // Rotate `bone` by a WORLD-space quaternion delta (about its own origin).
+  function applyWorldQuatToBone(bone, worldDelta) {
+    if (!bone || !bone.parent) return;
+    bone.parent.getWorldQuaternion(_aimParentQuat);
+    _aimParentInvQuat.copy(_aimParentQuat).invert();
+    _aimOffsetQuat.copy(_aimParentInvQuat).multiply(worldDelta).multiply(_aimParentQuat);
+    bone.quaternion.premultiply(_aimOffsetQuat);
+    thirdPerson.aimOffsets.push({ bone, quat: _aimOffsetQuat.clone() });
+  }
+
+  // Point the upper arm (shoulder→hand direction) at `point`, scaled by `weight`
+  // (0..1) and clamped to MAX_ARM_AIM_ANGLE. Requires fresh world matrices.
+  function aimArmAtPoint(upperArm, hand, point, weight) {
+    if (!upperArm || !hand || weight <= 0.001) return;
+    upperArm.getWorldPosition(_aimShoulderTmp);
+    hand.getWorldPosition(_aimHandTmp);
+    _aimCurDirTmp.subVectors(_aimHandTmp, _aimShoulderTmp);
+    if (_aimCurDirTmp.lengthSq() < 1e-6) return;
+    _aimCurDirTmp.normalize();
+    _aimWantDirTmp.subVectors(point, _aimShoulderTmp).normalize();
+    _aimDeltaQuat.setFromUnitVectors(_aimCurDirTmp, _aimWantDirTmp);
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(_aimDeltaQuat.w)));
+    let k = weight;
+    if (ang > 1e-4) k *= Math.min(1, MAX_ARM_AIM_ANGLE / ang);
+    if (k < 0.999) _aimDeltaQuat.slerp(_aimIdentityQuat, 1 - k);
+    applyWorldQuatToBone(upperArm, _aimDeltaQuat);
+  }
+
   // Called every frame after mixer.update() and before updateThirdPersonWeaponPose().
   // Smoothly blends arm bones from the animation's native carry pose toward a camera-pitched
   // aim pose, and applies a spring-backed punch impulse on fire.
@@ -5697,9 +5744,12 @@ function createLightningEffect() {
     // Unified FP tracks camera pitch far more strongly than the TP over-shoulder
     // pose so the held gun stays centered in view when looking up/down.
     const ARM_RAISE_BIAS         = unifiedFp ? UNIFIED_FP_ARM_RAISE_BIAS  : -0.42;
-    const UPPER_ARM_PITCH_FACTOR = unifiedFp ? UNIFIED_FP_UPPER_ARM_PITCH :  0.42; // how much camera pitch drives the upper arm
-    const FOREARM_PITCH_FACTOR   = unifiedFp ? UNIFIED_FP_FOREARM_PITCH   :  0.16; // additional forearm follow-through
-    const SPINE_PITCH_FACTOR     = unifiedFp ? UNIFIED_FP_SPINE_PITCH     :  0.12; // torso lean into aim direction
+    const UPPER_ARM_PITCH_FACTOR = unifiedFp ? UNIFIED_FP_UPPER_ARM_PITCH :  0.42; // (unified FP only)
+    const FOREARM_PITCH_FACTOR   = unifiedFp ? UNIFIED_FP_FOREARM_PITCH   :  0.16;
+    // TP: the SPINE carries most of the camera pitch (engine-style aim
+    // distribution — see aim-offset practice). The arms inherit it through the
+    // hierarchy, so they keep their held pose instead of over-rotating skyward.
+    const SPINE_PITCH_FACTOR     = unifiedFp ? UNIFIED_FP_SPINE_PITCH     :  0.30;
     const PUNCH_ARM_FACTOR       =  0.24; // fire punch magnitude on upper arms
     const PUNCH_FOREARM_FACTOR   =  0.12;
     const PUNCH_SPINE_FACTOR     =  0.06;
@@ -5709,49 +5759,54 @@ function createLightningEffect() {
     const upperLo = unifiedFp ? -0.35 : -0.82;
     const upperHi = unifiedFp ?  0.30 :  0.38;
     const foreLim = unifiedFp ?  0.20 :  0.28;
-    const upperArmAngle = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
-                          + punch * PUNCH_ARM_FACTOR + swayUpper, upperLo, upperHi);
-    const foreArmAngle  = clamp(camPitch * FOREARM_PITCH_FACTOR * blend
-                          + punch * PUNCH_FOREARM_FACTOR + swayFore, -foreLim, foreLim);
-    const spineAngle    = clamp(camPitch * SPINE_PITCH_FACTOR * blend
-                          + punch * PUNCH_SPINE_FACTOR + swaySpine, -0.16, 0.16);
+    const spineClamp = unifiedFp ? 0.16 : 0.38;
+    const spineAngle = clamp(camPitch * SPINE_PITCH_FACTOR * blend
+                          + punch * PUNCH_SPINE_FACTOR + swaySpine, -spineClamp, spineClamp);
 
-    // Spine leans into the aim direction
-    applyWorldPitchToBone(b.spine,         spineAngle);
+    // Spine leans into the aim direction (applied FIRST so the arm solve below
+    // measures the torso-pitched pose).
+    applyWorldPitchToBone(b.spine, spineAngle);
 
-    // Per-gun grip style. A two-handed weapon raises/punches BOTH arms together
-    // (rifle grip). A one-handed weapon (pistol) drives the RIGHT arm normally but
-    // the LEFT (support) hand stays lower/tucked and takes only a fraction of the
-    // fire punch — otherwise the symmetric punch jerks both arms up on every shot,
-    // which reads as a flail on a handgun. See GUN_SPECS[...].gripStyle.
     const oneHand = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
-    if (oneHand) {
-      // Right arm: full raise, but a slightly softer punch than a rifle.
-      const rightUpper = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
-                          + punch * PUNCH_ARM_FACTOR * 0.7 + swayUpper, upperLo, upperHi);
-      const rightFore  = clamp(camPitch * FOREARM_PITCH_FACTOR * blend
-                          + punch * PUNCH_FOREARM_FACTOR * 0.7 + swayFore, -foreLim, foreLim);
-      // Left (support) arm: tucked clearly LOWER than the firing arm. Note the
-      // sign convention (measured, not assumed): ARM_RAISE_BIAS pulls the arms
-      // DOWN from the clip's raised aiming pose, so the support arm needs MORE
-      // bias (1.6×), not less — scaling it down leaves the hand floating at
-      // rifle-foregrip height with nothing to hold. Takes only a sliver of the
-      // punch → no outward splay on fire.
-      const leftUpper = clamp((ARM_RAISE_BIAS * 1.6 + camPitch * UPPER_ARM_PITCH_FACTOR * 0.5) * blend
-                          + punch * PUNCH_ARM_FACTOR * 0.15 + swayUpper * 0.5, upperLo, upperHi);
-      const leftFore  = clamp(camPitch * FOREARM_PITCH_FACTOR * 0.5 * blend
-                          + punch * PUNCH_FOREARM_FACTOR * 0.25 + swayFore * 0.5, -foreLim, foreLim);
-      applyWorldPitchToBone(b.rightUpperArm, rightUpper);
-      applyWorldPitchToBone(b.leftUpperArm,  leftUpper);
-      applyWorldPitchToBone(b.rightForeArm,  rightFore);
-      applyWorldPitchToBone(b.leftForeArm,   leftFore);
-    } else {
-      // Both upper arms raise/lower together (two-handed rifle grip)
+    if (unifiedFp) {
+      // Unified FP keeps the original linear scheme (tuned for the eye camera).
+      const upperArmAngle = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
+                            + punch * PUNCH_ARM_FACTOR + swayUpper, upperLo, upperHi);
+      const foreArmAngle  = clamp(camPitch * FOREARM_PITCH_FACTOR * blend
+                            + punch * PUNCH_FOREARM_FACTOR + swayFore, -foreLim, foreLim);
       applyWorldPitchToBone(b.rightUpperArm, upperArmAngle);
       applyWorldPitchToBone(b.leftUpperArm,  upperArmAngle);
-      // Forearms add a smaller follow-through so the elbow doesn't look locked
       applyWorldPitchToBone(b.rightForeArm,  foreArmAngle);
       applyWorldPitchToBone(b.leftForeArm,   foreArmAngle);
+    } else {
+      // TP: measured shortest-arc aim. Refresh world matrices so the solve sees
+      // this frame's animated + spine-pitched pose, then rotate each aiming arm
+      // from its ACTUAL direction toward the crosshair point. Self-limiting: the
+      // delta shrinks to zero as the arm reaches the target, at any camera pitch.
+      if (blend > 0.02 && thirdPerson.model) {
+        thirdPerson.model.updateMatrixWorld(true);
+        camera.getWorldPosition(_aimPointTmp);
+        camera.getWorldDirection(_aimFwdTmp);
+        _aimPointTmp.addScaledVector(_aimFwdTmp, 16); // crosshair point (~16 u out)
+        aimArmAtPoint(b.rightUpperArm, thirdPerson.rightHand, _aimPointTmp, blend * 0.85);
+        if (!oneHand) aimArmAtPoint(b.leftUpperArm, thirdPerson.leftHand, _aimPointTmp, blend * 0.8);
+      }
+      // Additive feel on top of the solve: fire punch + gait sway, plus a small
+      // forearm follow so the elbow doesn't read locked.
+      applyWorldPitchToBone(b.rightUpperArm, clamp(punch * PUNCH_ARM_FACTOR * (oneHand ? 0.7 : 1) + swayUpper, -0.4, 0.4));
+      applyWorldPitchToBone(b.rightForeArm,  clamp(camPitch * 0.10 * blend + punch * PUNCH_FOREARM_FACTOR * (oneHand ? 0.7 : 1) + swayFore, -foreLim, foreLim));
+      if (oneHand) {
+        // Pistol support arm: tucked clearly LOWER than the firing arm (measured
+        // sign convention: ARM_RAISE_BIAS pulls DOWN from the clip's raised pose).
+        // Tucks HARDER as the pitch steepens so the free hand never floats while
+        // the firing arm tracks a high/low target. Sliver of punch → no splay.
+        const tuck = 1.6 + Math.abs(camPitch) * 0.9;
+        applyWorldPitchToBone(b.leftUpperArm, clamp(ARM_RAISE_BIAS * tuck * blend + punch * PUNCH_ARM_FACTOR * 0.15 + swayUpper * 0.5, upperLo, upperHi));
+        applyWorldPitchToBone(b.leftForeArm,  clamp(punch * PUNCH_FOREARM_FACTOR * 0.25 + swayFore * 0.5, -foreLim, foreLim));
+      } else {
+        applyWorldPitchToBone(b.leftUpperArm, clamp(punch * PUNCH_ARM_FACTOR + swayUpper, -0.4, 0.4));
+        applyWorldPitchToBone(b.leftForeArm,  clamp(camPitch * 0.10 * blend + punch * PUNCH_FOREARM_FACTOR + swayFore, -foreLim, foreLim));
+      }
     }
 
     // Knife swing layered on the RIGHT arm only: wind-up raises the arm, then the
