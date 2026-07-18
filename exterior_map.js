@@ -21,8 +21,8 @@
   // two ground planes. 120 makes them meet edge-to-edge.
   const EXT_Z_NEAR = 120;
   const EXT_Z_FAR  = 380;   // extended: the exterior is now a deep city district
-  const EXT_X_MIN  = -72;
-  const EXT_X_MAX  =  72;
+  const EXT_X_MIN  = -135;  // widened: a full city grid flanks the central avenue
+  const EXT_X_MAX  =  135;
 
   // ── Collision (runs immediately) ──────────────────────────────────────────
   const colliders = [];
@@ -911,21 +911,28 @@
       buildBuilding( 36, 222, 42, 14, 16, M.brickDark);
     }
 
-    // Procedural city district lining the EXTENDED street (z ~246 -> EXT_Z_FAR).
-    // Seeded so it's deterministic; buildings sit beyond the sidewalks on both
-    // sides. buildBuilding auto-registers each as a collider (-> Rapier), and the
-    // geometry merges into the shared buckets, so draw-call cost stays low.
+    // Procedural CITY GRID flanking the central avenue. A seeded (deterministic)
+    // grid of blocks separated by cross-streets (skipped rows/cols). The central
+    // avenue and the hand-authored near-plaza are kept clear. buildBuilding
+    // auto-registers each as a movement + Rapier collider and merges geometry into
+    // the shared buckets, so draw-call cost stays low even at city scale.
     function buildProceduralCity() {
-      const rng = seededRandom("city-district-v1");
+      const rng = seededRandom("city-grid-v2");
       const mats = [M.brick, M.concrete, M.stone, M.brickDark];
-      for (let cz = 246; cz <= EXT_Z_FAR - 16; cz += 25 + rng() * 7) {
-        for (const side of [-1, 1]) {
-          if (rng() < 0.12) continue; // occasional empty lot
-          const cx = side * (46 + rng() * 8);        // beyond the sidewalks, within bounds
-          const w = 14 + rng() * 8;
-          const d = 13 + rng() * 7;
-          const h = 12 + Math.floor(rng() * 32);      // varied skyline
-          buildBuilding(cx, cz + (rng() - 0.5) * 4, w, d, h, mats[Math.floor(rng() * mats.length)]);
+      const PITCH = 20;
+      let col = 0;
+      for (let cx = EXT_X_MIN + 8; cx <= EXT_X_MAX - 8; cx += PITCH, col++) {
+        if (Math.abs(cx) < 28) continue;              // keep the central avenue clear
+        if (col % 4 === 0) continue;                   // N-S cross streets
+        let row = 0;
+        for (let cz = 132; cz <= EXT_Z_FAR - 12; cz += PITCH, row++) {
+          if (row % 4 === 0) continue;                 // E-W cross streets
+          if (cz < 208 && Math.abs(cx) < 68) continue; // leave the hand-authored plaza
+          if (rng() < 0.12) continue;                   // occasional empty lot
+          const w = PITCH - 6 - rng() * 3;
+          const d = PITCH - 6 - rng() * 3;
+          const h = 10 + Math.floor(rng() * 36);        // varied skyline
+          buildBuilding(cx + (rng() - 0.5) * 2, cz + (rng() - 0.5) * 2, w, d, h, mats[Math.floor(rng() * mats.length)]);
         }
       }
     }

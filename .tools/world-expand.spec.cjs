@@ -13,20 +13,21 @@ test("exterior world is extended with a procedural district + physics colliders"
   }));
   console.log("WORLD", JSON.stringify(w));
   expect(w.zFar).toBe(380);                 // world extended deep
-  expect(w.footprints).toBeGreaterThan(69); // procedural buildings added (was 69)
+  expect(w.footprints).toBeGreaterThan(90); // full city grid (was 69, then 77)
 
   // A deep-district building blocks the player (physics collision in the new area).
   // Sample a spot near where procedural buildings sit (x~50, z 250..360).
   const anyBlocked = await page.evaluate(() => {
-    for (let z = 250; z < 366; z += 4) {
-      for (const x of [-52, -50, -48, 48, 50, 52]) {
-        if (window.__physics.blocksAt(x, z, 0.4)) return { x, z };
+    let hits = 0, sample = null;
+    for (let z = 214; z < 372; z += 3) {
+      for (let x = -110; x <= 110; x += 3) {
+        if (window.__physics.blocksAt(x, z, 0.4)) { hits++; if (!sample) sample = { x, z }; }
       }
     }
-    return null;
+    return { hits, sample };
   });
   console.log("BLOCKED-IN-DISTRICT", JSON.stringify(anyBlocked));
-  expect(anyBlocked).not.toBeNull();        // collision exists in the new district
+  expect(anyBlocked.hits).toBeGreaterThan(20); // lots of building collision in the grid
 
   // Player can travel deep into the new world (boundary failsafe extended).
   await page.waitForFunction(() => window.__rbTest && window.__rbTest.getState);
@@ -37,4 +38,13 @@ test("exterior world is extended with a procedural district + physics colliders"
   const pos = await page.evaluate(() => window.__rbTest.getPlayerPosition());
   console.log("DEEP", JSON.stringify(pos));
   expect(pos.z).toBeGreaterThan(340);       // stayed deep (not clamped back by the old bound)
+
+  // Real GPU draw calls with the whole city in view stay in budget (frustum
+  // culling keeps most of the ~1400 window meshes off the GPU). This is the
+  // actual streaming gauge — when THIS climbs, chunk streaming earns its place.
+  await page.evaluate(() => window.__rbTest.tpTo(0, 128, 0, 0)); // plaza mouth, city ahead
+  await page.waitForTimeout(500);
+  const fs = await page.evaluate(() => window.__rbTest.getFrameStats());
+  console.log("DRAWCALLS", fs.drawCalls, "TRIS", fs.triangles);
+  expect(fs.drawCalls).toBeLessThan(700);   // city stays cull-friendly (measured ~434)
 });

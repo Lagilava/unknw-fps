@@ -19056,6 +19056,8 @@ async function spawnEnemies(wave, options: any = {}) {
         jsUpdateMs: +quality.jsUpdateMs.toFixed(2),
         jsFrameMs: +quality.jsFrameMs.toFixed(2),
         shadows: !!renderer.shadowMap?.enabled,
+        drawCalls: renderer.info?.render?.calls ?? -1,
+        triangles: renderer.info?.render?.triangles ?? -1,
       }),
       getPlayerPosition: () => ({
         x: yaw.position.x,
