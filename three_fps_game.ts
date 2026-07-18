@@ -1459,9 +1459,11 @@ declare module "three" {
   // The perk machine IS the plaza's landmark statue (modules/landmarks.js,
   // 0,175) — loadWorldLandmarks anchors perkMachineState.station to it.
   const PERK_DEFS = [
-    { id: "overcharge", name: "OVERCHARGE",  cost: 350, desc: "+30% WEAPON DAMAGE", initial: "O", color: "#ffb020" },
-    { id: "vitality",   name: "VITALITY",    cost: 550, desc: "+50 MAX HEALTH",     initial: "V", color: "#5eff8a" },
-    { id: "aegis",      name: "AEGIS",       cost: 850, desc: "-25% DAMAGE TAKEN",  initial: "A", color: "#22d3ee" },
+    { id: "overcharge", name: "OVERCHARGE",  cost: 350,  desc: "+30% WEAPON DAMAGE", initial: "O", color: "#ffb020" },
+    { id: "vitality",   name: "VITALITY",    cost: 550,  desc: "+50 MAX HEALTH",     initial: "V", color: "#5eff8a" },
+    { id: "aegis",      name: "AEGIS",       cost: 850,  desc: "-25% DAMAGE TAKEN",  initial: "A", color: "#22d3ee" },
+    { id: "adrenaline", name: "ADRENALINE",  cost: 1150, desc: "+15% MOVE SPEED",    initial: "R", color: "#ff5e7a" },
+    { id: "stim",       name: "STIM MODULE", cost: 1500, desc: "REGEN 2 HP/SEC",     initial: "S", color: "#c07aff" },
   ];
   const perkMachineState: any = { station: null, active: false, prompt: "", pulseMats: null };
   // Mystery box (CoD-zombies style): glowing chest in the exterior at (10, 140) —
@@ -9119,8 +9121,11 @@ function createLightningEffect() {
       enemy.mesh.userData.walkAction.reset();
       enemy.mesh.userData.walkAction.play();
     }
-    const speedScale = getWaveSpeedScale(wave);
-    const damageScale = getWaveDamageScale(wave);
+    // Blackout waves (wave%10): the dark is THEIR home turf — enemies hunt
+    // noticeably faster and hit harder (kills also pay double XP, see killEnemy).
+    const blackout = wave > 0 && wave % 10 === 0;
+    const speedScale = getWaveSpeedScale(wave) * (blackout ? 1.3 : 1);
+    const damageScale = getWaveDamageScale(wave) * (blackout ? 1.25 : 1);
     enemy.hp = Math.round(type.hp * hpScale);
     enemy.maxHp = Math.round(type.hp * hpScale);
     enemy.speed = type.speed * speedScale;
@@ -12367,7 +12372,9 @@ async function spawnEnemies(wave, options: any = {}) {
           : `PACK-A-PUNCH NEEDS ${cost - player.xp} XP`
       : "";
     const remotePackActive = net?.active && gameMode === "coop" && [...remotePlayers.values()].some(a => a.runtime?.packActive);
-    const visualActive = packState.active || remotePackActive;
+    // Blackout waves: treat the machine as visually active so its rings run hot —
+    // a glowing beacon in the dark (emissive only, no lights).
+    const visualActive = packState.active || remotePackActive || darkWaveActive;
     const now = performance.now();
     const ringPulse = 0.5 + Math.sin(now * 0.0048) * 0.5;
     if (packState.station.userData.ring) {
@@ -12563,9 +12570,11 @@ async function spawnEnemies(wave, options: any = {}) {
     scene.add(root);
     mysteryBoxState.station = root;
     if (typeof window.__extAddCollider === "function") window.__extAddCollider(10, 140, 2.0, 1.3);
-    // Pre-create one display rig now so its materials are linked in the boot
-    // compile pass (compileAllWarmables walks the whole graph, visible or not).
-    getMysteryBoxDisplayRig(GUNS.PISTOL);
+    // Pre-create ALL display rigs now so their materials are linked in the boot
+    // compile pass (compileAllWarmables walks the whole graph, visible or not) —
+    // the slot-machine cycle flicks through every weapon, so none may be built
+    // lazily mid-roll (shader/geometry hitch).
+    for (const g of Object.values(GUNS)) getMysteryBoxDisplayRig(g);
   }
 
   function getMysteryBoxDisplayRig(gunType) {
@@ -12607,12 +12616,11 @@ async function spawnEnemies(wave, options: any = {}) {
     mysteryBoxState.teddy = teddy;
     mysteryBoxState.visualOnly = !!visualOnly;
     hideMysteryBoxDisplays();
-    if (teddy) {
-      if (mysteryBoxState.teddyMesh) mysteryBoxState.teddyMesh.visible = true;
-    } else {
-      const rig = getMysteryBoxDisplayRig(resultGun);
-      rig.gun.visible = true;
-    }
+    // Slot-machine reveal: DON'T show the prize yet — the rise cycles through
+    // random weapons (updateMysteryBox), and the real result locks in near the top.
+    mysteryBoxState.cycleGun = null;
+    mysteryBoxState.cycleTimer = 0;
+    mysteryBoxState.locked = false;
   }
 
   function tryMysteryBox() {
@@ -12694,7 +12702,9 @@ async function spawnEnemies(wave, options: any = {}) {
 
     // Glow pulse on trim + "?" (emissiveIntensity only — uniform update, no relink).
     const nearPulse = dist < 16 ? 0.55 + Math.sin(now * 0.004) * 0.45 : 0.22;
-    const glowBase = (s.rolling ? 3.0 : 1.4) * nearPulse + 0.6 + s.flashPulse * 3.0;
+    // Blackout waves: the box trim burns bright so it reads across the dark plaza.
+    const bgMul = darkWaveActive ? 2.4 : 1;
+    const glowBase = ((s.rolling ? 3.0 : 1.4) * nearPulse + 0.6) * bgMul + s.flashPulse * 3.0;
     for (const m of s.glowMats) m.emissiveIntensity = glowBase;
     if (s.qMark) {
       // The "?" breathes on its own faster rhythm and spins-glows during a roll.
@@ -12746,7 +12756,33 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     s.rollT += dt;
     const eased = 1 - Math.pow(1 - riseT, 3);
-    const display = s.teddy ? s.teddyMesh : s.displayCache.get(s.resultGun)?.gun;
+    // Slot-machine cycling: while rising, flick through random weapons with a
+    // cadence that starts frantic and slows as the reveal approaches; the REAL
+    // prize (or teddy) only locks in near the top with a flash pop.
+    const LOCK_T = 0.74;
+    if (riseT < LOCK_T && !s.locked) {
+      s.cycleTimer -= dt;
+      if (s.cycleTimer <= 0) {
+        s.cycleTimer = 0.07 + riseT * 0.4; // decelerating tick
+        const opts = Object.values(GUNS).filter(g => g !== s.cycleGun);
+        const pick = opts[Math.floor(Math.random() * opts.length)];
+        if (s.cycleGun) { const old = s.displayCache.get(s.cycleGun); if (old) old.gun.visible = false; }
+        const rig = getMysteryBoxDisplayRig(pick);
+        rig.gun.visible = true;
+        s.cycleGun = pick;
+        playEventSound("ui_click", { volume: 0.22, rate: 1.4 + riseT * 0.6 });
+      }
+    } else if (!s.locked) {
+      s.locked = true;
+      if (s.cycleGun) { const old = s.displayCache.get(s.cycleGun); if (old) old.gun.visible = false; }
+      if (s.teddy) { if (s.teddyMesh) s.teddyMesh.visible = true; }
+      else { getMysteryBoxDisplayRig(s.resultGun).gun.visible = true; }
+      s.flashPulse = Math.max(s.flashPulse, 0.6); // lock-in pop
+      playEventSound("box_reveal", { volume: 0.5 });
+    }
+    const display = !s.locked
+      ? (s.cycleGun ? s.displayCache.get(s.cycleGun)?.gun : null)
+      : (s.teddy ? s.teddyMesh : s.displayCache.get(s.resultGun)?.gun);
     if (display) {
       // Rise out of the chest with a slowing spin, then a gentle settle bob at the top.
       const settle = riseT >= 1 ? Math.sin((s.rollT - MYSTERY_BOX_RISE_SECONDS) * 6) * 0.03 : 0;
@@ -12786,9 +12822,11 @@ async function spawnEnemies(wave, options: any = {}) {
     if (mats && mats.length) {
       const purchasable = perkMachineState.active && def && player.xp >= def.cost;
       const now = performance.now();
-      const pulse = purchasable
+      let pulse = purchasable
         ? 0.85 + Math.sin(now * 0.004) * 0.35
         : 0.12 + Math.sin(now * 0.0016) * 0.06;
+      // Blackout waves: the statue becomes a beacon in the dark (emissive only).
+      if (darkWaveActive) pulse = Math.max(pulse * 2.6, 1.8 + Math.sin(now * 0.003) * 0.5);
       for (const m of mats) {
         if (Math.abs((m.emissiveIntensity || 0) - pulse) > 0.01) m.emissiveIntensity = pulse;
       }
@@ -12961,6 +12999,8 @@ async function spawnEnemies(wave, options: any = {}) {
     if (def.id === "overcharge") player.perkDamageMul = 1.3;
     else if (def.id === "vitality") { player.maxHp += 50; player.hp = player.maxHp; }
     else if (def.id === "aegis") player.perkDamageResist = 0.25;
+    else if (def.id === "adrenaline") player.perkSpeedMul = 1.15;
+    else if (def.id === "stim") player.perkRegen = 2; // hp/sec
     cameraFX.shake = Math.min(1, cameraFX.shake + 0.4);
     sfxPerkPurchase(tier);
     addKillFeed(`PERK ACQUIRED: ${def.name}`);
@@ -13044,6 +13084,8 @@ async function spawnEnemies(wave, options: any = {}) {
     player.hp = player.maxHp;
     player.perkDamageMul = 1;
     player.perkDamageResist = 0;
+    player.perkSpeedMul = 1;
+    player.perkRegen = 0;
     player.perkTier = 0;
     updatePerkHud();
     // Kill any live car alarm/lure + restore flashed emissives, and clear the
@@ -13119,7 +13161,9 @@ async function spawnEnemies(wave, options: any = {}) {
       return;
     }
     pvpHudEl?.classList.remove("active");
-    if (hud.objective) hud.objective.textContent = `WAVE ${game.wave} — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} DRONES`;
+    if (hud.objective) hud.objective.textContent = game.wave > 0 && game.wave % 10 === 0
+      ? `BLACKOUT — ×2 XP — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`
+      : `WAVE ${game.wave} — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} DRONES`;
     if (hud.waveVal) hud.waveVal.textContent = game.wave;
     if (hud.killsVal) hud.killsVal.textContent = `${game.killed} / ${game.totalEnemies}`;
   }
@@ -13766,7 +13810,8 @@ async function spawnEnemies(wave, options: any = {}) {
     enemyRemovalQueue.push(enemy);
     game.killed++;
     updateObjective();
-    const xpReward = enemy.xp * 3 + 4;
+    // Blackout waves pay DOUBLE XP — risk/reward for fighting in the dark.
+    const xpReward = (enemy.xp * 3 + 4) * (darkWaveActive ? 2 : 1);
     const ammoGain = 3 + enemy.xp * 2 + Math.floor(game.wave * 0.3);
     const localKiller = !net?.active || !killerId || killerId === myNetId;
     if (localKiller) {
@@ -13881,6 +13926,11 @@ async function spawnEnemies(wave, options: any = {}) {
       playEventSound('wave_clear', { volume: 0.6 });
       game.wave++;
       addKillFeed(`WAVE ${game.wave} INCOMING`);
+      if (game.wave % 10 === 0) {
+        // Blackout: force the flashlight on and tell the player the rules changed.
+        lightingState.flashlightOn = true;
+        addKillFeed("BLACKOUT — THEY HUNT FASTER. ×2 XP.");
+      }
       applyWaveLighting(game.wave, true);
       const waveAmmoBonus = 24 + Math.min(26, game.wave * 2);
       for (const gun of Object.values(allGuns)) gun.ammo = Math.min(gun.ammo + waveAmmoBonus, 240);
@@ -14287,9 +14337,10 @@ async function spawnEnemies(wave, options: any = {}) {
     phase: 0,           // 0 = sun, 1 = enemy pan, 2 = return-to-player
     t: 0,
     phaseT: 0,
-    durA: 2.8,
+    durA: 3.6,   // act 1 = player close-up (40%) + HARD CUT + sun reveal (60%)
     durB: 3.3,
     durC: 1.8,
+    cutFired: false, // internal hard-cut accent latch (act 1)
     // Pose captured at each phase boundary — the "from" of the current blend.
     blendPos: new THREE.Vector3(),
     blendQuat: new THREE.Quaternion(),
@@ -14323,6 +14374,13 @@ async function spawnEnemies(wave, options: any = {}) {
   const cutscenePitchQuatTmp = new THREE.Quaternion();
   const cutsceneLivePosTmp = new THREE.Vector3();
   const cutsceneLiveQuatTmp = new THREE.Quaternion();
+  const cutsceneRollQuatTmp = new THREE.Quaternion();
+  const CUTSCENE_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
+  // Soft percussive accent on each hard cut (filmic "thud", not the big engage boom).
+  function sfxCutsceneCut() {
+    playTone(58, "sine", 0.5, 0.28, 0, 0, 0, 40);
+    playNoise(0.28, 0.08, 400, "lowpass", 0, 0, 0.5);
+  }
 
   function cutsceneEase(x) { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); }
   // Softer, slower cinematic curve for the big camera moves (ease-in-out cubic).
@@ -14414,6 +14472,7 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.t = 0;
     cutscene.phaseT = 0;
     cutscene.durC = 1.8;
+    cutscene.cutFired = false;
     // Blend in from wherever the gameplay camera is right now.
     camera.getWorldPosition(cutscene.lastPos);
     camera.getWorldQuaternion(cutscene.lastQuat);
@@ -14534,8 +14593,11 @@ async function spawnEnemies(wave, options: any = {}) {
     if (cutscene.titleEl) {
       let o = 0;
       if (cutscene.phase === 0) {
-        const fin = cutsceneEase((cutscene.phaseT - 0.4) / 0.8);
-        const fout = 1 - cutsceneEase((cutscene.phaseT - (cutscene.durA - 0.6)) / 0.55);
+        // Title belongs to the SUN shot (after the internal hard cut) — it lands
+        // with the reveal instead of floating over the player close-up.
+        const cutAt = cutscene.durA * 0.4;
+        const fin = cutsceneEase((cutscene.phaseT - (cutAt + 0.3)) / 0.7);
+        const fout = 1 - cutsceneEase((cutscene.phaseT - (cutscene.durA - 0.55)) / 0.5);
         o = Math.max(0, Math.min(fin, fout));
       }
       cutscene.titleEl.style.opacity = o.toFixed(3);
@@ -14568,6 +14630,7 @@ async function spawnEnemies(wave, options: any = {}) {
       cutscene.orbitR = Math.max(3.0, Math.min(cutscene.orbitR, bestClear - 1.0));
       cutscene.orbitSweep = 1.4;
       cutscene.orbitA0 = bestAz - cutscene.orbitSweep / 2;
+      sfxCutsceneCut(); // hard cut into the threat reveal
     } else if (cutscene.phase === 1 && cutscene.phaseT >= cutscene.durB) {
       cutscene.phase = 2;
       cutscene.phaseT = 0;
@@ -14577,36 +14640,55 @@ async function spawnEnemies(wave, options: any = {}) {
     }
 
     if (cutscene.phase === 0) {
-      // PHASE A — the molten sun reveal. KEY: the fire dome is CAMERA-LOCKED
-      // (its horizon band always sits at the camera's own eye level), so a HIGH
-      // camera gets a clean composition — burning sky filling the frame, the
-      // city reduced to a dark silhouette in the bottom third, no rooftop
-      // clutter. Classic reveal move: start tilted down at the dark city, tilt
-      // up to the sun disc while drifting slowly toward it. Tight FOV (44) so
-      // the disc reads as a DISC, not a smear inside the bright band.
-      const k = cutsceneEaseCine(cutscene.phaseT / cutscene.durA);
-      cutsceneSunDirTmp.copy(BLACKOUT_SUN_DIR).normalize();
-      // Fixed high vantage over the arena (independent of where the player is —
-      // they may be deep inside the roofed interior with no sky sightline).
-      const ax = Math.max(-30, Math.min(30, yaw.position.x));
-      const az = Math.max(20, Math.min(160, yaw.position.z));
-      cutsceneEyeTmp.set(
-        ax + cutsceneSunDirTmp.x * 11 * k + breatheX,
-        44 + 3.5 * k + breatheY,
-        az + cutsceneSunDirTmp.z * 11 * k
-      );
-      // Tilt-up: target slides from well below the horizon (dark city) up to the
-      // sun disc's true elevation (BLACKOUT_SUN_DIR already encodes it).
-      const tiltUp = cutsceneEaseCine(Math.min(1, cutscene.phaseT / (cutscene.durA * 0.7)));
-      cutsceneTargetTmp.copy(cutsceneEyeTmp)
-        .addScaledVector(cutsceneSunDirTmp, 300);
-      cutsceneTargetTmp.y = cutsceneEyeTmp.y + (-95 + (cutsceneSunDirTmp.y * 300 + 95) * tiltUp);
-      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      // Ease in from the gameplay pose over the first ~0.7s (no engage jerk).
-      const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.7));
-      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
-      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (44 - cutscene.blendFov) * w);
+      // ACT 1 — two real shots with a HARD CUT between them (film grammar, not a
+      // cross-fade): (1) a low, close push-in on the PLAYER as the world dies —
+      // grounding the event in the character — then CUT to (2) the molten-sun
+      // reveal tilt-up. The cut lands with a soft percussive accent.
+      const cutAt = cutscene.durA * 0.4;
+      if (cutscene.phaseT < cutAt) {
+        // SHOT 1 — player close-up. Low frontal framing (camera at chest height
+        // looking slightly up = hero shot), slow push-in, and a small dutch tilt
+        // that settles level — unease resolving into resolve.
+        const k = cutsceneEaseCine(cutscene.phaseT / cutAt);
+        const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
+        const dist = 3.1 - 0.7 * k; // push-in
+        cutsceneEyeTmp.set(
+          yaw.position.x + fx * dist + breatheX * 0.5,
+          1.12 + 0.14 * k + breatheY * 0.5,
+          yaw.position.z + fz * dist
+        );
+        cutsceneTargetTmp.set(yaw.position.x, 1.52, yaw.position.z);
+        cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+        // Dutch: ~5° settling to level as the push completes.
+        cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, 0.09 * (1 - k)));
+        // Ease in from the gameplay pose over the first ~0.5s (no engage jerk).
+        const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.5));
+        cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
+        cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (48 - cutscene.blendFov) * w);
+      } else {
+        // SHOT 2 — the molten sun reveal (hard cut, no blend). KEY: the fire dome
+        // is CAMERA-LOCKED, so a HIGH camera gets a clean composition — burning
+        // sky filling the frame, the city a dark silhouette below. Tilt-up from
+        // the dark city to the sun disc. Tight FOV (44) so the disc reads.
+        if (!cutscene.cutFired) { cutscene.cutFired = true; sfxCutsceneCut(); }
+        const k2 = (cutscene.phaseT - cutAt) / (cutscene.durA - cutAt);
+        const k = cutsceneEaseCine(k2);
+        cutsceneSunDirTmp.copy(BLACKOUT_SUN_DIR).normalize();
+        const ax = Math.max(-30, Math.min(30, yaw.position.x));
+        const az = Math.max(20, Math.min(160, yaw.position.z));
+        cutsceneEyeTmp.set(
+          ax + cutsceneSunDirTmp.x * 11 * k + breatheX,
+          44 + 3.5 * k + breatheY,
+          az + cutsceneSunDirTmp.z * 11 * k
+        );
+        const tiltUp = cutsceneEaseCine(Math.min(1, k2 / 0.7));
+        cutsceneTargetTmp.copy(cutsceneEyeTmp)
+          .addScaledVector(cutsceneSunDirTmp, 300);
+        cutsceneTargetTmp.y = cutsceneEyeTmp.y + (-95 + (cutsceneSunDirTmp.y * 300 + 95) * tiltUp);
+        cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 44);
+      }
     } else if (cutscene.phase === 1) {
       // PHASE B — LOW hero-enemy arc. Aerials show nothing in a blacked-out
       // world; the readable shot is near-ground, close, arcing around the enemy
@@ -14649,10 +14731,10 @@ async function spawnEnemies(wave, options: any = {}) {
         }
       }
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      // Cross-blend from phase A's final pose over the first ~0.9s of the pan.
-      const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.9));
-      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
-      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
+      // Dutch tilt (~4°) easing level across the first half of the arc — the
+      // unease of the reveal resolving as the dolly presses in.
+      cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, -0.07 * (1 - Math.min(1, u * 2))));
+      // HARD CUT into this shot (no cross-blend — film grammar; accent plays at entry).
       applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
     } else {
       // PHASE C — blend from the pan's final pose to the LIVE third-person pose
@@ -14715,7 +14797,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const aimSpeedMul = 1 - adsPenalty * viewState.ads;
     // Per-gun weight: heavy weapons (LMG/railgun) slow the carrier, sidearms speed up.
     const heldWeightMul = Number.isFinite(GUN_SPECS[currentGun]?.moveSpeedMul) ? GUN_SPECS[currentGun].moveSpeedMul : 1;
-    const speed = (sprinting ? player.sprintSpeed : player.speed) * aimSpeedMul * player.effectSpeedMul * heldWeightMul;
+    const speed = (sprinting ? player.sprintSpeed : player.speed) * aimSpeedMul * player.effectSpeedMul * heldWeightMul * (player.perkSpeedMul || 1);
     const len = Math.hypot(f, s) || 1;
     // Keyboard is always full-speed in its direction; analog joystick scales speed
     // by how far the stick is pushed (clamped to 1).
@@ -16270,6 +16352,10 @@ async function spawnEnemies(wave, options: any = {}) {
     if (game.hitMarkerTimer > 0) {
       game.hitMarkerTimer = Math.max(0, game.hitMarkerTimer - dt);
       if (game.hitMarkerTimer <= 0) hud.hitMarker?.classList.remove("active");
+    }
+    // Stim Module perk: slow passive regen (pauses briefly after taking damage).
+    if ((player.perkRegen || 0) > 0 && player.hurtTimer <= 0 && player.hp > 0 && player.hp < player.maxHp) {
+      player.hp = Math.min(player.maxHp, player.hp + player.perkRegen * dt);
     }
     if (player.hurtTimer > 0) {
       player.hurtTimer = Math.max(0, player.hurtTimer - dt);

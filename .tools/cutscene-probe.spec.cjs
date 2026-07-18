@@ -44,7 +44,7 @@ test("blackout cutscene: phases render and camera lands on the TP pose", async (
   console.log("landing delta:", end.delta);
 });
 
-test("skip: any key jumps to a short phase-C catch-up", async ({ page }) => {
+test("unskippable: keys do NOT skip; cutscene completes and lands cleanly", async ({ page }) => {
   test.setTimeout(300000);
   await page.goto(URL, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.body.dataset.rbReady === "1", { timeout: 180000 });
@@ -54,8 +54,11 @@ test("skip: any key jumps to a short phase-C catch-up", async ({ page }) => {
   await page.evaluate(() => window.__rbTest.startBlackoutCutscene());
   await page.waitForFunction(() => window.__rbTest.getCutsceneState().t > 0.5, { timeout: 60000 });
   await page.keyboard.press("Space");
+  await page.waitForTimeout(150);
   const st = await page.evaluate(() => window.__rbTest.getCutsceneState());
-  expect(st.phase).toBe(2);
+  // Blackout cutscenes are UNSKIPPABLE (user requirement): input is swallowed.
+  expect(st.active).toBe(true);
+  expect(st.phase).toBeLessThan(2);
   await page.waitForFunction(() => !window.__rbTest.getCutsceneState().active, { timeout: 60000 });
   const delta = await page.evaluate(() => window.__rbTest.getCutsceneLandingDelta());
   expect(delta).toBeLessThan(0.05);

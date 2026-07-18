@@ -24,6 +24,14 @@
   const EXT_X_MIN  = -135;  // widened: a full city grid flanks the central avenue
   const EXT_X_MAX  =  135;
 
+  // PLAYABLE box — deliberately the ORIGINAL pre-expansion plaza. The city grid
+  // beyond it is pure vista: fully built and visible so the world reads as vast,
+  // but movement (extWallAt), the boundary colliders and the world-clamp
+  // (__extBounds) all stop at these bounds. Cheap "big world" feel, zero cost.
+  const PLAY_X_MIN = -72;
+  const PLAY_X_MAX =  72;
+  const PLAY_Z_FAR = 230;
+
   // ── Collision (runs immediately) ──────────────────────────────────────────
   const colliders = [];
   function addCollider(cx, cz, w, d) {
@@ -34,7 +42,7 @@
     // is critical: below it lies only the interior, which is always inside the MAP
     // grid and never delegates here. Without this check the side "wings" beside the
     // interior and the empty space north of it read as open and the player escapes.
-    if (px < EXT_X_MIN || px > EXT_X_MAX || pz > EXT_Z_FAR || pz < EXT_Z_NEAR) return true;
+    if (px < PLAY_X_MIN || px > PLAY_X_MAX || pz > PLAY_Z_FAR || pz < EXT_Z_NEAR) return true;
     for (let i = 0; i < colliders.length; i++) {
       const c = colliders[i];
       if (Math.abs(px - c.x) < c.hw && Math.abs(pz - c.z) < c.hd) return true;
@@ -46,7 +54,7 @@
   // AABB footprints that block movement in the exterior zone. (cx,cz)=centre, (w,d)=full size.
   window.__extAddCollider = addCollider;
   // Publish the exterior play-area box so the game's world-boundary failsafe stays in sync.
-  window.__extBounds = { xMin: EXT_X_MIN, xMax: EXT_X_MAX, zNear: EXT_Z_NEAR, zFar: EXT_Z_FAR };
+  window.__extBounds = { xMin: PLAY_X_MIN, xMax: PLAY_X_MAX, zNear: EXT_Z_NEAR, zFar: PLAY_Z_FAR };
 
   // ── Minimap layout export ─────────────────────────────────────────────────
   // The GTA-style minimap (three_fps_game.js renderMinimap) pre-renders the FULL
@@ -927,7 +935,8 @@
         let row = 0;
         for (let cz = 132; cz <= EXT_Z_FAR - 12; cz += PITCH, row++) {
           if (row % 4 === 0) continue;                 // E-W cross streets
-          if (cz < 208 && Math.abs(cx) < 68) continue; // leave the hand-authored plaza
+          // Keep the whole PLAYABLE box clear — the grid is pure vista beyond it.
+          if (cz < PLAY_Z_FAR + 12 && Math.abs(cx) < PLAY_X_MAX + 10) continue;
           if (rng() < 0.12) continue;                   // occasional empty lot
           const w = PITCH - 6 - rng() * 3;
           const d = PITCH - 6 - rng() * 3;
@@ -1394,12 +1403,14 @@
 
     // ── Boundaries ───────────────────────────────────────────────────────
     function buildBoundaries() {
-      const zc = (EXT_Z_NEAR + EXT_Z_FAR) / 2;
-      const zlen = EXT_Z_FAR - EXT_Z_NEAR;
-      const xlen = EXT_X_MAX - EXT_X_MIN + 2;
-      addCollider(EXT_X_MIN - 0.5, zc, 1, zlen);
-      addCollider(EXT_X_MAX + 0.5, zc, 1, zlen);
-      addCollider(0, EXT_Z_FAR + 0.5, xlen, 1);
+      // Boundary colliders sit at the PLAYABLE box, not the visual city extents —
+      // the district beyond is scenery the player can see but never reach.
+      const zc = (EXT_Z_NEAR + PLAY_Z_FAR) / 2;
+      const zlen = PLAY_Z_FAR - EXT_Z_NEAR;
+      const xlen = PLAY_X_MAX - PLAY_X_MIN + 2;
+      addCollider(PLAY_X_MIN - 0.5, zc, 1, zlen);
+      addCollider(PLAY_X_MAX + 0.5, zc, 1, zlen);
+      addCollider(0, PLAY_Z_FAR + 0.5, xlen, 1);
     }
 
     // ── Assemble ─────────────────────────────────────────────────────────

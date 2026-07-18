@@ -12,8 +12,9 @@ test("exterior world is extended with a procedural district + physics colliders"
     colliders: window.__physics.staticColliderCount(),
   }));
   console.log("WORLD", JSON.stringify(w));
-  expect(w.zFar).toBe(380);                 // world extended deep
-  expect(w.footprints).toBeGreaterThan(90); // full city grid (was 69, then 77)
+  // Playable box is deliberately the ORIGINAL plaza; the city beyond is vista.
+  expect(w.zFar).toBe(230);                 // playable bound (pre-expansion)
+  expect(w.footprints).toBeGreaterThan(90); // vista city buildings still exist
 
   // A deep-district building blocks the player (physics collision in the new area).
   // Sample a spot near where procedural buildings sit (x~50, z 250..360).
@@ -33,11 +34,13 @@ test("exterior world is extended with a procedural district + physics colliders"
   await page.waitForFunction(() => window.__rbTest && window.__rbTest.getState);
   await page.locator("#startBtn").click();
   await page.waitForFunction(() => window.__rbTest.getState() === "playing", { timeout: 15000 });
-  await page.evaluate(() => window.__rbTest.tpTo(0, 355, 0, 0)); // deep in the new district
-  await page.waitForTimeout(150);
+  // The vista district is UNREACHABLE: teleporting deep gets clamped back to the
+  // playable box (world-bound failsafe reads the play bounds, not the city size).
+  await page.evaluate(() => window.__rbTest.tpTo(0, 355, 0, 0));
+  await page.waitForTimeout(250);
   const pos = await page.evaluate(() => window.__rbTest.getPlayerPosition());
-  console.log("DEEP", JSON.stringify(pos));
-  expect(pos.z).toBeGreaterThan(340);       // stayed deep (not clamped back by the old bound)
+  console.log("VISTA-CLAMP", JSON.stringify(pos));
+  expect(pos.z).toBeLessThan(233);          // cannot stand in the vista city
 
   // Real GPU draw calls with the whole city in view stay in budget (frustum
   // culling keeps most of the ~1400 window meshes off the GPU). This is the
