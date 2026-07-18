@@ -81,6 +81,24 @@ export function buildExteriorColliders(footprints: any[], height = 16): number {
   return count;
 }
 
+// Reused shape/rotation to avoid per-call allocation in the movement hot path.
+const _ballShapes = new Map<number, any>();
+const _identQuat = { w: 1, x: 0, y: 0, z: 0 };
+
+/**
+ * Does a ball of `radius` centred at world (x, y, z) overlap any collider?
+ * Rapier-backed replacement for environment.js wallAtWorldRadius() — the player's
+ * wall collision now runs through the physics world (static wall + exterior
+ * colliders) instead of the MAP-grid sampler. Returns false until the world +
+ * colliders exist, so callers keep their existing fallback.
+ */
+export function physicsBlocksAt(x: number, z: number, radius: number, y = 1): boolean {
+  if (!world) return false;
+  let shape = _ballShapes.get(radius);
+  if (!shape) { shape = new RAPIER.Ball(radius); _ballShapes.set(radius, shape); }
+  return world.intersectionWithShape({ x, y, z }, _identQuat, shape) !== null;
+}
+
 /** Initialise the Rapier WASM runtime + a physics world (idempotent, async). */
 export async function initPhysics(gravityY = -9.81): Promise<any> {
   if (ready) return world;
@@ -95,6 +113,7 @@ export async function initPhysics(gravityY = -9.81): Promise<any> {
       ready: () => ready,
       bodyCount: () => (world ? world.bodies.len() : 0),
       staticColliderCount: () => staticColliderCount,
+      blocksAt: (x: number, z: number, r = 0.32, y = 1) => physicsBlocksAt(x, z, r, y),
       // Is world point (x, y, z) inside any collider? Used to verify the static
       // wall colliders line up with the MAP grid (compare against wallAtWorld).
       probe: (x: number, z: number, y = 1) => {

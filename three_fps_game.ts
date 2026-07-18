@@ -20,7 +20,7 @@ import {
 } from "./modules/dom_ui.js";
 import { createGunState, GUNS, GUN_SPECS, type GunType } from "./modules/gun_config";
 import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, liveEnemies } from "./modules/ecs";
-import { initPhysics, buildStaticWallColliders, buildExteriorColliders } from "./modules/physics";
+import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt } from "./modules/physics";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
@@ -1000,6 +1000,9 @@ declare module "three" {
   // view, and suppresses the first-person viewmodel/body (also saves the per-frame
   // FP viewmodel work). Set false to restore the switchable FP/TP behavior.
   const THIRD_PERSON_ONLY = true;
+  // Phase 3: route player wall collision through the Rapier physics world. See the
+  // movement resolution (physicsBlocksAt vs wallAtWorldRadius). Set false to revert.
+  const PLAYER_PHYSICS_COLLISION = true;
   // Scale applied to the head bone to hide it in unified FP (the eye camera sits
   // inside the head). Skinned meshes ignore bone .visible, so we collapse the head
   // bone to a near-zero point instead. Re-applied every frame in applyViewModeVisibility.
@@ -14697,11 +14700,20 @@ async function spawnEnemies(wave, options: any = {}) {
     const stepZ = delta.z / steps;
     const bodyMinY = player.jumpOffset + PLAYER_FOOT_CLEARANCE;
     const bodyMaxY = player.jumpOffset + PLAYER_H;
+    // Phase 3: player wall collision runs through the Rapier physics world
+    // (physicsBlocksAt = shape query against the static wall + exterior colliders)
+    // instead of the MAP-grid sampler. The movement integrator, axis-separated
+    // sliding, sub-stepping and dynamic-prop check (propBlocksAt) are unchanged,
+    // so the feel is preserved. Flip PLAYER_PHYSICS_COLLISION to false to restore
+    // the pure wallAtWorldRadius path.
+    const wallBlock = (x: number, z: number) => PLAYER_PHYSICS_COLLISION
+      ? physicsBlocksAt(x, z, r, player.jumpOffset + PLAYER_H * 0.5)
+      : wallAtWorldRadius(x, z, r);
     for (let i = 0; i < steps; i++) {
       const nx = yaw.position.x + stepX;
       const nz = yaw.position.z + stepZ;
-      if (!wallAtWorldRadius(nx, yaw.position.z, r) && !propBlocksAt(nx, yaw.position.z, r, bodyMinY, bodyMaxY)) yaw.position.x = nx;
-      if (!wallAtWorldRadius(yaw.position.x, nz, r) && !propBlocksAt(yaw.position.x, nz, r, bodyMinY, bodyMaxY)) yaw.position.z = nz;
+      if (!wallBlock(nx, yaw.position.z) && !propBlocksAt(nx, yaw.position.z, r, bodyMinY, bodyMaxY)) yaw.position.x = nx;
+      if (!wallBlock(yaw.position.x, nz) && !propBlocksAt(yaw.position.x, nz, r, bodyMinY, bodyMaxY)) yaw.position.z = nz;
     }
 
     // Hard world-boundary failsafe: even if the player clips through a wall, they
