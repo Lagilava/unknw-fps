@@ -12377,21 +12377,24 @@ async function spawnEnemies(wave, options: any = {}) {
     const visualActive = packState.active || remotePackActive || darkWaveActive;
     const now = performance.now();
     const ringPulse = 0.5 + Math.sin(now * 0.0048) * 0.5;
+    // Blackout polish: the beacon BREATHES in the dark (slow throb) instead of
+    // sitting at a constant hot value — reads alive from across the plaza.
+    const bgThrob = darkWaveActive ? 1.25 + Math.sin(now * 0.0026) * 0.35 : 1;
     if (packState.station.userData.ring) {
       packState.station.userData.ring.rotation.z += dt * (visualActive ? 2.35 : 1.35);
       packState.station.userData.ring.scale.setScalar(1 + ringPulse * (visualActive ? 0.06 : 0.025));
-      if (packState.station.userData.ring.material) packState.station.userData.ring.material.emissiveIntensity = visualActive ? 3.8 + ringPulse * 1.2 : 2.4 + ringPulse * 0.45;
+      if (packState.station.userData.ring.material) packState.station.userData.ring.material.emissiveIntensity = (visualActive ? 3.8 + ringPulse * 1.2 : 2.4 + ringPulse * 0.45) * bgThrob;
     }
     if (packState.station.userData.ring2) {
       packState.station.userData.ring2.rotation.z -= dt * (visualActive ? 1.65 : 0.9);
       packState.station.userData.ring2.scale.setScalar(1 + (1 - ringPulse) * (visualActive ? 0.05 : 0.018));
-      if (packState.station.userData.ring2.material) packState.station.userData.ring2.material.emissiveIntensity = visualActive ? 1.8 + ringPulse * 0.8 : 1.05 + ringPulse * 0.3;
+      if (packState.station.userData.ring2.material) packState.station.userData.ring2.material.emissiveIntensity = (visualActive ? 1.8 + ringPulse * 0.8 : 1.05 + ringPulse * 0.3) * bgThrob;
     }
     if (packState.station.userData.ring3) {
       packState.station.userData.ring3.rotation.x += dt * (visualActive ? 1.05 : 0.62);
       packState.station.userData.ring3.rotation.y += dt * (visualActive ? 0.82 : 0.42);
       packState.station.userData.ring3.scale.setScalar(1 + Math.sin(now * 0.0062) * (visualActive ? 0.045 : 0.015));
-      if (packState.station.userData.ring3.material) packState.station.userData.ring3.material.emissiveIntensity = visualActive ? 2.8 + ringPulse * 1.0 : 1.7 + ringPulse * 0.35;
+      if (packState.station.userData.ring3.material) packState.station.userData.ring3.material.emissiveIntensity = (visualActive ? 2.8 + ringPulse * 1.0 : 1.7 + ringPulse * 0.35) * bgThrob;
     }
     if (packState.station.userData.holoCyl) {
       packState.station.userData.holoCyl.material.opacity = visualActive
@@ -12770,6 +12773,7 @@ async function spawnEnemies(wave, options: any = {}) {
         const rig = getMysteryBoxDisplayRig(pick);
         rig.gun.visible = true;
         s.cycleGun = pick;
+        s.flashPulse = Math.max(s.flashPulse, 0.16); // glint per slot tick
         playEventSound("ui_click", { volume: 0.22, rate: 1.4 + riseT * 0.6 });
       }
     } else if (!s.locked) {
@@ -12787,7 +12791,9 @@ async function spawnEnemies(wave, options: any = {}) {
       // Rise out of the chest with a slowing spin, then a gentle settle bob at the top.
       const settle = riseT >= 1 ? Math.sin((s.rollT - MYSTERY_BOX_RISE_SECONDS) * 6) * 0.03 : 0;
       display.position.set(0, 0.55 + eased * 1.15 + settle, 0);
-      display.rotation.y = now * 0.002 * (2.0 - riseT * 1.4);
+      // Frantic spin while cycling; once the prize locks it slows to a calm,
+      // dignified display rotation (the "here it is" beat).
+      display.rotation.y = s.locked ? now * 0.0009 : now * 0.002 * (2.0 - riseT * 1.4);
       display.rotation.z = (1 - eased) * 0.5; // straightens as it rises
     }
     if (s.shimmer) {
@@ -13161,9 +13167,15 @@ async function spawnEnemies(wave, options: any = {}) {
       return;
     }
     pvpHudEl?.classList.remove("active");
-    if (hud.objective) hud.objective.textContent = game.wave > 0 && game.wave % 10 === 0
-      ? `BLACKOUT — ×2 XP — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`
-      : `WAVE ${game.wave} — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} DRONES`;
+    if (hud.objective) {
+      const blackout = game.wave > 0 && game.wave % 10 === 0;
+      hud.objective.textContent = blackout
+        ? `BLACKOUT — ×2 XP — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`
+        : `WAVE ${game.wave} — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} DRONES`;
+      // Blackout polish: the objective line itself burns amber during the event.
+      hud.objective.style.color = blackout ? "#ffb054" : "";
+      hud.objective.style.textShadow = blackout ? "0 0 12px rgba(255,120,30,.55)" : "";
+    }
     if (hud.waveVal) hud.waveVal.textContent = game.wave;
     if (hud.killsVal) hud.killsVal.textContent = `${game.killed} / ${game.totalEnemies}`;
   }
@@ -13930,6 +13942,7 @@ async function spawnEnemies(wave, options: any = {}) {
         // Blackout: force the flashlight on and tell the player the rules changed.
         lightingState.flashlightOn = true;
         addKillFeed("BLACKOUT — THEY HUNT FASTER. ×2 XP.");
+        announce("vo_wave_start_final"); // the ominous announcer read
       }
       applyWaveLighting(game.wave, true);
       const waveAmmoBonus = 24 + Math.min(26, game.wave * 2);
@@ -14665,7 +14678,10 @@ async function spawnEnemies(wave, options: any = {}) {
         const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.5));
         cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
         cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
-        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (48 - cutscene.blendFov) * w);
+        // Lens polish: the FOV tightens gently through the push-in (49 → 45.5) —
+        // the dolly and the zoom working together, like a real lens move.
+        const fovA = 49 - 3.5 * k;
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (fovA - cutscene.blendFov) * w);
       } else {
         // SHOT 2 — the molten sun reveal (hard cut, no blend). KEY: the fire dome
         // is CAMERA-LOCKED, so a HIGH camera gets a clean composition — burning
@@ -14687,7 +14703,9 @@ async function spawnEnemies(wave, options: any = {}) {
           .addScaledVector(cutsceneSunDirTmp, 300);
         cutsceneTargetTmp.y = cutsceneEyeTmp.y + (-95 + (cutsceneSunDirTmp.y * 300 + 95) * tiltUp);
         cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 44);
+        // Lens polish: slow creep from 46 → 44 across the reveal (subtle zoom
+        // INTO the sun disc as the tilt-up completes).
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 46 - 2 * k);
       }
     } else if (cutscene.phase === 1) {
       // PHASE B — LOW hero-enemy arc. Aerials show nothing in a blacked-out
@@ -16273,7 +16291,18 @@ async function spawnEnemies(wave, options: any = {}) {
     row.style.display = owned > 0 ? "flex" : "none";
     let i = 0;
     for (const chip of row.children) {
-      chip.style.display = i < owned ? "inline-flex" : "none";
+      const show = i < owned;
+      const wasHidden = chip.style.display === "none";
+      chip.style.display = show ? "inline-flex" : "none";
+      // Polish: a newly-acquired chip pops in (scale overshoot settling to 1).
+      if (show && wasHidden) {
+        chip.style.transition = "none";
+        chip.style.transform = "scale(1.45)";
+        requestAnimationFrame(() => {
+          chip.style.transition = "transform .38s cubic-bezier(.2,1.6,.35,1)";
+          chip.style.transform = "scale(1)";
+        });
+      }
       i++;
     }
   }

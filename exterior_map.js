@@ -1413,6 +1413,22 @@
       addCollider(0, PLAY_Z_FAR + 0.5, xlen, 1);
     }
 
+    // Polish: the play boundary reads as DESIGNED, not as an invisible wall — a
+    // jersey-barrier line closes the avenue where the vista district begins.
+    // Purely visual (the collider above already blocks); merges into buckets.
+    function buildBoundaryDressing() {
+      const bz = PLAY_Z_FAR - 0.9;
+      for (let x = -21; x <= 21; x += 3.0) {
+        queueBox(2.55, 0.92, 0.55, x, 0.46, bz, M.concrete);      // barrier body
+        queueBox(2.35, 0.10, 0.62, x, 0.96, bz, M.metalDark);      // top rail
+      }
+      // End posts + hazard stripe board on each sidewalk side.
+      for (const sx of [-24.5, 24.5]) {
+        queueBox(0.35, 1.5, 0.35, sx, 0.75, bz, M.metalDark);
+        queueBox(3.4, 0.5, 0.12, sx, 1.25, bz, M.yellow);
+      }
+    }
+
     // ── Assemble ─────────────────────────────────────────────────────────
     buildBoundaries();
     await setupExtSky();
@@ -1420,6 +1436,7 @@
     buildGround();
     buildAllBuildings();
     buildProceduralCity();
+    buildBoundaryDressing();
     buildFountain();
     buildBenches();
     buildLampposts();
