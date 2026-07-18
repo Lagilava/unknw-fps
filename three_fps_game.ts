@@ -1003,6 +1003,8 @@ declare module "three" {
   // Phase 3: route player wall collision through the Rapier physics world. See the
   // movement resolution (physicsBlocksAt vs wallAtWorldRadius). Set false to revert.
   const PLAYER_PHYSICS_COLLISION = true;
+  // Same for enemy movement collision (enemyBlockedAt). Set false to revert.
+  const ENEMY_PHYSICS_COLLISION = true;
   // Scale applied to the head bone to hide it in unified FP (the eye camera sits
   // inside the head). Skinned meshes ignore bone .visible, so we collapse the head
   // bone to a near-zero point instead. Re-applied every frame in applyViewModeVisibility.
@@ -7211,7 +7213,13 @@ function createLightningEffect() {
     const radius = getEnemyCollisionRadius(enemy);
     const minY = enemy.mesh.userData.collisionMinY ?? PLAYER_FOOT_CLEARANCE;
     const maxY = enemy.mesh.userData.collisionMaxY ?? PLAYER_H;
-    return wallAtWorldRadius(x, z, radius) || propBlocksAt(x, z, radius, minY, maxY);
+    // Phase 3: enemy wall collision runs through Rapier too (same static colliders
+    // as the player; the shape-query cache handles the varying enemy radii). Grid-
+    // native systems (pathfinding, LOS sampling) intentionally stay on the MAP grid.
+    const wall = ENEMY_PHYSICS_COLLISION
+      ? physicsBlocksAt(x, z, radius, 1)
+      : wallAtWorldRadius(x, z, radius);
+    return wall || propBlocksAt(x, z, radius, minY, maxY);
   }
 
   function enemyPathBlocked(enemy, ax, az, bx, bz, spacing = 0.62) {
