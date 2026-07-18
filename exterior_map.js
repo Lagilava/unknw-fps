@@ -20,7 +20,7 @@
   // between interior and exterior that both blocks the exits and z-fights the
   // two ground planes. 120 makes them meet edge-to-edge.
   const EXT_Z_NEAR = 120;
-  const EXT_Z_FAR  = 230;
+  const EXT_Z_FAR  = 380;   // extended: the exterior is now a deep city district
   const EXT_X_MIN  = -72;
   const EXT_X_MAX  =  72;
 
@@ -725,7 +725,7 @@
       // building. Sits just below y=0 so it never z-fights the interior floor (y=0)
       // or the detailed exterior ground above it. Collision is unchanged — movement is
       // still gated by the MAP grid / exterior bounds, this is purely visual backing.
-      queueBox(360, 0.10, 420, 0, -0.20, 40, M.ground);
+      queueBox(360, 0.10, 640, 0, -0.20, 90, M.ground);
 
       // Base ground
       queueBox(146, 0.10, depth, 0, -0.05, cz, M.ground);
@@ -909,6 +909,25 @@
       buildBuilding( 54, 198, 20, 14, 16, M.brickDark);
       buildBuilding(-36, 222, 42, 14, 20, M.concrete);
       buildBuilding( 36, 222, 42, 14, 16, M.brickDark);
+    }
+
+    // Procedural city district lining the EXTENDED street (z ~246 -> EXT_Z_FAR).
+    // Seeded so it's deterministic; buildings sit beyond the sidewalks on both
+    // sides. buildBuilding auto-registers each as a collider (-> Rapier), and the
+    // geometry merges into the shared buckets, so draw-call cost stays low.
+    function buildProceduralCity() {
+      const rng = seededRandom("city-district-v1");
+      const mats = [M.brick, M.concrete, M.stone, M.brickDark];
+      for (let cz = 246; cz <= EXT_Z_FAR - 16; cz += 25 + rng() * 7) {
+        for (const side of [-1, 1]) {
+          if (rng() < 0.12) continue; // occasional empty lot
+          const cx = side * (46 + rng() * 8);        // beyond the sidewalks, within bounds
+          const w = 14 + rng() * 8;
+          const d = 13 + rng() * 7;
+          const h = 12 + Math.floor(rng() * 32);      // varied skyline
+          buildBuilding(cx, cz + (rng() - 0.5) * 4, w, d, h, mats[Math.floor(rng() * mats.length)]);
+        }
+      }
     }
 
     // ── Neon signs ────────────────────────────────────────────────────────
@@ -1368,9 +1387,12 @@
 
     // ── Boundaries ───────────────────────────────────────────────────────
     function buildBoundaries() {
-      addCollider(EXT_X_MIN - 0.5, 176, 1, 110);
-      addCollider(EXT_X_MAX + 0.5, 176, 1, 110);
-      addCollider(0, EXT_Z_FAR + 0.5, 146, 1);
+      const zc = (EXT_Z_NEAR + EXT_Z_FAR) / 2;
+      const zlen = EXT_Z_FAR - EXT_Z_NEAR;
+      const xlen = EXT_X_MAX - EXT_X_MIN + 2;
+      addCollider(EXT_X_MIN - 0.5, zc, 1, zlen);
+      addCollider(EXT_X_MAX + 0.5, zc, 1, zlen);
+      addCollider(0, EXT_Z_FAR + 0.5, xlen, 1);
     }
 
     // ── Assemble ─────────────────────────────────────────────────────────
@@ -1379,6 +1401,7 @@
     setupExtLighting();
     buildGround();
     buildAllBuildings();
+    buildProceduralCity();
     buildFountain();
     buildBenches();
     buildLampposts();
