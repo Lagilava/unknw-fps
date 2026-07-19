@@ -15065,6 +15065,7 @@ async function spawnEnemies(wave, options: any = {}) {
     revealed: false, sweepDone: false,
     blackQuad: null, gunFloorActive: false, gunFloorPos: new THREE.Vector3(),
     grabFrom: new THREE.Vector3(), grabTo: new THREE.Vector3(), yawFlipped: false,
+    revealFlash: -1,
     faceDir: new THREE.Vector3(0, 0, -1),
     beatLatch: 0, sunH: new THREE.Vector3(1, 0, 0), zoomFrom: new THREE.Vector3(), zoomFromQuat: new THREE.Quaternion(), zoomFov: 50,
   };
@@ -15205,7 +15206,8 @@ async function spawnEnemies(wave, options: any = {}) {
     intro.beatLatch = 0;
     intro.gunFloorActive = false;
     intro.yawFlipped = false;
-    if (intro.blackQuad) { intro.blackQuad.visible = true; intro.blackQuad.material.opacity = 1; }
+    intro.revealFlash = -1;
+    if (intro.blackQuad) { intro.blackQuad.visible = true; intro.blackQuad.material.opacity = 1; intro.blackQuad.material.color.setHex(0x000000); }
     for (const e of liveEnemies) { if (e.mesh) e.mesh.visible = false; if (e.hpBar?.mesh) e.hpBar.mesh.visible = false; }
     if (intro.wireGroup) intro.wireGroup.visible = true;
     if (intro.frontierSoft) { intro.frontierSoft.visible = true; intro.frontierCore.visible = true; }
@@ -15272,13 +15274,39 @@ async function spawnEnemies(wave, options: any = {}) {
       intro.frontierCore.material.opacity = (0.45 + flare * 0.4) * (a < 0.62 ? 1 : Math.max(0, 1 - (a - 0.62) / 0.2));
       if (flare > 0.5 && !intro.flareTick) { intro.flareTick = true; playTone(640, "triangle", 0.08, 0.12); }
       else if (flare < 0.3) intro.flareTick = false;
-      // The reveal: black cover 1 → 0 across a 0.58..0.82; the grid dissolves 0.78..1.
-      if (intro.blackQuad) intro.blackQuad.material.opacity = a < 0.58 ? 1 : Math.max(0, 1 - (a - 0.58) / 0.24);
+      // THE REVEAL DETONATION: the instant the render completes, a light burst
+      // snaps the real city in (white flash through the cover quad) over a deep
+      // bass hit — then the cover is gone and the grid dissolves.
+      if (a >= 0.58 && intro.revealFlash < 0) {
+        intro.revealFlash = 0;
+        if (intro.blackQuad) intro.blackQuad.material.color.setHex(0xeaf6ff);
+        playTone(38, "sine", 1.1, 0.5, 0, 0, 0, 26);
+        playNoise(0.5, 0.16, 900, "lowpass", 0, 0, 0.6);
+      }
+      if (intro.revealFlash >= 0) intro.revealFlash += dt;
+      if (intro.blackQuad) {
+        intro.blackQuad.material.opacity = intro.revealFlash < 0
+          ? 1                                                    // black cover (grid phase)
+          : Math.max(0, 0.5 - intro.revealFlash * 1.9);          // white burst decaying
+      }
       intro.wireMat.opacity = (0.5 + (Math.random() < 0.06 ? 0.3 : 0)) * (a < 0.78 ? 1 : Math.max(0, 1 - (a - 0.78) / 0.22));
-      cutsceneEyeTmp.set(70 - 100 * a, 92 - 4 * a, -14 + 8 * a); // linear dolly
-      cutsceneTargetTmp.set(0, 4, 150);
+      // CAMERA — Hollywood approach vector: a LOW SKIM over the line grid
+      // (compressed, slight dutch, drifting with the frontier) that CRANES UP
+      // and pulls wide as the city resolves — speed-ramped so the rise
+      // accelerates into the reveal and settles at the apex.
+      const rise = cutsceneEaseCine(Math.max(0, (a - 0.3) / 0.7));
+      cutsceneEyeTmp.set(
+        38 - 26 * a - 38 * rise,        // lateral drift, widening with the rise
+        8.5 + 81 * rise,                // low skim → high crane
+        30 - 18 * a - 20 * rise
+      );
+      cutsceneTargetTmp.set(0, 4 + 8 * (1 - rise), 150);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50 - (a > 0.58 ? cutsceneEase((a - 0.58) / 0.3) * 2.5 : 0));
+      // Dutch on the skim, easing level as the crane rises.
+      cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, 0.10 * (1 - rise)));
+      // Lens: tight/compressed low (44) opening to a wide, planetary 52 at apex,
+      // with the reveal rack layered on top.
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 44 + 8 * rise - (a > 0.58 ? cutsceneEase((a - 0.58) / 0.3) * 2.5 : 0));
       if (cutscene.subEl) {
         cutscene.subEl.textContent = a < 0.6 ? "GRID 07 — RENDER IN PROGRESS" : "GRID 07 — RENDER COMPLETE";
         cutscene.subEl.style.opacity = String(Math.max(0, Math.min(1, (t - 1.2) / 0.5)) * (a < 0.93 ? 1 : (1 - (a - 0.93) / 0.07)));
