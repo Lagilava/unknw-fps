@@ -9324,7 +9324,10 @@ function createLightningEffect() {
     setEnemyAlive(enemy, true);
     enemy.bobSeed = Math.random() * Math.PI * 2;
     enemy.aggroRange = getEnemyAggroRange(type);
-    enemy.aggroed = false;
+    // Blackout waves: the dark is their shift — they hunt the operator from the
+    // FIRST second of the wave (no idle period; the cutscene's closing shot of
+    // the pack advancing is literal).
+    enemy.aggroed = blackout;
     enemy.typeName = type.name;
     enemy.xp = type.xp;
     enemy.aura = type.aura;
@@ -14526,7 +14529,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // WIDE (authored frame — never blend from a random gameplay pose) → 1.3s
     // close-up push (ease-out only, cut before it settles) → 2.15s sun tilt-up.
     durA: 5.1,
-    durB: 3.3,
+    durB: 4.0,   // hero arc (2.3) + the pack advancing on the player (1.7)
     durC: 0.45,  // settle-behind handoff (cut-on-action), not a long ease-blend
     cutFired: false, // internal hard-cut accent latch (act 1)
     cutFired2: false,
@@ -14665,9 +14668,16 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.phase = 0;
     cutscene.t = 0;
     cutscene.phaseT = 0;
-    cutscene.durC = 1.8;
+    cutscene.durC = 0.45; // settle-behind handoff, not a long ease-blend
     cutscene.cutFired = false;
-    // Blend in from wherever the gameplay camera is right now.
+    cutscene.cutFired2 = false;
+    cutscene.advanceLatch = false;
+    ensureCutsceneDom();
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1"; // open from black
+    // No text on the blackout cutscene, ever.
+    if (cutscene.titleEl) { cutscene.titleEl.textContent = ""; cutscene.titleEl.style.opacity = "0"; }
+    if (cutscene.subEl) { cutscene.subEl.textContent = ""; cutscene.subEl.style.opacity = "0"; }
+    // Blend-from capture kept for diagnostics; act 1 is fully authored (from black).
     camera.getWorldPosition(cutscene.lastPos);
     camera.getWorldQuaternion(cutscene.lastQuat);
     cutscene.lastFov = camera.fov;
@@ -14914,12 +14924,53 @@ async function spawnEnemies(wave, options: any = {}) {
         // INTO the sun disc as the tilt-up completes).
         applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 46 - 2 * k);
       }
+    } else if (cutscene.phase === 1 && cutscene.phaseT >= 2.3) {
+      // PHASE B2 — THE HUNT BEGINS: low over-shoulder frame of the pack closing
+      // in (blackout enemies hunt from the first second — this shot IS the rule).
+      if (!cutscene.advanceLatch) {
+        cutscene.advanceLatch = true;
+        sfxCutsceneCut();
+        // Enemy centroid at beat entry frames the shot.
+        let cx = 0, cz = 0, n = 0;
+        for (const e of liveEnemies) { if (e.mesh) { cx += e.mesh.position.x; cz += e.mesh.position.z; n++; } }
+        if (n > 0) { cx /= n; cz /= n; } else { cx = yaw.position.x; cz = yaw.position.z - 10; }
+        cutscene.advX = cx; cutscene.advZ = cz;
+      }
+      // The pack ADVANCES for real (they are already aggroed — see spawn).
+      for (const e of liveEnemies) {
+        if (!e.mesh) continue;
+        const dx = yaw.position.x - e.mesh.position.x, dz = yaw.position.z - e.mesh.position.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 3.2) {
+          const step = (e.speed || 4) * 0.55 * dt;
+          const nx2 = e.mesh.position.x + (dx / d) * step, nz2 = e.mesh.position.z + (dz / d) * step;
+          if (!enemyBlockedAt(e, nx2, nz2)) { e.mesh.position.x = nx2; e.mesh.position.z = nz2; }
+        }
+      }
+      const b2 = (cutscene.phaseT - 2.3) / (cutscene.durB - 2.3);
+      // Camera low behind the player's shoulder, facing the oncoming pack; a
+      // slow push toward them as they close (the dread builds into the handoff).
+      cutsceneSunDirTmp.set(cutscene.advX - yaw.position.x, 0, cutscene.advZ - yaw.position.z);
+      if (cutsceneSunDirTmp.lengthSq() < 0.01) cutsceneSunDirTmp.set(0, 0, -1);
+      cutsceneSunDirTmp.normalize();
+      cutsceneEyeTmp.set(
+        yaw.position.x - cutsceneSunDirTmp.x * (2.8 - b2 * 0.5) + breatheX * 0.3,
+        1.9 + breatheY * 0.3,
+        yaw.position.z - cutsceneSunDirTmp.z * (2.8 - b2 * 0.5)
+      );
+      cutsceneTargetTmp.set(
+        yaw.position.x + cutsceneSunDirTmp.x * 8,
+        1.25,
+        yaw.position.z + cutsceneSunDirTmp.z * 8
+      );
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 46);
     } else if (cutscene.phase === 1) {
       // PHASE B — LOW hero-enemy arc. Aerials show nothing in a blacked-out
       // world; the readable shot is near-ground, close, arcing around the enemy
       // nearest the pack's centre so it silhouettes against the fire horizon /
       // shows its glowing emissives, with packmates catching the frame edges.
-      const u = cutsceneEaseCine(cutscene.phaseT / cutscene.durB);
+      const u = cutsceneEaseCine(Math.min(1, cutscene.phaseT / 2.3));
       const ang = cutscene.orbitA0 + cutscene.orbitSweep * u;
       // Crane down through the arc: 2.8 → 1.5 (drops to eye level as it circles).
       const h = 2.8 - 1.3 * u;
@@ -15010,6 +15061,8 @@ async function spawnEnemies(wave, options: any = {}) {
     beam: null, beamCore: null, beamRing: null,
     revealed: false, sweepDone: false,
     blackQuad: null, gunFloorActive: false, gunFloorPos: new THREE.Vector3(),
+    grabFrom: new THREE.Vector3(), grabTo: new THREE.Vector3(), yawFlipped: false,
+    faceDir: new THREE.Vector3(0, 0, -1),
     beatLatch: 0, sunH: new THREE.Vector3(1, 0, 0), zoomFrom: new THREE.Vector3(), zoomFromQuat: new THREE.Quaternion(), zoomFov: 50,
   };
 
@@ -15148,6 +15201,7 @@ async function spawnEnemies(wave, options: any = {}) {
     intro.sweepDone = false;
     intro.beatLatch = 0;
     intro.gunFloorActive = false;
+    intro.yawFlipped = false;
     if (intro.blackQuad) { intro.blackQuad.visible = true; intro.blackQuad.material.opacity = 1; }
     for (const e of liveEnemies) { if (e.mesh) e.mesh.visible = false; if (e.hpBar?.mesh) e.hpBar.mesh.visible = false; }
     if (intro.wireGroup) intro.wireGroup.visible = true;
@@ -15369,21 +15423,36 @@ async function spawnEnemies(wave, options: any = {}) {
       if (intro.beatLatch < 4) {
         intro.beatLatch = 4;
         sfxCutsceneCut();
-        // Choir takes station BEHIND the operator (where the wave will stand).
+// Choir takes station where the REAL wave stands (enemy centroid — hidden
+        // until the handoff), so facing them at the end faces the actual fight.
         const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
-        const rx = Math.cos(yaw.rotation.y), rz = -Math.sin(yaw.rotation.y);
+        let ecx = 0, ecz = 0, en = 0;
+        for (const e of liveEnemies) { if (e.mesh) { ecx += e.mesh.position.x; ecz += e.mesh.position.z; en++; } }
+        if (en > 0) intro.faceDir.set(ecx / en - yaw.position.x, 0, ecz / en - yaw.position.z);
+        else intro.faceDir.set(-fx, 0, -fz);
+        if (intro.faceDir.lengthSq() < 0.01) intro.faceDir.set(-fx, 0, -fz);
+        intro.faceDir.normalize();
+        const cx2 = intro.faceDir.x, cz2 = intro.faceDir.z;
+        const px2 = cz2, pz2 = -cx2; // perpendicular
         if (intro.choir) intro.choir.forEach((w, i) => {
           const lat = (i - 1) * 2.3;
           w.root.position.set(
-            yaw.position.x - fx * (3.3 + (i === 1 ? 0.7 : 0)) + rx * lat,
+            yaw.position.x + cx2 * (3.3 + (i === 1 ? 0.7 : 0)) + px2 * lat,
             0,
-            yaw.position.z - fz * (3.3 + (i === 1 ? 0.7 : 0)) + rz * lat
+            yaw.position.z + cz2 * (3.3 + (i === 1 ? 0.7 : 0)) + pz2 * lat
           );
-          w.root.rotation.y = yaw.rotation.y; // face the same way as the operator
+          w.root.rotation.y = Math.atan2(-(-cx2), -(-cz2)); // face the operator
           w.root.visible = true;
         });
-        // Pistol on the floor in front of the operator; play the grab.
-        intro.gunFloorPos.set(yaw.position.x + fx * 0.62, 0.055, yaw.position.z + fz * 0.62);
+        // Pistol on the floor a short RUN ahead (wall-clamped) — the operator
+        // crosses to it during the grab instead of scooping at their feet.
+        cutsceneTargetTmp.set(yaw.position.x, 1.0, yaw.position.z);
+        cutsceneSunDirTmp.set(fx, 0, fz);
+        const gw = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, 3.2);
+        const gdist = Math.max(1.3, Math.min(2.2, (Number.isFinite(gw) ? gw : 3.2) - 0.9));
+        intro.gunFloorPos.set(yaw.position.x + fx * gdist, 0.055, yaw.position.z + fz * gdist);
+        intro.grabFrom.copy(yaw.position);
+        intro.grabTo.set(intro.gunFloorPos.x - fx * 0.62, yaw.position.y, intro.gunFloorPos.z - fz * 0.62);
         intro.gunFloorActive = true;
         thirdPerson.cutsceneAction = "grabPistol";
         const grabAction = thirdPerson.actions.grabPistol;
@@ -15393,9 +15462,18 @@ async function spawnEnemies(wave, options: any = {}) {
         }
         // (no caption — action reads on its own)
       }
+      // The operator crosses to the weapon through the first part of the beat.
+      const stride = cutsceneEase(Math.min(1, grabFrac / 0.45));
+      yaw.position.x = intro.grabFrom.x + (intro.grabTo.x - intro.grabFrom.x) * stride;
+      yaw.position.z = intro.grabFrom.z + (intro.grabTo.z - intro.grabFrom.z) * stride;
       // The hand closes on the weapon a little past mid-clip.
       if (intro.gunFloorActive && grabFrac > 0.58) intro.gunFloorActive = false;
       // Camera: overhead hold, then crash zoom to the live pose over the final 0.6s.
+      if (t >= INTRO_T_ZOOM && !intro.yawFlipped) {
+        intro.yawFlipped = true;
+        // Face where the wave actually stands — gameplay opens eye-to-eye.
+        yaw.rotation.y = Math.atan2(-intro.faceDir.x, -intro.faceDir.z);
+      }
       const zoomK = t < INTRO_T_ZOOM ? 0 : cutsceneEase((t - INTRO_T_ZOOM) / INTRO_DUR_ZOOM);
       cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, 15.2 - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);
       cutsceneTargetTmp.set(yaw.position.x, 0.6, yaw.position.z);

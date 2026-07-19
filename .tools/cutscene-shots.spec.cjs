@@ -33,6 +33,7 @@ test("blackout beats", async ({ page }) => {
   const at = async (t, path) => { await page.waitForFunction((tt) => window.__rbTest.getCutsceneState().t > tt, t, { timeout: 90000 }); await page.screenshot({ path }); };
   await at(0.9, "test-results/cs-bo-wide.png");
   await at(2.3, "test-results/cs-bo-close.png");
+  await page.waitForFunction((tt) => window.__rbTest.getCutsceneState().t > tt, 8.1, { timeout: 300000 }); await page.screenshot({ path: "test-results/cs-bo-advance.png" });
   await page.waitForFunction(() => !window.__rbTest.getCutsceneState().active, { timeout: 180000 });
   await page.waitForTimeout(300);
   await page.screenshot({ path: "test-results/cs-bo-end.png" });
