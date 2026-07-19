@@ -5410,7 +5410,7 @@ function createLightningEffect() {
     thirdPerson.armSwingActive = null;
     thirdPerson.mixer = new THREE.AnimationMixer(model);
 
-    const ONCE = new Set(["fire", "reload", "jump", "jumpRifle", "jumpNeutral", "jumpForward", "jumpBack", "startWalk", "stopWalk", "startWalkBack", "stopWalkBack", "death"]);
+    const ONCE = new Set(["fire", "reload", "jump", "jumpRifle", "jumpNeutral", "jumpForward", "jumpBack", "startWalk", "stopWalk", "startWalkBack", "stopWalkBack", "death", "pistolJump", "grabPistol"]);
     const source = {
       idle:         PLAYER_CHARACTER_ANIMS.idle,
       walk:         PLAYER_CHARACTER_ANIMS.walk,
@@ -5434,6 +5434,13 @@ function createLightningEffect() {
       fire:         PLAYER_CHARACTER_ANIMS.fire,
       reload:       PLAYER_CHARACTER_ANIMS.reload,
       death:        PLAYER_CHARACTER_ANIMS.death,
+      // One-handed sidearm set (see GUN_SPECS gripStyle "oneHand"): full-body
+      // Mixamo pistol locomotion — the arms genuinely hold the sidearm, so these
+      // are NOT in TP_UNARMED_ACTIONS (no arm-strip, no rifle-carry layer).
+      pistolRun:    PLAYER_CHARACTER_ANIMS.pistolRun,
+      pistolStrafe: PLAYER_CHARACTER_ANIMS.pistolStrafe,
+      pistolJump:   PLAYER_CHARACTER_ANIMS.pistolJump || PLAYER_CHARACTER_ANIMS.jumpForward,
+      grabPistol:   PLAYER_CHARACTER_ANIMS.grabPistol,
     };
 
     for (const [name, rawClip] of Object.entries(source)) {
@@ -6013,6 +6020,14 @@ function createLightningEffect() {
     // to the scene so their world-space staging keeps working.
     const gun = thirdPerson.weapon.gun;
     const unifiedFpActive = unifiedFirstPersonBodyActive();
+    // Intro finale: the pistol lies on the floor until the grab closes on it.
+    if (cutscene.introMode && intro.gunFloorActive) {
+      if (gun.parent !== scene) scene.attach(gun);
+      gun.position.copy(intro.gunFloorPos);
+      gun.rotation.set(Math.PI / 2, yaw.rotation.y + Math.PI * 0.5, 0); // lying flat
+      gun.scale.setScalar(0.6);
+      return;
+    }
     // Pack-a-Punch bank amount — used by both pose paths and the glow flare below.
     const tpPackBump = weaponAnim.packAnim > 0 ? Math.sin((1 - weaponAnim.packAnim) * Math.PI) : 0;
     const gunParented = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
@@ -6024,6 +6039,12 @@ function createLightningEffect() {
       gun.position.copy(fit.pos);
       gun.quaternion.copy(fit.quat);
       gun.scale.copy(fit.scale);
+      // Grip-fit trim (free-camera verification): the calibrated fit inherits the
+      // legacy world-pose float — seat the grip back into the palm (gun barrel is
+      // local +X) and level the muzzle, which sat ~25° high.
+      gun.rotateZ(-0.42);
+      gun.translateX(-0.12);
+      gun.translateY(-0.04);
       // Subtle additive feel in gun-local space — the hand itself already
       // carries recoil/sway/lag through the arm solve, so keep these small.
       if (thirdPerson.equip > 0) {
@@ -6235,19 +6256,27 @@ function createLightningEffect() {
     const wasMoving = thirdPerson._wasMoving || false;
     thirdPerson._wasMoving = movingNow;
 
+    // One-handed sidearm (Service Pistol / Gemini): real Mixamo pistol clips
+    // drive the whole body — the arms genuinely hold the sidearm instead of the
+    // arm-stripped rifle-carry layer.
+    const pistolMoveSet = GUN_SPECS[currentGun]?.gripStyle === "oneHand" && thirdPerson.actions.pistolRun;
     let targetAction = "idle";
-    if (player.pvpDead && thirdPerson.actions.death) {
+    if (thirdPerson.cutsceneAction && thirdPerson.actions[thirdPerson.cutsceneAction]) {
+      // Cutscene override (e.g. the intro's floor pistol-grab).
+      targetAction = thirdPerson.cutsceneAction;
+    } else if (player.pvpDead && thirdPerson.actions.death) {
       targetAction = "death";
     } else if (thirdPerson.reloadTimer > 0) {
       targetAction = "reload";
     } else if (thirdPerson.lastMove.jumping) {
-      if (f > 0.1 && thirdPerson.actions.jumpForward) targetAction = "jumpForward";
+      if (pistolMoveSet && thirdPerson.actions.pistolJump) targetAction = "pistolJump";
+      else if (f > 0.1 && thirdPerson.actions.jumpForward) targetAction = "jumpForward";
       else if (f < -0.1 && thirdPerson.actions.jumpBack) targetAction = "jumpBack";
       else if (mouse.aiming && thirdPerson.actions.jumpRifle) targetAction = "jumpRifle";
       else if (thirdPerson.actions.jumpForward) targetAction = "jumpForward";
       else targetAction = "jump";
     } else if (movingNow && thirdPerson.lastMove.sprinting) {
-      targetAction = pickSprintLocomotionAction(thirdPerson.actions, f, s);
+      targetAction = pistolMoveSet ? "pistolRun" : pickSprintLocomotionAction(thirdPerson.actions, f, s);
     } else if (movingNow) {
       // While moving, KEEP the locomotion clip even when firing — the arms are
       // raised/punched procedurally by applyThirdPersonArmPose (which is grip-style
@@ -6255,10 +6284,14 @@ function createLightningEffect() {
       // `fire` clip mid-stride is what made both arms flail on the one-handed pistol.
       // (This mirrors the sprint branch above, which already reads correctly.)
       if (Math.abs(s) > Math.abs(f) * 1.2) {
-        targetAction = s < -0.1 && thirdPerson.actions.strafeAlt ? "strafeAlt" : "strafe";
+        targetAction = pistolMoveSet && thirdPerson.actions.pistolStrafe
+          ? "pistolStrafe"
+          : (s < -0.1 && thirdPerson.actions.strafeAlt ? "strafeAlt" : "strafe");
       } else if (f < -0.1) {
         if (!wasMoving && thirdPerson.actions.startWalkBack) targetAction = "startWalkBack";
         else targetAction = thirdPerson.actions.walkBack ? "walkBack" : "walk";
+      } else if (pistolMoveSet) {
+        targetAction = "pistolRun"; // walk pace via timeScale below
       } else if (!wasMoving && thirdPerson.actions.startWalk) {
         targetAction = "startWalk";
       } else {
@@ -6274,6 +6307,10 @@ function createLightningEffect() {
       }
     }
     thirdPerson._lastWalkAction = targetAction;
+    // Pistol run doubles as the walk clip — slow it to walk cadence when not sprinting.
+    if (thirdPerson.actions.pistolRun) {
+      thirdPerson.actions.pistolRun.timeScale = thirdPerson.lastMove.sprinting ? 1 : 0.62;
+    }
 
     clearThirdPersonAimOffsets();
     setThirdPersonAction(targetAction);
@@ -14607,27 +14644,9 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.phase = 0;
     cutscene.t = 0;
     cutscene.phaseT = 0;
-    cutscene.durC = 0.45; // settle-behind handoff, not a long ease-blend
+    cutscene.durC = 1.8;
     cutscene.cutFired = false;
-    cutscene.cutFired2 = false;
-    ensureCutsceneDom();
-    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1"; // open from black
-    // Pick the clearest azimuth for the opening wide so the authored frame is
-    // never buried in a wall/prop (same grid-march scan as the other shots).
-    {
-      cutsceneTargetTmp.set(yaw.position.x, 1.2, yaw.position.z);
-      let bestAz = yaw.rotation.y + Math.PI, bestClear = -1;
-      for (let i = 0; i < 12; i++) {
-        const az = (i / 12) * Math.PI * 2;
-        cutsceneSunDirTmp.set(Math.cos(az), 0, Math.sin(az));
-        const d = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, 8.2);
-        const clear = Number.isFinite(d) ? d : 8.2;
-        if (clear > bestClear) { bestClear = clear; bestAz = az; }
-      }
-      cutscene.wideAz = bestAz;
-      cutscene.wideDist = Math.max(4.2, Math.min(7.2, bestClear - 0.9));
-    }
-    // Blend-from capture kept for diagnostics; act 1 is fully authored (from black).
+    // Blend in from wherever the gameplay camera is right now.
     camera.getWorldPosition(cutscene.lastPos);
     camera.getWorldQuaternion(cutscene.lastQuat);
     cutscene.lastFov = camera.fov;
@@ -14794,6 +14813,8 @@ async function spawnEnemies(wave, options: any = {}) {
       // Letterbox releases ON the cut (0.38s CSS), input goes live now (phase 2)
       // — control returns before the camera finishes settling.
       setCutsceneDomActive(false);
+      // Blackout forced the flashlight ON — tell the player how to toggle it.
+      if (darkWaveActive) addKillFeed("FLASHLIGHT ON — PRESS F TO TOGGLE");
     }
 
     if (cutscene.phase === 0) {
@@ -14813,18 +14834,22 @@ async function spawnEnemies(wave, options: any = {}) {
         cutscene.blackEl.style.opacity = bo.toFixed(3);
       }
       if (cutscene.phaseT < T_BLACK + T_WIDE) {
-        // SHOT 1 — static low wide, in FRONT of the player looking back at them
-        // (fire sky behind camera lights the scene): player on the left third,
-        // dark city looming. Locked off — only the breathe.
-        const wx = Math.cos(cutscene.wideAz), wz = Math.sin(cutscene.wideAz);
+        // SHOT 1 — SCENERY ESTABLISH: high behind the operator, looking over them
+        // into the burning horizon. The blackout is the subject; the player is a
+        // small silhouette low in frame. Locked off — only the breathe.
+        cutsceneSunDirTmp.copy(BLACKOUT_SUN_DIR); cutsceneSunDirTmp.y = 0; cutsceneSunDirTmp.normalize();
         cutsceneEyeTmp.set(
-          yaw.position.x + wx * cutscene.wideDist - wz * 1.9 + breatheX * 0.3,
-          0.95 + breatheY * 0.3,
-          yaw.position.z + wz * cutscene.wideDist + wx * 1.9
+          yaw.position.x - cutsceneSunDirTmp.x * 9 + breatheX * 0.3,
+          10.2 + breatheY * 0.3,
+          yaw.position.z - cutsceneSunDirTmp.z * 9
         );
-        cutsceneTargetTmp.set(yaw.position.x - wz * 0.95, 1.35, yaw.position.z + wx * 0.95);
+        cutsceneTargetTmp.set(
+          yaw.position.x + cutsceneSunDirTmp.x * 30,
+          6.2,
+          yaw.position.z + cutsceneSunDirTmp.z * 30
+        );
         cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 46);
       } else if (cutscene.phaseT < cutAt) {
         // SHOT 2 — close-up push-in (hard cut from the wide). Ease-OUT only:
         // starts moving, never decelerates into mush — the next cut interrupts it.
@@ -14950,13 +14975,20 @@ async function spawnEnemies(wave, options: any = {}) {
   // tilts up; (D) hard cut into a settle-behind and the player takes over.
   // Piggybacks the blackout cutscene's gating (cutscene.active/phase, letterbox,
   // enemy freeze, invulnerability) via cutscene.introMode.
-  const INTRO_DUR_A = 3.2, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3, INTRO_DUR_D = 0.45;
+  // Timeline (cumulative): A render-in 3.4 | B choir 2.2 | C teleport 2.3 |
+  // C2 sun arrival 2.0 | E overhead grab 2.0 + crash zoom 0.6 | D settle 0.45
+  const INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3;
+  const INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.6, INTRO_DUR_D = 0.45;
+  const INTRO_T_B = INTRO_DUR_A, INTRO_T_C = INTRO_T_B + INTRO_DUR_B, INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
+  const INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2, INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB, INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
   const intro: any = {
     fxBuilt: false, wireGroup: null, wireMat: null, clipPlane: null,
     frontierSoft: null, frontierCore: null,
     choir: null,           // [{ root, update }] ×3 visual-only Choir actors
     beam: null, beamCore: null, beamRing: null,
     revealed: false, sweepDone: false,
+    blackQuad: null, gunFloorActive: false, gunFloorPos: new THREE.Vector3(),
+    beatLatch: 0, sunH: new THREE.Vector3(1, 0, 0), zoomFrom: new THREE.Vector3(), zoomFromQuat: new THREE.Quaternion(), zoomFov: 50,
   };
 
   function buildIntroFx() {
@@ -14964,15 +14996,15 @@ async function spawnEnemies(wave, options: any = {}) {
     intro.fxBuilt = true;
     try {
       renderer.localClippingEnabled = true;
-      intro.clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 60); // keeps z >= -constant… animated per-frame
+      intro.clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), -50); // TRON draw-in: lines visible where z <= frontier
       // The "render model": ONE LineSegments of wireframe boxes built from the
       // machine's own collision data (exterior footprints + interior MAP walls) —
       // cheap (1 draw call, ~8k lines) and lore-true: the grid renders its
       // collision truth first, then the world resolves over it. (Wireframing the
       // real merged meshes was millions of line segments — 1 fps.)
       intro.wireMat = new THREE.LineBasicMaterial({
-        color: 0x22d3ee, transparent: true, opacity: 0.5,
-        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+        color: 0x22d3ee, transparent: true, opacity: 0.55,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false,
         clippingPlanes: [intro.clipPlane],
       });
       const pos = [];
@@ -15002,6 +15034,7 @@ async function spawnEnemies(wave, options: any = {}) {
       group.visible = false;
       const wireLines = new THREE.LineSegments(wireGeo, intro.wireMat);
       wireLines.frustumCulled = false;
+      wireLines.renderOrder = 910; // over the Tron black cover
       group.add(wireLines);
       scene.add(group);
       intro.wireGroup = group;
@@ -15010,6 +15043,8 @@ async function spawnEnemies(wave, options: any = {}) {
       const coreMat = new THREE.MeshBasicMaterial({ color: 0xe0fbff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       intro.frontierSoft = new THREE.Mesh(new THREE.PlaneGeometry(320, 34), softMat);
       intro.frontierCore = new THREE.Mesh(new THREE.PlaneGeometry(320, 1.4), coreMat);
+      intro.frontierSoft.renderOrder = 905; intro.frontierCore.renderOrder = 906;
+      softMat.depthTest = false; coreMat.depthTest = false;
       for (const m of [intro.frontierSoft, intro.frontierCore]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
       // Teleport column (Halo grammar: the EVENT precedes the person).
       const beamMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
@@ -15019,6 +15054,16 @@ async function spawnEnemies(wave, options: any = {}) {
       intro.beamRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.95, 40), beamMat.clone());
       intro.beamRing.rotation.x = -Math.PI / 2;
       for (const m of [intro.beam, intro.beamCore, intro.beamRing]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
+      // TRON cover: a camera-glued black quad that hides the real world while the
+      // line grid draws in, then fades to reveal the rendered city.
+      intro.blackQuad = new THREE.Mesh(
+        new THREE.PlaneGeometry(6, 3.6),
+        new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 1, depthTest: false, depthWrite: false, toneMapped: false }),
+      );
+      intro.blackQuad.renderOrder = 900;
+      intro.blackQuad.position.set(0, 0, -0.6);
+      intro.blackQuad.visible = false;
+      camera.add(intro.blackQuad);
     } catch (e) { console.warn("intro fx:", e); }
   }
 
@@ -15051,6 +15096,9 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.introPlayerHidden = true; // the operator hasn't teleported in yet
     intro.revealed = false;
     intro.sweepDone = false;
+    intro.beatLatch = 0;
+    intro.gunFloorActive = false;
+    if (intro.blackQuad) { intro.blackQuad.visible = true; intro.blackQuad.material.opacity = 1; }
     for (const e of liveEnemies) { if (e.mesh) e.mesh.visible = false; if (e.hpBar?.mesh) e.hpBar.mesh.visible = false; }
     if (intro.wireGroup) intro.wireGroup.visible = true;
     if (intro.frontierSoft) { intro.frontierSoft.visible = true; intro.frontierCore.visible = true; }
@@ -15070,6 +15118,9 @@ async function spawnEnemies(wave, options: any = {}) {
     if (intro.frontierSoft) { intro.frontierSoft.visible = false; intro.frontierCore.visible = false; }
     for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
     if (intro.choir) for (const w of intro.choir) w.root.visible = false;
+    if (intro.blackQuad) intro.blackQuad.visible = false;
+    intro.gunFloorActive = false;
+    thirdPerson.cutsceneAction = null;
     if (cutscene.blackEl) cutscene.blackEl.style.opacity = "0";
     if (cutscene.subEl) cutscene.subEl.textContent = "";
     setCutsceneDomActive(false);
@@ -15078,6 +15129,14 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function updateIntroCutscene(dt) {
     if (!cutscene.active || !cutscene.introMode) return;
+    // Free-camera diagnostic mode (verification specs): hold an explicit pose.
+    if (cutscene.freeCamPose) {
+      const p = cutscene.freeCamPose;
+      cutsceneEyeTmp.set(p.x, p.y, p.z); cutsceneTargetTmp.set(p.tx, p.ty, p.tz);
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, p.fov);
+      return;
+    }
     if (game.state !== "playing" && game.state !== "transition") { endIntroCutscene(); return; }
     camera.getWorldPosition(cutsceneLivePosTmp);
     camera.getWorldQuaternion(cutsceneLiveQuatTmp);
@@ -15088,67 +15147,71 @@ async function spawnEnemies(wave, options: any = {}) {
     const now = performance.now();
 
     if (t < INTRO_DUR_A) {
-      // BEAT A — the render-in. High crane, slow lateral dolly; the frontier
-      // sweeps toward camera along the dolly axis (the move is motivated by the
-      // effect). Continuous — no cut. Caption lands as the frontier crosses mid.
+      // BEAT A — TRON: the city is a LINE GRID on black. The frontier draws the
+      // grid in (lines exist only behind it); once the sweep completes, the black
+      // cover fades and the REAL rendered city is revealed under the lines,
+      // which then dissolve. High crane, slow lateral dolly throughout.
       const a = t / INTRO_DUR_A;
       if (cutscene.blackEl) cutscene.blackEl.style.opacity = String(Math.max(0, 1 - t / 0.3));
-      const e = cutsceneEaseCine(a);
-      const frontier = -50 + e * 450; // z sweep across the whole map
-      intro.clipPlane.constant = -frontier;           // wireframe survives z >= frontier
+      const sweep = cutsceneEaseCine(Math.min(1, a / 0.55));      // grid draw-in
+      const frontier = -50 + sweep * 450;
+      intro.clipPlane.constant = frontier;                        // lines where z <= frontier
       intro.frontierSoft.position.set(0, 15, frontier);
       intro.frontierCore.position.set(0, 15, frontier);
-      // Brightness: flares as it "catches" on the statue plaza and the barricade line.
       const flare = Math.exp(-Math.pow((frontier - 150) / 14, 2)) + Math.exp(-Math.pow((frontier - 232) / 10, 2));
-      intro.frontierSoft.material.opacity = 0.10 + flare * 0.10;
-      intro.frontierCore.material.opacity = 0.45 + flare * 0.4;
-      // Glitch ticks on the not-yet-rendered wireframe ("the part they let render").
-      intro.wireMat.opacity = 0.42 + (Math.random() < 0.06 ? 0.35 : 0) + Math.sin(now * 0.02) * 0.04;
-      cutsceneEyeTmp.set(70 - 100 * a, 92 - 4 * a, -14 + 8 * a); // linear dolly (varied attack, no ease)
+      intro.frontierSoft.material.opacity = (0.10 + flare * 0.10) * (a < 0.62 ? 1 : Math.max(0, 1 - (a - 0.62) / 0.2));
+      intro.frontierCore.material.opacity = (0.45 + flare * 0.4) * (a < 0.62 ? 1 : Math.max(0, 1 - (a - 0.62) / 0.2));
+      if (flare > 0.5 && !intro.flareTick) { intro.flareTick = true; playTone(640, "triangle", 0.08, 0.12); }
+      else if (flare < 0.3) intro.flareTick = false;
+      // The reveal: black cover 1 → 0 across a 0.58..0.82; the grid dissolves 0.78..1.
+      if (intro.blackQuad) intro.blackQuad.material.opacity = a < 0.58 ? 1 : Math.max(0, 1 - (a - 0.58) / 0.24);
+      intro.wireMat.opacity = (0.5 + (Math.random() < 0.06 ? 0.3 : 0)) * (a < 0.78 ? 1 : Math.max(0, 1 - (a - 0.78) / 0.22));
+      cutsceneEyeTmp.set(70 - 100 * a, 92 - 4 * a, -14 + 8 * a); // linear dolly
       cutsceneTargetTmp.set(0, 4, 150);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
       applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
       if (cutscene.subEl) {
-        cutscene.subEl.textContent = "GRID 07 — RENDER IN PROGRESS";
-        cutscene.subEl.style.opacity = String(Math.max(0, Math.min(1, (t - 1.5) / 0.5)) * (a < 0.94 ? 1 : (1 - (a - 0.94) / 0.06)));
+        cutscene.subEl.textContent = a < 0.6 ? "GRID 07 — RENDER IN PROGRESS" : "GRID 07 — RENDER COMPLETE";
+        cutscene.subEl.style.opacity = String(Math.max(0, Math.min(1, (t - 1.2) / 0.5)) * (a < 0.93 ? 1 : (1 - (a - 0.93) / 0.07)));
       }
-    } else if (t < INTRO_DUR_A + INTRO_DUR_B) {
-      // BEAT B — the Choir. HARD CUT on a scan pulse. Low static long-lens frame;
-      // the three constructs advance INTO frame while the camera retreats half a
-      // unit (predator grammar). Cut out on the stride.
-      const b = (t - INTRO_DUR_A) / INTRO_DUR_B;
-      if (!intro.sweepDone) {
-        intro.sweepDone = true;
+    } else if (t < INTRO_T_C) {
+      // BEAT B — the Choir, all THREE in frame (they are the three that stand
+      // behind you when wave one begins). Low long-lens frame, camera retreating.
+      const b = (t - INTRO_T_B) / INTRO_DUR_B;
+      if (intro.beatLatch < 1) {
+        intro.beatLatch = 1;
         sfxCutsceneCut();
+        if (intro.blackQuad) intro.blackQuad.visible = false;
         intro.wireGroup.visible = false;
         intro.frontierSoft.visible = false; intro.frontierCore.visible = false;
         if (intro.choir) for (const w of intro.choir) w.root.visible = true;
         if (cutscene.subEl) { cutscene.subEl.textContent = "THE CHOIR IS AWAKE"; cutscene.subEl.style.opacity = "0.9"; }
+        playSweep(130, 58, 2.0, 0.13, "sawtooth", 0.02, 0);
+        intro.stepT = 0;
       }
       if (intro.choir) {
         for (const w of intro.choir) {
-          w.root.position.z -= dt * 1.15; // advance toward the interior
+          w.root.position.z -= dt * 1.15;
           try { w.update?.(dt, { alive: true, aggroed: true }); } catch (err) { /* pose-only actors */ }
         }
       }
-      cutsceneEyeTmp.set(-15.6 + breatheHelperX(now) * 0.2, 0.82, 131.5 - b * 0.5); // slow retreat (lane clear of the fountain + lamppost)
-      cutsceneTargetTmp.set(-13.6, 1.75, 147);
+      intro.stepT = (intro.stepT || 0) + dt;
+      if (intro.stepT >= 0.55) { intro.stepT -= 0.55; playTone(46, "sine", 0.24, 0.3, 0, 0, 0, 34); }
+      cutsceneEyeTmp.set(-15.6 + breatheHelperX(now) * 0.2, 0.82, 130.2 - b * 0.5);
+      cutsceneTargetTmp.set(-13.2, 1.7, 148.5);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 32); // long lens
-    } else if (t < INTRO_DUR_A + INTRO_DUR_B + INTRO_DUR_C) {
-      // BEAT C — the teleport. HARD CUT to the EMPTY spawn point, low angle;
-      // the column strikes down, the operator materializes feet-to-head as the
-      // camera tilts up 8°; the column collapse is the cut sound.
-      const c = (t - INTRO_DUR_A - INTRO_DUR_B) / INTRO_DUR_C;
-      if (intro.sweepDone) {
-        intro.sweepDone = false;
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 36);
+    } else if (t < INTRO_T_C2) {
+      // BEAT C — Halo teleport at the EMPTY spawn (unchanged grammar).
+      const c = (t - INTRO_T_C) / INTRO_DUR_C;
+      if (intro.beatLatch < 2) {
+        intro.beatLatch = 2;
         sfxCutsceneCut();
         if (intro.choir) for (const w of intro.choir) w.root.visible = false;
         for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = true;
         if (cutscene.subEl) { cutscene.subEl.textContent = "OPERATOR INSERTION"; cutscene.subEl.style.opacity = "0.9"; }
         playEventSound("box_reveal", { volume: 0.55, rate: 0.8 });
-        // Pick the CLEAREST camera azimuth around the spawn (grid-march, no
-        // raycasts) so the low shot never buries itself in a wall or prop.
+        playSweep(85, 430, 1.3, 0.15, "sine", 0, 0);
         cutsceneTargetTmp.set(yaw.position.x, 1.2, yaw.position.z);
         let bestAz = yaw.rotation.y + Math.PI, bestClear = -1;
         for (let i = 0; i < 12; i++) {
@@ -15162,9 +15225,8 @@ async function spawnEnemies(wave, options: any = {}) {
         intro.camDist = Math.max(2.8, Math.min(4.0, bestClear - 0.6));
       }
       const px = yaw.position.x, pz = yaw.position.z;
-      // Column: strikes down over 0.35s, holds, collapses after the reveal.
       const strike = Math.min(1, c / 0.16);
-      const collapse = Math.max(0, (c - 0.62) / 0.3); // clears quickly after the reveal so the operator READS
+      const collapse = Math.max(0, (c - 0.62) / 0.3);
       const beamH = 7.4 * strike;
       for (const m of [intro.beam, intro.beamCore]) {
         m.position.set(px, 7.4 - beamH / 2, pz);
@@ -15175,7 +15237,6 @@ async function spawnEnemies(wave, options: any = {}) {
       intro.beamRing.position.set(px, 0.1, pz);
       intro.beamRing.scale.setScalar(0.6 + c * 2.2);
       intro.beamRing.material.opacity = 0.5 * (1 - c);
-      // The operator materializes at 45% — reveal + flash pop.
       if (!intro.revealed && c > 0.45) {
         intro.revealed = true;
         cutscene.introPlayerHidden = false;
@@ -15184,21 +15245,114 @@ async function spawnEnemies(wave, options: any = {}) {
       }
       cutsceneEyeTmp.set(px + Math.cos(intro.camAz) * intro.camDist, 1.0, pz + Math.sin(intro.camAz) * intro.camDist);
       const tiltUp = cutsceneEaseCine(Math.min(1, c / 0.8));
-      cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz); // feet-first-to-head
+      cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
       applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 45);
+    } else if (t < INTRO_T_GRAB) {
+      // BEAT C2 — THE CHOIR ARRIVES, sun at their backs: three silhouettes
+      // striding toward the operator out of the light.
+      const c2 = (t - INTRO_T_C2) / INTRO_DUR_C2;
+      if (intro.beatLatch < 3) {
+        intro.beatLatch = 3;
+        sfxCutsceneCut();
+        for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
+        const sun = (window as any).__extSun;
+        intro.sunH.set(sun?.position?.x ?? 1, 0, sun?.position?.z ?? 0.4);
+        if (intro.sunH.lengthSq() < 0.01) intro.sunH.set(1, 0, 0.4);
+        intro.sunH.normalize();
+        // Stage the three off-sun from the player, lateral spread, and show them.
+        const latX = intro.sunH.z, latZ = -intro.sunH.x;
+        if (intro.choir) intro.choir.forEach((w, i) => {
+          const lat = (i - 1) * 2.6;
+          w.root.position.set(
+            yaw.position.x + intro.sunH.x * (10.5 + (i === 1 ? 0 : 1.6)) + latX * lat,
+            0,
+            yaw.position.z + intro.sunH.z * (10.5 + (i === 1 ? 0 : 1.6)) + latZ * lat
+          );
+          w.root.rotation.y = Math.atan2(-intro.sunH.x, -intro.sunH.z); // face the operator
+          w.root.visible = true;
+        });
+        if (cutscene.subEl) { cutscene.subEl.textContent = "THEY FOLLOW YOU IN"; cutscene.subEl.style.opacity = "0.9"; }
+        playSweep(140, 62, 1.8, 0.12, "sawtooth", 0.02, 0);
+      }
+      if (intro.choir) for (const w of intro.choir) {
+        w.root.position.addScaledVector(intro.sunH, -dt * 1.35); // stride out of the sun
+        try { w.update?.(dt, { alive: true, aggroed: true }); } catch (err) { /* pose-only */ }
+      }
+      // Low camera near the operator, looking INTO the sun — silhouette grammar.
+      cutsceneEyeTmp.set(
+        yaw.position.x + intro.sunH.x * 1.6 + breatheHelperX(now) * 0.25,
+        0.55,
+        yaw.position.z + intro.sunH.z * 1.6
+      );
+      cutsceneTargetTmp.set(
+        yaw.position.x + intro.sunH.x * 9,
+        1.9 - c2 * 0.35,
+        yaw.position.z + intro.sunH.z * 9
+      );
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 40);
+    } else if (t < INTRO_T_D) {
+      // BEAT E — OVERHEAD: the operator and the three arrived Choir, top-down;
+      // the operator takes the pistol from the floor (Grabbing Pistol clip);
+      // then a CRASH ZOOM dives from overhead toward the shoulder camera.
+      const e = (t - INTRO_T_GRAB) / (INTRO_DUR_GRAB + INTRO_DUR_ZOOM);
+      const grabFrac = Math.min(1, (t - INTRO_T_GRAB) / INTRO_DUR_GRAB);
+      if (intro.beatLatch < 4) {
+        intro.beatLatch = 4;
+        sfxCutsceneCut();
+        // Choir takes station BEHIND the operator (where the wave will stand).
+        const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
+        const rx = Math.cos(yaw.rotation.y), rz = -Math.sin(yaw.rotation.y);
+        if (intro.choir) intro.choir.forEach((w, i) => {
+          const lat = (i - 1) * 2.3;
+          w.root.position.set(
+            yaw.position.x - fx * (3.3 + (i === 1 ? 0.7 : 0)) + rx * lat,
+            0,
+            yaw.position.z - fz * (3.3 + (i === 1 ? 0.7 : 0)) + rz * lat
+          );
+          w.root.rotation.y = yaw.rotation.y; // face the same way as the operator
+          w.root.visible = true;
+        });
+        // Pistol on the floor in front of the operator; play the grab.
+        intro.gunFloorPos.set(yaw.position.x + fx * 0.62, 0.055, yaw.position.z + fz * 0.62);
+        intro.gunFloorActive = true;
+        thirdPerson.cutsceneAction = "grabPistol";
+        const grabAction = thirdPerson.actions.grabPistol;
+        if (grabAction) {
+          const clipDur = grabAction.getClip()?.duration || INTRO_DUR_GRAB;
+          grabAction.timeScale = clipDur / INTRO_DUR_GRAB; // fit the beat
+        }
+        if (cutscene.subEl) { cutscene.subEl.textContent = "PICK IT UP"; cutscene.subEl.style.opacity = "0.9"; }
+      }
+      // The hand closes on the weapon a little past mid-clip.
+      if (intro.gunFloorActive && grabFrac > 0.58) intro.gunFloorActive = false;
+      // Camera: overhead hold, then crash zoom to the live pose over the final 0.6s.
+      const zoomK = t < INTRO_T_ZOOM ? 0 : cutsceneEase((t - INTRO_T_ZOOM) / INTRO_DUR_ZOOM);
+      cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, 15.2 - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);
+      cutsceneTargetTmp.set(yaw.position.x, 0.6, yaw.position.z);
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      if (zoomK > 0) {
+        if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
+        cutsceneEyeTmp.lerp(cutsceneLivePosTmp, zoomK);
+        cutsceneQuatTmp.slerp(cutsceneLiveQuatTmp, zoomK);
+      }
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 44 + (liveFov - 44) * zoomK);
     } else {
       // BEAT D — settle-behind handoff (same grammar as the blackout ending):
       // hard cut to slightly behind/above the live pose, input live NOW, the
       // player's own motion finishes the shot.
       if (cutscene.phase !== 2) {
         cutscene.phase = 2;
+        thirdPerson.cutsceneAction = null;
+        intro.gunFloorActive = false;
+        if (intro.choir) for (const w of intro.choir) w.root.visible = false;
         for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
         if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
         sfxCutsceneRiser();
         setCutsceneDomActive(false);
       }
-      const st = Math.min(1, (t - INTRO_DUR_A - INTRO_DUR_B - INTRO_DUR_C) / INTRO_DUR_D);
+      const st = Math.min(1, (t - INTRO_T_D) / INTRO_DUR_D);
       const k = 1 - Math.pow(1 - st, 3);
       _aimFwdTmp.set(0, 0, 1).applyQuaternion(cutsceneLiveQuatTmp);
       _aimWantDirTmp.set(0, 1, 0).applyQuaternion(cutsceneLiveQuatTmp);
@@ -19531,6 +19685,13 @@ async function spawnEnemies(wave, options: any = {}) {
       // Blackout cutscene test hooks: force-start (applies blackout lighting
       // first so phase A frames the fire dome), and inspect live state.
       startIntroCutscene: () => startIntroCutscene(true),
+      grantGun: (gt) => { if (GUN_SPECS[gt]) { grantWeapon(gt); switchGun(gt, { fromBox: true }); } return currentGun; },
+      freeCam: (x, y, z, tx, ty, tz, fov = 50) => {
+        cutscene.active = true; cutscene.introMode = true; cutscene.phase = 0;
+        cutscene.freeCamPose = { x, y, z, tx, ty, tz, fov }; // applied per-frame by updateIntroCutscene
+        return true;
+      },
+      freeCamOff: () => { cutscene.freeCamPose = null; cutscene.active = false; cutscene.introMode = false; return true; },
       introJump: (t = 0) => { if (cutscene.introMode) { cutscene.phaseT = t; cutscene.t = t; } return cutscene.phaseT; },
       startBlackoutCutscene: () => {
         applyWaveLighting(10, false);

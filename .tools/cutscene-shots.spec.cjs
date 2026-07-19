@@ -15,10 +15,13 @@ test("intro beats", async ({ page }) => {
   // Headless SwiftShader renders the aerial beat at ~1fps — jump the intro clock
   // to each beat instead of waiting real time (real GPUs run it fine).
   const at = async (t, path) => { await page.evaluate((tt) => window.__rbTest.introJump(tt), t); await page.waitForTimeout(2600); await page.screenshot({ path }); };
-  await at(1.68, "test-results/cs-intro-render.png");
-  await at(4.4, "test-results/cs-intro-choir.png");
+  await at(1.15, "test-results/cs-intro-tron.png");
+  await at(2.75, "test-results/cs-intro-render.png");
+  await at(4.5, "test-results/cs-intro-choir.png");
   await at(6.9, "test-results/cs-intro-teleport.png");
-  await page.evaluate(() => window.__rbTest.introJump(8.12));
+  await at(8.9, "test-results/cs-intro-sunarrive.png");
+  await at(11.1, "test-results/cs-intro-grab.png");
+  await page.evaluate(() => window.__rbTest.introJump(12.94));
   await page.waitForFunction(() => !window.__rbTest.getCutsceneState().active, { timeout: 60000 });
   await page.waitForTimeout(800);
   await page.screenshot({ path: "test-results/cs-intro-end.png" });

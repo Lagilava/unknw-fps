@@ -272,6 +272,9 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.03,
     moveSpeedMul: 1.06, swayMul: 0.8, shakeMul: 0.85, driftMul: 1.6,
     bloomGrow: 0.007, bloomMax: 0.05, bloomDecay: 0.18,
+    // Machine pistol is held one-handed like the Service Pistol (drives the TP
+    // pistol locomotion clips + one-hand arm pose).
+    gripStyle: "oneHand",
     fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24,
     muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
     fireSound: "akimbo_fire", reloadSound: "reload_mag", equipSound: "equip_light",

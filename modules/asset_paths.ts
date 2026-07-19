@@ -45,6 +45,12 @@ export const PLAYER_ANIMATION_PATHS = {
   fire:         `${PLAYER_MODEL_ASSET_ROOT}/Firing Rifle.fbx`,
   reload:       `${PLAYER_MODEL_ASSET_ROOT}/Reloading.fbx`,
   death:        `${PLAYER_MODEL_ASSET_ROOT}/walking to dying.fbx`,
+  // Pistol set (Mixamo, user-supplied): real one-handed locomotion so the body
+  // actually HOLDS the sidearm, plus the floor-grab used by the intro cutscene.
+  pistolRun:    `assets/Pistol Animations/Pistol Run.fbx`,
+  pistolStrafe: `assets/Pistol Animations/Pistol Strafe.fbx`,
+  pistolJump:   `assets/Pistol Animations/Pistol Jump.fbx`,
+  grabPistol:   `assets/Pistol Animations/Grabbing Pistol.fbx`,
 };
 
 export const PLAYER_MODEL_GLTF_PATH = PLAYER_MODEL_PATH.replace(/\.fbx$/i, ".glb");

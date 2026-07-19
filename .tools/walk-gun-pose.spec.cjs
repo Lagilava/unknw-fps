@@ -30,11 +30,14 @@ test("gun stays held in the hands while walking (not centered on the body)", asy
   console.log("WALK SAMPLES " + JSON.stringify(samples));
   expect(samples.length).toBeGreaterThan(5);
 
-  // With the rifle-carry upper-body layer, hands hold a two-handed grip while
-  // walking: they must stay apart (unarmed walk lets them swing past each other,
-  // span collapsing near 0 → gun in body middle) and the gun must ride the grip.
-  const minSpan = Math.min(...samples.map(s => s.span));
+  // With the Mixamo pistol locomotion clips (gripStyle oneHand), the sidearm is
+  // carried COMPACT — hands close together — so a span floor no longer applies.
+  // The contract now: the gun rides the RIGHT hand (hand-bone parenting) and
+  // never drifts to the body midline.
   const maxGunToMid = Math.max(...samples.map(s => s.gunToMid));
-  expect(minSpan).toBeGreaterThan(0.2);
   expect(maxGunToMid).toBeLessThan(0.6);
+  const last = await page.evaluate(() => window.__rbReload());
+  const gunToRight = Math.hypot(last.gunPos.x - last.rightHand.x, last.gunPos.y - last.rightHand.y, last.gunPos.z - last.rightHand.z);
+  console.log("gunToRight", gunToRight.toFixed(3));
+  expect(gunToRight).toBeLessThan(0.5);
 });
