@@ -16,7 +16,9 @@
     background: var(--bg); color: var(--ink);
     font: 13px/1.45 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
     display: grid; grid-template-columns: 232px 1fr; height: 100vh; overflow: hidden;
+    transition: grid-template-columns .18s ease;
   }
+  body.preview-open { grid-template-columns: 232px 1fr 420px; }
   code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 
   /* Sidebar */
@@ -50,6 +52,39 @@
   header.top .sub { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
   .section { display: none; padding-top: 18px; }
   .section.active { display: block; }
+
+  /* Live Preview dock — persistent (not a .section), visible across every
+     nav page so a developer can keep the game running while tuning params. */
+  #previewDock {
+    display: none; flex-direction: column; overflow: hidden;
+    border-left: 1px solid var(--line); background: var(--panel2);
+  }
+  body.preview-open #previewDock { display: flex; }
+  #previewDock .pd-head {
+    padding: 12px 12px 10px; border-bottom: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #previewDock .pd-title {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  #previewDock .pd-title strong { font-size: 12px; letter-spacing: .1em; color: var(--dim); }
+  #previewDock .pd-status { font-size: 10.5px; color: var(--dim); }
+  #previewDock .pd-status.ready { color: var(--good); }
+  #previewDock .pd-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  #previewDock .pd-toolbar input[type="number"] {
+    width: 52px; background: var(--chip); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 6px; padding: 5px 6px; font-size: 11px;
+  }
+  #previewDock .pd-toolbar button[disabled] { opacity: .4; cursor: not-allowed; pointer-events: none; }
+  #previewDock .pd-frame-wrap { flex: 1; position: relative; background: #000; }
+  #previewDock iframe {
+    width: 100%; height: 100%; border: 0; display: block;
+  }
+  #previewDock .pd-empty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 10px; color: var(--dim); font-size: 12px; text-align: center; padding: 0 20px;
+  }
+  #previewToggle.on { border-color: var(--accent); color: var(--accent); }
 
   /* Preset bar */
   .preset-bar {
@@ -134,10 +169,36 @@
       </div>
       <div class="row-flex">
         <span class="chip" id="liveChip">● live-linked</span>
+        <button class="btn small" id="previewToggle">▣ Live Preview</button>
       </div>
     </header>
     <div id="sections"></div>
   </main>
+
+  <div id="previewDock">
+    <div class="pd-head">
+      <div class="pd-title">
+        <strong>LIVE PREVIEW</strong>
+        <span class="pd-status" id="pdStatus">Stopped</span>
+      </div>
+      <div class="pd-toolbar">
+        <button class="btn small primary" id="pdStart">▶ Start</button>
+        <button class="btn small danger" id="pdStop" disabled>■ Stop</button>
+      </div>
+      <div class="pd-toolbar">
+        <button class="btn small" id="pdRestart" disabled title="New Mission / Restart">↻ Mission</button>
+        <input type="number" id="pdWave" min="1" max="200" value="1" disabled title="Jump to wave" />
+        <button class="btn small" id="pdJumpWave" disabled title="Jump to this wave">Go</button>
+        <button class="btn small" id="pdGodMode" disabled title="Unlimited health">God mode</button>
+        <button class="btn small" id="pdIntro" disabled title="Play the New-Mission intro cutscene">▶ Intro</button>
+        <button class="btn small" id="pdBlackout" disabled title="Play the blackout cutscene">▶ Blackout</button>
+      </div>
+    </div>
+    <div class="pd-frame-wrap">
+      <div class="pd-empty" id="pdEmpty">Click Start to boot a live game preview here.<br />Parameter edits live-apply into it — no reload.</div>
+      <iframe id="pdFrame" allow="pointer-lock; fullscreen" style="display:none"></iframe>
+    </div>
+  </div>
 
   <div class="toast" id="toast"></div>
   <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
@@ -720,6 +781,88 @@ $("#resetAll").onclick = () => {
   if (!confirm("Reset the ENTIRE developer configuration to defaults? This clears all presets.")) return;
   store = DE.createDefaultStore(); for (const c of DE.CATEGORIES) editing[c] = "Default"; persist(); buildAll(); toast("Everything reset");
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live Preview dock — embeds the actual game (same-origin iframe) so a
+// developer can tune a parameter here and watch it land live, without
+// alt-tabbing. Uses the legacy importmap entry (same server this console runs
+// on) with ?test=1 to unlock window.__rbTest, which the toolbar calls directly
+// via iframe.contentWindow — no postMessage bridge needed, same-origin.
+// Parameter live-apply needs NO new plumbing: the game's own `storage` event
+// listener already fires for writes from any other same-origin document,
+// which an iframe is — the exact mechanism the cross-tab flow already relies on.
+// ─────────────────────────────────────────────────────────────────────────────
+const PREVIEW_URL = "./first_person_shooter_room_game%20(1).html?test=1";
+const PREVIEW_OPEN_KEY = "rb-dev-preview-open";
+let pdReadyPoll = null;
+
+function pdSetOpen(open) {
+  document.body.classList.toggle("preview-open", open);
+  $("#previewToggle").classList.toggle("on", open);
+  try { localStorage.setItem(PREVIEW_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
+}
+$("#previewToggle").onclick = () => pdSetOpen(!document.body.classList.contains("preview-open"));
+if (localStorage.getItem(PREVIEW_OPEN_KEY) === "1") pdSetOpen(true);
+
+function pdSetToolbarEnabled(enabled) {
+  for (const id of ["pdRestart", "pdWave", "pdJumpWave", "pdGodMode", "pdIntro", "pdBlackout"]) {
+    $("#" + id).disabled = !enabled;
+  }
+}
+
+function pdStart() {
+  const frame = $("#pdFrame");
+  $("#pdEmpty").style.display = "none";
+  frame.style.display = "block";
+  frame.src = PREVIEW_URL;
+  $("#pdStart").disabled = true;
+  $("#pdStop").disabled = false;
+  $("#pdStatus").textContent = "Booting…";
+  $("#pdStatus").classList.remove("ready");
+  pdSetToolbarEnabled(false);
+  // Boot takes 15-60s (world/shaders warming) — poll the same readiness flag
+  // every Playwright spec in this project already waits on.
+  clearInterval(pdReadyPoll);
+  pdReadyPoll = setInterval(() => {
+    let ready = false;
+    try { ready = frame.contentWindow?.document?.body?.dataset?.rbReady === "1"; } catch (_) {}
+    if (ready) {
+      clearInterval(pdReadyPoll);
+      $("#pdStatus").textContent = "● Ready";
+      $("#pdStatus").classList.add("ready");
+      pdSetToolbarEnabled(true);
+    }
+  }, 500);
+}
+
+function pdStop() {
+  clearInterval(pdReadyPoll);
+  const frame = $("#pdFrame");
+  frame.src = "about:blank"; // tears down the WebGL context + frees memory
+  frame.style.display = "none";
+  $("#pdEmpty").style.display = "flex";
+  $("#pdStart").disabled = false;
+  $("#pdStop").disabled = true;
+  $("#pdStatus").textContent = "Stopped";
+  $("#pdStatus").classList.remove("ready");
+  pdSetToolbarEnabled(false);
+}
+
+// Every toolbar action reuses an existing __rbTest hook — no new game-side API.
+function pdRbTest() {
+  try { return $("#pdFrame").contentWindow?.__rbTest || null; } catch (_) { return null; }
+}
+$("#pdStart").onclick = pdStart;
+$("#pdStop").onclick = pdStop;
+$("#pdRestart").onclick = () => pdRbTest()?.restart();
+$("#pdJumpWave").onclick = () => {
+  const rb = pdRbTest(); if (!rb) return;
+  const n = Math.max(1, Math.round(Number($("#pdWave").value) || 1));
+  rb.setWave(n); rb.completeWave();
+};
+$("#pdGodMode").onclick = () => pdRbTest()?.setUnlimitedHealth(true);
+$("#pdIntro").onclick = () => pdRbTest()?.startIntroCutscene();
+$("#pdBlackout").onclick = () => { const rb = pdRbTest(); if (!rb) return; rb.setWaveLighting(10); rb.startBlackoutCutscene(); };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Boot
