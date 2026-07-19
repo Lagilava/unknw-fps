@@ -5753,7 +5753,7 @@ function createLightningEffect() {
     // Nothing to do if fully lowered and no punch residue or sway
     if (blend < 0.005 && Math.abs(punch) < 0.001 && meleeSwing < 0.001 && Math.abs(swayUpper) < 0.0005 && Math.abs(swaySpine) < 0.0005) return;
 
-    const camPitch = clamp(pitch.rotation.x, -0.92, 0.92); // negative = looking up, positive = looking down
+    const camPitch = clamp(pitch.rotation.x, -0.92, 0.92); // mouse-look: negative = looking DOWN, positive = looking UP
 
     // ARM_RAISE_BIAS: static offset that lifts arms from the animation's hip-carry position
     // to a gun-ready shoulder height when blend = 1 and camPitch = 0 (looking straight ahead).
@@ -6133,7 +6133,9 @@ function createLightningEffect() {
       thirdPerson.weapon.gun.position.y -= 0.1 * reloadPresent - 0.03 * magSeat;
     }
     thirdPerson.weapon.gun.rotation.set(
-      -pitch.rotation.x * 0.96 - reloadPresent * 0.22 + actionRack * 0.08,
+      // Camera pitch DIRECT (mouse-look: looking down = negative pitch.rotation.x;
+      // the old -0.96 factor mirrored it — muzzle rose when looking at the floor).
+      pitch.rotation.x * 0.96 - reloadPresent * 0.22 + actionRack * 0.08,
       yaw.rotation.y + Math.PI * 0.5 - reloadPresent * 0.18 + magSeat * 0.08,
       spanDir.z * 0.08 - 0.1 + reloadPresent * 0.42 - magSeat * 0.18
     );
@@ -6176,10 +6178,17 @@ function createLightningEffect() {
     // hand bone converts it to the equivalent hand-local transform, which we
     // record as this weapon's permanent fit (research: seed-via-attach pattern).
     if (GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
-        && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.9 && Math.abs(pitch.rotation.x) < 0.12) {
-      gun.updateMatrixWorld(true);
-      thirdPerson.rightHand.attach(gun);
-      thirdPerson.weapon.handFit = { pos: gun.position.clone(), quat: gun.quaternion.clone(), scale: gun.scale.clone() };
+        && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3) {
+      // Deterministic: 3 consecutive stable aiming frames, then capture (the old
+      // one-frame |pitch|<0.12 gate could stall for seconds of live play).
+      thirdPerson.weapon._fitFrames = (thirdPerson.weapon._fitFrames || 0) + 1;
+      if (thirdPerson.weapon._fitFrames >= 3) {
+        gun.updateMatrixWorld(true);
+        thirdPerson.rightHand.attach(gun);
+        thirdPerson.weapon.handFit = { pos: gun.position.clone(), quat: gun.quaternion.clone(), scale: gun.scale.clone() };
+      }
+    } else if (thirdPerson.weapon) {
+      thirdPerson.weapon._fitFrames = 0;
     }
     }
     const tpMats = thirdPerson.weapon.gun.userData.packMats;
@@ -15430,70 +15439,6 @@ async function spawnEnemies(wave, options: any = {}) {
   // Tiny helper so beat B can share the breathe without phase-0 locals.
   function breatheHelperX(now) { return Math.sin(now * 0.0008) * 0.1; }
 
-  // ── Simple lens flare ──────────────────────────────────────────────────────
-  // Screen-space DOM flare (radial-gradient divs, mix-blend screen) driven by
-  // the sun's projected position — zero GPU/draw cost, no occlusion raycasts.
-  // Ghost elements sit on the sun→screen-centre axis like a real lens.
-  let flareEls = null;
-  const _flareDir = new THREE.Vector3();
-  const _flareV = new THREE.Vector3();
-  const _flareFwd = new THREE.Vector3();
-  function ensureLensFlare() {
-    if (flareEls) return flareEls;
-    const wrap = document.createElement("div");
-    wrap.id = "rb-flare";
-    wrap.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:4;mix-blend-mode:screen;";
-    const mk = (size, color, blur) => {
-      const d = document.createElement("div");
-      d.style.cssText = `position:absolute;width:${size}px;height:${size}px;border-radius:50%;` +
-        `background:radial-gradient(circle, ${color} 0%, transparent 70%);` +
-        (blur ? `filter:blur(${blur}px);` : "") +
-        "transform:translate(-50%,-50%);opacity:0;will-change:transform,opacity;";
-      wrap.appendChild(d);
-      return d;
-    };
-    const core = mk(240, "rgba(255,214,160,0.85)", 2);
-    const streakEl = document.createElement("div");
-    streakEl.style.cssText = "position:absolute;width:420px;height:3px;background:linear-gradient(90deg,transparent,rgba(255,220,180,0.55),transparent);transform:translate(-50%,-50%);opacity:0;will-change:transform,opacity;";
-    wrap.appendChild(streakEl);
-    const g1 = mk(56, "rgba(160,220,255,0.5)", 0);
-    const g2 = mk(96, "rgba(255,180,120,0.35)", 1);
-    const g3 = mk(30, "rgba(255,255,255,0.55)", 0);
-    document.body.appendChild(wrap);
-    flareEls = { wrap, core, streakEl, ghosts: [g1, g2, g3], ghostK: [0.45, 0.85, 1.25] };
-    return flareEls;
-  }
-  function updateLensFlare() {
-    const els = ensureLensFlare();
-    // Sun direction: molten blackout sun during dark waves, day sun otherwise.
-    if (darkWaveActive) _flareDir.copy(BLACKOUT_SUN_DIR);
-    else if ((window as any).__extSun) _flareDir.copy((window as any).__extSun.position);
-    else { els.wrap.style.opacity = "0"; return; }
-    _flareDir.normalize();
-    camera.getWorldDirection(_flareFwd);
-    const facing = _flareFwd.dot(_flareDir);
-    if (facing < 0.35 || (game.state !== "playing" && game.state !== "transition")) {
-      els.wrap.style.opacity = "0";
-      return;
-    }
-    camera.getWorldPosition(_flareV).addScaledVector(_flareDir, 500);
-    _flareV.project(camera);
-    if (_flareV.z > 1 || Math.abs(_flareV.x) > 1.25 || Math.abs(_flareV.y) > 1.25) { els.wrap.style.opacity = "0"; return; }
-    const sx = (_flareV.x * 0.5 + 0.5) * window.innerWidth;
-    const sy = (-_flareV.y * 0.5 + 0.5) * window.innerHeight;
-    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
-    const k = Math.pow(Math.max(0, (facing - 0.35) / 0.65), 2) * (darkWaveActive ? 1 : 0.8);
-    els.wrap.style.opacity = "1";
-    els.core.style.transform = `translate(-50%,-50%) translate(${sx}px,${sy}px)`;
-    els.core.style.opacity = String(0.75 * k);
-    els.streakEl.style.transform = `translate(-50%,-50%) translate(${sx}px,${sy}px)`;
-    els.streakEl.style.opacity = String(0.5 * k);
-    els.ghosts.forEach((g, i) => {
-      const gk = els.ghostK[i];
-      g.style.transform = `translate(-50%,-50%) translate(${sx + (cx - sx) * gk}px,${sy + (cy - sy) * gk}px)`;
-      g.style.opacity = String(0.5 * k * (1 - i * 0.2));
-    });
-  }
 
   function updateMovement(dt) {
     if (player.pvpDead) {
@@ -19683,7 +19628,6 @@ async function spawnEnemies(wave, options: any = {}) {
       // live gameplay pose (its phase-C landing target) before overwriting it.
       updateCutsceneCamera(dt);
       updateIntroCutscene(dt);
-      updateLensFlare();
 
       if (exteriorCityRoot) exteriorCityRoot.visible = true;
 
