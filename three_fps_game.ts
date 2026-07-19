@@ -6240,6 +6240,10 @@ function createLightningEffect() {
     const recoilForward = thirdPersonForwardTmp.set(-Math.sin(yaw.rotation.y), 0, -Math.cos(yaw.rotation.y));
 
     thirdPerson.root.position.set(yaw.position.x, player.jumpOffset, yaw.position.z);
+    // Fallen Idle plays its pose around STANDING hip height (the in-place clip
+    // conversion drops all position tracks, incl. the hips' Y) — sink the root
+    // so the collapsed operator actually lies on the ground during the intro.
+    if (thirdPerson.cutsceneAction === "fallenIdle") thirdPerson.root.position.y -= 0.62;
     thirdPerson.root.position.addScaledVector(recoilForward, -bodyRecoilBack);
     thirdPerson.root.position.y += Math.min(0.055, bodyRecoilBack * 0.35);
     thirdPerson.root.rotation.y = yaw.rotation.y + bodyRecoilYaw;
