@@ -6288,7 +6288,10 @@ function createLightningEffect() {
           ? "pistolStrafe"
           : (s < -0.1 && thirdPerson.actions.strafeAlt ? "strafeAlt" : "strafe");
       } else if (f < -0.1) {
-        if (!wasMoving && thirdPerson.actions.startWalkBack) targetAction = "startWalkBack";
+        // One-handed sidearm: pistol run played in REVERSE covers backpedal
+        // (incl. while shooting — the locomotion clip is kept during fire).
+        if (pistolMoveSet) targetAction = "pistolRun";
+        else if (!wasMoving && thirdPerson.actions.startWalkBack) targetAction = "startWalkBack";
         else targetAction = thirdPerson.actions.walkBack ? "walkBack" : "walk";
       } else if (pistolMoveSet) {
         targetAction = "pistolRun"; // walk pace via timeScale below
@@ -6298,7 +6301,9 @@ function createLightningEffect() {
         targetAction = "walk";
       }
     } else if (thirdPerson.fireTimer > 0) {
-      targetAction = "fire";
+      // Standing fire: the two-handed rifle fire clip reads wrong on a pistol —
+      // stay on idle and let the one-hand-aware procedural punch carry the shot.
+      targetAction = pistolMoveSet ? "idle" : "fire";
     } else if (wasMoving && !movingNow) {
       if (thirdPerson._lastWalkAction === "walkBack" && thirdPerson.actions.stopWalkBack) {
         targetAction = "stopWalkBack";
@@ -6307,9 +6312,11 @@ function createLightningEffect() {
       }
     }
     thirdPerson._lastWalkAction = targetAction;
-    // Pistol run doubles as the walk clip — slow it to walk cadence when not sprinting.
+    // Pistol run doubles as the walk clip (slower cadence) and, in REVERSE, as the
+    // backpedal. Sign flips with movement direction.
     if (thirdPerson.actions.pistolRun) {
-      thirdPerson.actions.pistolRun.timeScale = thirdPerson.lastMove.sprinting ? 1 : 0.62;
+      const back = (thirdPerson.lastMove.f || 0) < -0.1 ? -1 : 1;
+      thirdPerson.actions.pistolRun.timeScale = (thirdPerson.lastMove.sprinting ? 1 : 0.62) * back;
     }
 
     clearThirdPersonAimOffsets();
@@ -15047,13 +15054,41 @@ async function spawnEnemies(wave, options: any = {}) {
       softMat.depthTest = false; coreMat.depthTest = false;
       for (const m of [intro.frontierSoft, intro.frontierCore]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
       // Teleport column (Halo grammar: the EVENT precedes the person).
-      const beamMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-      const beamCoreMat = beamMat.clone(); beamCoreMat.color = new THREE.Color(0xf2ffff);
+      // Energy texture (generated): vertical soft falloff + streak noise, scrolled
+      // upward each frame — sells "matter streaming in" far better than a flat
+      // additive cylinder, with zero custom GLSL (no new shader programs).
+      const bc = document.createElement("canvas"); bc.width = 64; bc.height = 256;
+      const bg = bc.getContext("2d");
+      const grad = bg.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(0.25, "rgba(255,255,255,0.9)");
+      grad.addColorStop(0.75, "rgba(255,255,255,0.9)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      bg.fillStyle = grad; bg.fillRect(0, 0, 64, 256);
+      bg.globalCompositeOperation = "destination-out";
+      for (let i = 0; i < 90; i++) {
+        bg.fillStyle = "rgba(0,0,0," + (0.25 + Math.random() * 0.5) + ")";
+        bg.fillRect(Math.random() * 64, Math.random() * 256, 2 + Math.random() * 5, 10 + Math.random() * 40);
+      }
+      intro.beamTex = new THREE.CanvasTexture(bc);
+      intro.beamTex.wrapS = THREE.RepeatWrapping; intro.beamTex.wrapT = THREE.RepeatWrapping;
+      const beamMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, alphaMap: intro.beamTex, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+      const beamCoreMat = new THREE.MeshBasicMaterial({ color: 0xf2ffff, transparent: true, opacity: 0, alphaMap: intro.beamTex, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       intro.beam = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 7.4, 18, 1, true), beamMat);
       intro.beamCore = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 7.4, 12, 1, true), beamCoreMat);
       intro.beamRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.95, 40), beamMat.clone());
       intro.beamRing.rotation.x = -Math.PI / 2;
-      for (const m of [intro.beam, intro.beamCore, intro.beamRing]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
+      // Rising halo rings — three thin loops climbing the column on a stagger.
+      intro.riseRings = [];
+      for (let i = 0; i < 3; i++) {
+        const rr = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.035, 8, 28),
+          new THREE.MeshBasicMaterial({ color: 0xbdf6ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+        rr.rotation.x = Math.PI / 2;
+        rr.visible = false; rr.frustumCulled = false;
+        scene.add(rr);
+        intro.riseRings.push(rr);
+      }
+      for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...intro.riseRings]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
       // TRON cover: a camera-glued black quad that hides the real world while the
       // line grid draws in, then fades to reveal the rendered city.
       intro.blackQuad = new THREE.Mesh(
@@ -15105,6 +15140,8 @@ async function spawnEnemies(wave, options: any = {}) {
     setCutsceneDomActive(true);
     ensureCutsceneDom();
     if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1"; // open from black
+    if (cutscene.titleEl) { cutscene.titleEl.textContent = ""; cutscene.titleEl.style.opacity = "0"; }
+    if (cutscene.subEl) { cutscene.subEl.textContent = ""; cutscene.subEl.style.opacity = "0"; }
     if (cutscene.subEl) { cutscene.subEl.textContent = ""; }
     sfxCutsceneHit();
     return true;
@@ -15116,7 +15153,7 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.introPlayerHidden = false;
     if (intro.wireGroup) intro.wireGroup.visible = false;
     if (intro.frontierSoft) { intro.frontierSoft.visible = false; intro.frontierCore.visible = false; }
-    for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
+    for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...(intro.riseRings || [])]) if (m) m.visible = false;
     if (intro.choir) for (const w of intro.choir) w.root.visible = false;
     if (intro.blackQuad) intro.blackQuad.visible = false;
     intro.gunFloorActive = false;
@@ -15185,7 +15222,7 @@ async function spawnEnemies(wave, options: any = {}) {
         intro.wireGroup.visible = false;
         intro.frontierSoft.visible = false; intro.frontierCore.visible = false;
         if (intro.choir) for (const w of intro.choir) w.root.visible = true;
-        if (cutscene.subEl) { cutscene.subEl.textContent = "THE CHOIR IS AWAKE"; cutscene.subEl.style.opacity = "0.9"; }
+        if (cutscene.subEl) cutscene.subEl.style.opacity = "0"; // no text past beat A
         playSweep(130, 58, 2.0, 0.13, "sawtooth", 0.02, 0);
         intro.stepT = 0;
       }
@@ -15208,8 +15245,7 @@ async function spawnEnemies(wave, options: any = {}) {
         intro.beatLatch = 2;
         sfxCutsceneCut();
         if (intro.choir) for (const w of intro.choir) w.root.visible = false;
-        for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = true;
-        if (cutscene.subEl) { cutscene.subEl.textContent = "OPERATOR INSERTION"; cutscene.subEl.style.opacity = "0.9"; }
+        for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...(intro.riseRings || [])]) if (m) m.visible = true;
         playEventSound("box_reveal", { volume: 0.55, rate: 0.8 });
         playSweep(85, 430, 1.3, 0.15, "sine", 0, 0);
         cutsceneTargetTmp.set(yaw.position.x, 1.2, yaw.position.z);
@@ -15226,17 +15262,30 @@ async function spawnEnemies(wave, options: any = {}) {
       }
       const px = yaw.position.x, pz = yaw.position.z;
       const strike = Math.min(1, c / 0.16);
-      const collapse = Math.max(0, (c - 0.62) / 0.3);
+      // The column blazes for the WHOLE shot — the hard cut to the arrival shot
+      // interrupts it mid-stream (it never dies on screen).
       const beamH = 7.4 * strike;
       for (const m of [intro.beam, intro.beamCore]) {
         m.position.set(px, 7.4 - beamH / 2, pz);
-        m.scale.set(1 - collapse * 0.9, strike, 1 - collapse * 0.9);
+        m.scale.set(1, strike, 1);
       }
-      intro.beam.material.opacity = (0.34 + Math.sin(now * 0.02) * 0.08) * strike * (1 - collapse);
-      intro.beamCore.material.opacity = (0.8 + Math.sin(now * 0.05) * 0.15) * strike * (1 - collapse);
+      // Energy streams upward: scroll the alpha texture; the sheath thins after
+      // the reveal so the operator reads through the light.
+      if (intro.beamTex) intro.beamTex.offset.y = -now * 0.0011;
+      const thin = intro.revealed ? 0.55 : 1;
+      intro.beam.material.opacity = (0.4 + Math.sin(now * 0.02) * 0.08) * strike * thin;
+      intro.beamCore.material.opacity = (0.9 + Math.sin(now * 0.05) * 0.1) * strike;
       intro.beamRing.position.set(px, 0.1, pz);
-      intro.beamRing.scale.setScalar(0.6 + c * 2.2);
-      intro.beamRing.material.opacity = 0.5 * (1 - c);
+      intro.beamRing.scale.setScalar(0.6 + Math.min(1, c * 1.6) * 2.2);
+      intro.beamRing.material.opacity = 0.5 * Math.max(0, 1 - c * 1.2);
+      // Rising halo rings loop up the column on a stagger.
+      if (intro.riseRings) intro.riseRings.forEach((rr, i) => {
+        const u = ((c * 1.4) + i / 3) % 1;
+        rr.position.set(px, 0.2 + u * 6.8, pz);
+        const sc = 1.15 - u * 0.45;
+        rr.scale.set(sc, sc, sc);
+        rr.material.opacity = Math.sin(u * Math.PI) * 0.7 * strike;
+      });
       if (!intro.revealed && c > 0.45) {
         intro.revealed = true;
         cutscene.introPlayerHidden = false;
@@ -15255,7 +15304,7 @@ async function spawnEnemies(wave, options: any = {}) {
       if (intro.beatLatch < 3) {
         intro.beatLatch = 3;
         sfxCutsceneCut();
-        for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
+        for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...(intro.riseRings || [])]) if (m) m.visible = false;
         const sun = (window as any).__extSun;
         intro.sunH.set(sun?.position?.x ?? 1, 0, sun?.position?.z ?? 0.4);
         if (intro.sunH.lengthSq() < 0.01) intro.sunH.set(1, 0, 0.4);
@@ -15272,7 +15321,6 @@ async function spawnEnemies(wave, options: any = {}) {
           w.root.rotation.y = Math.atan2(-intro.sunH.x, -intro.sunH.z); // face the operator
           w.root.visible = true;
         });
-        if (cutscene.subEl) { cutscene.subEl.textContent = "THEY FOLLOW YOU IN"; cutscene.subEl.style.opacity = "0.9"; }
         playSweep(140, 62, 1.8, 0.12, "sawtooth", 0.02, 0);
       }
       if (intro.choir) for (const w of intro.choir) {
@@ -15323,7 +15371,7 @@ async function spawnEnemies(wave, options: any = {}) {
           const clipDur = grabAction.getClip()?.duration || INTRO_DUR_GRAB;
           grabAction.timeScale = clipDur / INTRO_DUR_GRAB; // fit the beat
         }
-        if (cutscene.subEl) { cutscene.subEl.textContent = "PICK IT UP"; cutscene.subEl.style.opacity = "0.9"; }
+        // (no caption — action reads on its own)
       }
       // The hand closes on the weapon a little past mid-clip.
       if (intro.gunFloorActive && grabFrac > 0.58) intro.gunFloorActive = false;
@@ -15333,7 +15381,6 @@ async function spawnEnemies(wave, options: any = {}) {
       cutsceneTargetTmp.set(yaw.position.x, 0.6, yaw.position.z);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
       if (zoomK > 0) {
-        if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
         cutsceneEyeTmp.lerp(cutsceneLivePosTmp, zoomK);
         cutsceneQuatTmp.slerp(cutsceneLiveQuatTmp, zoomK);
       }
