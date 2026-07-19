@@ -14118,6 +14118,9 @@ async function spawnEnemies(wave, options: any = {}) {
         lightingState.flashlightOn = true;
         addKillFeed("BLACKOUT — THEY HUNT FASTER. ×2 XP.");
         announce("vo_wave_start_final"); // the ominous announcer read
+      } else if (game.wave > 10 && (game.wave - 1) % 10 === 0) {
+        // The blackout is over — power returns, kill the flashlight with it.
+        lightingState.flashlightOn = false;
       }
       applyWaveLighting(game.wave, true);
       const waveAmmoBonus = 24 + Math.min(26, game.wave * 2);
@@ -15328,6 +15331,9 @@ async function spawnEnemies(wave, options: any = {}) {
         }
         intro.camAz = bestAz;
         intro.camDist = Math.max(2.8, Math.min(4.0, bestClear - 0.6));
+        // Start the fallen pose NOW, while the operator is still hidden — by the
+        // reveal the mixer has fully settled into the collapsed pose.
+        if (thirdPerson.actions.fallenIdle) thirdPerson.cutsceneAction = "fallenIdle";
       }
       const px = yaw.position.x, pz = yaw.position.z;
       const strike = Math.min(1, c / 0.16);
@@ -15358,9 +15364,6 @@ async function spawnEnemies(wave, options: any = {}) {
       if (!intro.revealed && c > 0.45) {
         intro.revealed = true;
         cutscene.introPlayerHidden = false;
-        // The Echo restarts a corpse: the operator appears COLLAPSED in the
-        // stream (Fallen Idle) and only rises to take the pistol in the finale.
-        if (thirdPerson.actions.fallenIdle) thirdPerson.cutsceneAction = "fallenIdle";
         intro.beamCore.material.opacity = 1;
         playEventSound("lightning", { volume: 0.35, rate: 1.4 });
       }
@@ -15471,8 +15474,22 @@ async function spawnEnemies(wave, options: any = {}) {
       // Camera: overhead hold, then crash zoom to the live pose over the final 0.6s.
       if (t >= INTRO_T_ZOOM && !intro.yawFlipped) {
         intro.yawFlipped = true;
-        // Face where the wave actually stands — gameplay opens eye-to-eye.
-        yaw.rotation.y = Math.atan2(-intro.faceDir.x, -intro.faceDir.z);
+        // Face the wave — but never a wall: scan azimuths and score each by
+        // clearance + alignment with the enemy centroid; take the best.
+        cutsceneTargetTmp.set(yaw.position.x, 1.4, yaw.position.z);
+        let bestScore = -Infinity, bestAz2 = Math.atan2(-intro.faceDir.x, -intro.faceDir.z);
+        for (let i = 0; i < 16; i++) {
+          const az = (i / 16) * Math.PI * 2;
+          cutsceneSunDirTmp.set(Math.cos(az), 0, Math.sin(az));
+          const d = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, 10);
+          const clear = Number.isFinite(d) ? d : 10;
+          const align = cutsceneSunDirTmp.dot(intro.faceDir);
+          // Clearance DOMINATES (user: never open the wave staring at a wall);
+          // alignment with the fight breaks ties between open directions.
+          const score = Math.min(clear, 10) * 1.4 + align * 2.5;
+          if (score > bestScore) { bestScore = score; bestAz2 = Math.atan2(-cutsceneSunDirTmp.x, -cutsceneSunDirTmp.z); }
+        }
+        yaw.rotation.y = bestAz2;
       }
       const zoomK = t < INTRO_T_ZOOM ? 0 : cutsceneEase((t - INTRO_T_ZOOM) / INTRO_DUR_ZOOM);
       cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, 15.2 - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);

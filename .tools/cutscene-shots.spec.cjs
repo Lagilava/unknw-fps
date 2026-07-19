@@ -21,6 +21,10 @@ test("intro beats", async ({ page }) => {
   await at(6.9, "test-results/cs-intro-teleport.png");
   await at(8.9, "test-results/cs-intro-sunarrive.png");
   await at(11.1, "test-results/cs-intro-grab.png");
+  // Pass THROUGH the crash-zoom window so the face-the-fight latch fires (a
+  // direct jump to the settle would skip it — spec artifact, not gameplay).
+  await page.evaluate(() => window.__rbTest.introJump(11.95));
+  await page.waitForTimeout(2600);
   await page.evaluate(() => window.__rbTest.introJump(12.94));
   await page.waitForFunction(() => !window.__rbTest.getCutsceneState().active, { timeout: 60000 });
   await page.waitForTimeout(800);
