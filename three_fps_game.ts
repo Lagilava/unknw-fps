@@ -5356,8 +5356,8 @@ function createLightningEffect() {
     // TP in-hand weapon renders in TP, or in unified FP only when NOT using the viewmodel.
     const tpWeaponVisible = (thirdPersonVisible && !cameraInsidePlayer) || (unifiedFp && !UNIFIED_FP_USE_VIEWMODEL);
     if (weapon?.gun) weapon.gun.visible = firstPersonVisible;
-    if (thirdPerson.root) thirdPerson.root.visible = bodyVisible && !(unifiedFp && UNIFIED_FP_DEBUG_HIDE_BODY);
-    if (thirdPerson.weapon?.gun) thirdPerson.weapon.gun.visible = tpWeaponVisible;
+    if (thirdPerson.root) thirdPerson.root.visible = bodyVisible && !(unifiedFp && UNIFIED_FP_DEBUG_HIDE_BODY) && !cutscene.introPlayerHidden;
+    if (thirdPerson.weapon?.gun) thirdPerson.weapon.gun.visible = tpWeaponVisible && !cutscene.introPlayerHidden;
     // Hide the head only in unified FP; restore it in TP / legacy FP.
     setHeadBoneHidden(unifiedFp);
   }
@@ -5660,6 +5660,7 @@ function createLightningEffect() {
   const _aimHandTmp = new THREE.Vector3();
   const _aimCurDirTmp = new THREE.Vector3();
   const _aimWantDirTmp = new THREE.Vector3();
+  const _aimRightAxisTmp = new THREE.Vector3();
   const MAX_ARM_AIM_ANGLE = 0.95; // rad — soften instead of going vertical at extremes
 
   // Rotate `bone` by a WORLD-space quaternion delta (about its own origin).
@@ -13469,6 +13470,7 @@ async function spawnEnemies(wave, options: any = {}) {
       if (game.wave === 1 && !isCoopGuest()) {
         announce('vo_game_start', { minGap: 0 });
         playEventSound('wave_start', { volume: 0.55 });
+        startIntroCutscene(); // lore opener (skipped in ?test=1 runs)
       }
       syncGameplayBodyClass();
       syncClickToPlay?.();
@@ -14462,10 +14464,14 @@ async function spawnEnemies(wave, options: any = {}) {
     phase: 0,           // 0 = sun, 1 = enemy pan, 2 = return-to-player
     t: 0,
     phaseT: 0,
-    durA: 3.6,   // act 1 = player close-up (40%) + HARD CUT + sun reveal (60%)
+    // Act 1 (re-cut per cinematic critique): 0.25s BLACK → 1.4s locked-off low
+    // WIDE (authored frame — never blend from a random gameplay pose) → 1.3s
+    // close-up push (ease-out only, cut before it settles) → 2.15s sun tilt-up.
+    durA: 5.1,
     durB: 3.3,
-    durC: 1.8,
+    durC: 0.45,  // settle-behind handoff (cut-on-action), not a long ease-blend
     cutFired: false, // internal hard-cut accent latch (act 1)
+    cutFired2: false,
     // Pose captured at each phase boundary — the "from" of the current blend.
     blendPos: new THREE.Vector3(),
     blendQuat: new THREE.Quaternion(),
@@ -14551,7 +14557,9 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.domReady = true;
     const style = document.createElement("style");
     style.textContent = `
-      #rb-cut-top, #rb-cut-bottom { position: fixed; left: 0; right: 0; height: 12vh; background: #000; z-index: 60; transform: scaleY(0); transition: transform .9s cubic-bezier(.16,1,.3,1); pointer-events: none; }
+      #rb-cut-top, #rb-cut-bottom { position: fixed; left: 0; right: 0; height: 12vh; background: #000; z-index: 60; transform: scaleY(0); transition: transform .38s cubic-bezier(.2,.9,.3,1); pointer-events: none; }
+      /* Full-frame black for hard "from black" opens — opacity driven per-frame by JS. */
+      #rb-cut-black { position: fixed; inset: 0; background: #000; z-index: 63; opacity: 0; pointer-events: none; }
       #rb-cut-top { top: 0; transform-origin: top; }
       #rb-cut-bottom { bottom: 0; transform-origin: bottom; }
       body.rb-cutscene #rb-cut-top, body.rb-cutscene #rb-cut-bottom { transform: scaleY(1); }
@@ -14574,8 +14582,11 @@ async function spawnEnemies(wave, options: any = {}) {
     const title = document.createElement("div"); title.id = "rb-cut-title"; title.textContent = "";
     const sub = document.createElement("div"); sub.id = "rb-cut-sub";
     document.body.append(top, bottom, vig, title, sub);
+    const black = document.createElement("div"); black.id = "rb-cut-black";
+    document.body.append(black);
     cutscene.titleEl = title;
     cutscene.subEl = sub;
+    cutscene.blackEl = black;
   }
 
   function setCutsceneDomActive(on) {
@@ -14596,9 +14607,27 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.phase = 0;
     cutscene.t = 0;
     cutscene.phaseT = 0;
-    cutscene.durC = 1.8;
+    cutscene.durC = 0.45; // settle-behind handoff, not a long ease-blend
     cutscene.cutFired = false;
-    // Blend in from wherever the gameplay camera is right now.
+    cutscene.cutFired2 = false;
+    ensureCutsceneDom();
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1"; // open from black
+    // Pick the clearest azimuth for the opening wide so the authored frame is
+    // never buried in a wall/prop (same grid-march scan as the other shots).
+    {
+      cutsceneTargetTmp.set(yaw.position.x, 1.2, yaw.position.z);
+      let bestAz = yaw.rotation.y + Math.PI, bestClear = -1;
+      for (let i = 0; i < 12; i++) {
+        const az = (i / 12) * Math.PI * 2;
+        cutsceneSunDirTmp.set(Math.cos(az), 0, Math.sin(az));
+        const d = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, 8.2);
+        const clear = Number.isFinite(d) ? d : 8.2;
+        if (clear > bestClear) { bestClear = clear; bestAz = az; }
+      }
+      cutscene.wideAz = bestAz;
+      cutscene.wideDist = Math.max(4.2, Math.min(7.2, bestClear - 0.9));
+    }
+    // Blend-from capture kept for diagnostics; act 1 is fully authored (from black).
     camera.getWorldPosition(cutscene.lastPos);
     camera.getWorldQuaternion(cutscene.lastQuat);
     cutscene.lastFov = camera.fov;
@@ -14704,7 +14733,7 @@ async function spawnEnemies(wave, options: any = {}) {
   // gameplay pose for this frame, which phase C samples live as its landing
   // target — guaranteeing a seamless handoff even if the player is mid-motion.
   function updateCutsceneCamera(dt) {
-    if (!cutscene.active) return;
+    if (!cutscene.active || cutscene.introMode) return;
     if (game.state !== "playing" && game.state !== "transition") { cancelCutscene(); return; }
     // Live gameplay pose (what the normal TP camera wrote this frame).
     camera.getWorldPosition(cutsceneLivePosTmp);
@@ -14762,38 +14791,57 @@ async function spawnEnemies(wave, options: any = {}) {
       captureCutsceneBlendFrom(cutscene.lastPos, cutscene.lastQuat, cutscene.lastFov);
       boostCutsceneKeyLight(false);
       sfxCutsceneRiser();
+      // Letterbox releases ON the cut (0.38s CSS), input goes live now (phase 2)
+      // — control returns before the camera finishes settling.
+      setCutsceneDomActive(false);
     }
 
     if (cutscene.phase === 0) {
-      // ACT 1 — two real shots with a HARD CUT between them (film grammar, not a
-      // cross-fade): (1) a low, close push-in on the PLAYER as the world dies —
-      // grounding the event in the character — then CUT to (2) the molten-sun
-      // reveal tilt-up. The cut lands with a soft percussive accent.
-      const cutAt = cutscene.durA * 0.4;
-      if (cutscene.phaseT < cutAt) {
-        // SHOT 1 — player close-up. Low frontal framing (camera at chest height
-        // looking slightly up = hero shot), slow push-in, and a small dutch tilt
-        // that settles level — unease resolving into resolve.
-        const k = cutsceneEaseCine(cutscene.phaseT / cutAt);
-        const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
-        const dist = 3.1 - 0.7 * k; // push-in
+      // ACT 1 (re-cut per critique): every frame is AUTHORED — never interpolate
+      // from a random gameplay pose ("the shot has no author"). Four beats:
+      // BLACK (a blackout starts with darkness — the motivation) → locked-off
+      // low WIDE (player small, thirds-left, stillness reads confident) → HARD
+      // CUT close-up push-in (now motivated: the world just changed around them,
+      // ease-out only, cut before it settles) → HARD CUT sun tilt-up.
+      const T_BLACK = 0.25, T_WIDE = 1.4, T_CLOSE = 1.3;
+      const cutAt = T_BLACK + T_WIDE + T_CLOSE; // sun shot begins here
+      const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
+      const rx = Math.cos(yaw.rotation.y), rz = -Math.sin(yaw.rotation.y);
+      // Black overlay: full for the first beat, snaps away over ~0.15s.
+      if (cutscene.blackEl) {
+        const bo = cutscene.phaseT < T_BLACK ? 1 : Math.max(0, 1 - (cutscene.phaseT - T_BLACK) / 0.15);
+        cutscene.blackEl.style.opacity = bo.toFixed(3);
+      }
+      if (cutscene.phaseT < T_BLACK + T_WIDE) {
+        // SHOT 1 — static low wide, in FRONT of the player looking back at them
+        // (fire sky behind camera lights the scene): player on the left third,
+        // dark city looming. Locked off — only the breathe.
+        const wx = Math.cos(cutscene.wideAz), wz = Math.sin(cutscene.wideAz);
+        cutsceneEyeTmp.set(
+          yaw.position.x + wx * cutscene.wideDist - wz * 1.9 + breatheX * 0.3,
+          0.95 + breatheY * 0.3,
+          yaw.position.z + wz * cutscene.wideDist + wx * 1.9
+        );
+        cutsceneTargetTmp.set(yaw.position.x - wz * 0.95, 1.35, yaw.position.z + wx * 0.95);
+        cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
+      } else if (cutscene.phaseT < cutAt) {
+        // SHOT 2 — close-up push-in (hard cut from the wide). Ease-OUT only:
+        // starts moving, never decelerates into mush — the next cut interrupts it.
+        if (!cutscene.cutFired2) { cutscene.cutFired2 = true; sfxCutsceneCut(); }
+        const t = (cutscene.phaseT - T_BLACK - T_WIDE) / T_CLOSE;
+        const k = 1 - (1 - Math.min(1, t)) * (1 - Math.min(1, t));
+        const dist = 3.0 - 0.55 * k;
         cutsceneEyeTmp.set(
           yaw.position.x + fx * dist + breatheX * 0.5,
-          1.12 + 0.14 * k + breatheY * 0.5,
+          1.14 + 0.1 * k + breatheY * 0.5,
           yaw.position.z + fz * dist
         );
         cutsceneTargetTmp.set(yaw.position.x, 1.52, yaw.position.z);
         cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-        // Dutch: ~5° settling to level as the push completes.
-        cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, 0.09 * (1 - k)));
-        // Ease in from the gameplay pose over the first ~0.5s (no engage jerk).
-        const w = cutsceneEase(Math.min(1, cutscene.phaseT / 0.5));
-        cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneEyeTmp, w);
-        cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneQuatTmp, w);
-        // Lens polish: the FOV tightens gently through the push-in (49 → 45.5) —
-        // the dolly and the zoom working together, like a real lens move.
-        const fovA = 49 - 3.5 * k;
-        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (fovA - cutscene.blendFov) * w);
+        // Dutch ~4° settling level as the push completes.
+        cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, 0.07 * (1 - k)));
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 40 - 3.5 * k);
       } else {
         // SHOT 2 — the molten sun reveal (hard cut, no blend). KEY: the fire dome
         // is CAMERA-LOCKED, so a HIGH camera gets a clean composition — burning
@@ -14867,19 +14915,307 @@ async function spawnEnemies(wave, options: any = {}) {
       // HARD CUT into this shot (no cross-blend — film grammar; accent plays at entry).
       applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
     } else {
-      // PHASE C — blend from the pan's final pose to the LIVE third-person pose
-      // (recomputed every frame above, so it lands perfectly mid-motion).
-      const w = cutsceneEase(cutscene.phaseT / cutscene.durC);
-      cutsceneEyeTmp.lerpVectors(cutscene.blendPos, cutsceneLivePosTmp, w);
-      cutsceneQuatTmp.slerpQuaternions(cutscene.blendQuat, cutsceneLiveQuatTmp, w);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, cutscene.blendFov + (liveFov - cutscene.blendFov) * w);
-      if (cutscene.phaseT >= cutscene.durC) {
-        // Land exactly on the gameplay pose, then hand control back.
+      // PHASE C — cut-on-action SETTLE (per critique: "nobody blends in film").
+      // HARD CUT to a camera slightly behind/above/wide of the LIVE gameplay
+      // pose, settling into it in ~0.45s with a small FOV kick that overshoots
+      // and lands. Input is already live (phase 2), so the player's own motion
+      // finishes the shot — the modern control handoff.
+      const st = Math.min(1, cutscene.phaseT / cutscene.durC);
+      const k = 1 - Math.pow(1 - st, 3); // ease-out settle
+      // Offset in the live camera's own axes (back + up), decaying to zero.
+      _aimFwdTmp.set(0, 0, 1).applyQuaternion(cutsceneLiveQuatTmp);   // camera-backward
+      _aimWantDirTmp.set(0, 1, 0).applyQuaternion(cutsceneLiveQuatTmp); // camera-up
+      cutsceneEyeTmp.copy(cutsceneLivePosTmp)
+        .addScaledVector(_aimFwdTmp, 0.55 * (1 - k))
+        .addScaledVector(_aimWantDirTmp, 0.32 * (1 - k));
+      // ~6° high looking down onto the shoulder, easing level.
+      cutsceneQuatTmp.copy(cutsceneLiveQuatTmp)
+        .multiply(cutsceneRollQuatTmp.setFromAxisAngle(_aimRightAxisTmp.set(1, 0, 0), -0.1 * (1 - k)));
+      // FOV: start 5 tighter, overshoot +1.2 mid-settle, land exact.
+      const fov = liveFov - 5 * (1 - k) + Math.sin(st * Math.PI) * 1.2;
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, fov);
+      if (st >= 1) {
         applyCutsceneWorldPose(cutsceneLivePosTmp, cutsceneLiveQuatTmp, liveFov);
         cancelCutscene();
       }
     }
   }
+
+  // ── New-Mission intro cutscene ─────────────────────────────────────────────
+  // Lore-driven opener (shot list from the cinematic consult): (A) the city
+  // RENDERS IN — Matrix-style wireframe with a bright render-frontier sweeping
+  // the map under a high lateral crane; (B) the three Choir constructs advance
+  // in depth-staggered silhouette on a long lens; (C) a Halo-style teleport
+  // column strikes the empty spawn and the operator materializes as the camera
+  // tilts up; (D) hard cut into a settle-behind and the player takes over.
+  // Piggybacks the blackout cutscene's gating (cutscene.active/phase, letterbox,
+  // enemy freeze, invulnerability) via cutscene.introMode.
+  const INTRO_DUR_A = 3.2, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3, INTRO_DUR_D = 0.45;
+  const intro: any = {
+    fxBuilt: false, wireGroup: null, wireMat: null, clipPlane: null,
+    frontierSoft: null, frontierCore: null,
+    choir: null,           // [{ root, update }] ×3 visual-only Choir actors
+    beam: null, beamCore: null, beamRing: null,
+    revealed: false, sweepDone: false,
+  };
+
+  function buildIntroFx() {
+    if (intro.fxBuilt) return;
+    intro.fxBuilt = true;
+    try {
+      renderer.localClippingEnabled = true;
+      intro.clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 60); // keeps z >= -constant… animated per-frame
+      // The "render model": ONE LineSegments of wireframe boxes built from the
+      // machine's own collision data (exterior footprints + interior MAP walls) —
+      // cheap (1 draw call, ~8k lines) and lore-true: the grid renders its
+      // collision truth first, then the world resolves over it. (Wireframing the
+      // real merged meshes was millions of line segments — 1 fps.)
+      intro.wireMat = new THREE.LineBasicMaterial({
+        color: 0x22d3ee, transparent: true, opacity: 0.5,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+        clippingPlanes: [intro.clipPlane],
+      });
+      const pos = [];
+      const pushBox = (cx, cz, hw, hd, h) => {
+        const x0 = cx - hw, x1 = cx + hw, z0 = cz - hd, z1 = cz + hd;
+        const c = [[x0,0,z0],[x1,0,z0],[x1,0,z1],[x0,0,z1],[x0,h,z0],[x1,h,z0],[x1,h,z1],[x0,h,z1]];
+        const E = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+        for (const [a,b] of E) { pos.push(...c[a], ...c[b]); }
+      };
+      const fp = Array.isArray(window.__extMapFootprints) ? window.__extMapFootprints : [];
+      for (const cb of fp) {
+        if (!cb || !(cb.hw > 0.6) || !(cb.hd > 0.6)) continue; // skip posts/clutter
+        const h = 8 + (Math.abs(Math.round(cb.x * 7 + cb.z * 13)) % 26);
+        pushBox(cb.x, cb.z, cb.hw, cb.hd, h);
+      }
+      const env = window.RoomBreachEnvironment;
+      if (env?.MAP) {
+        for (let my = 0; my < env.MAP_H; my++) for (let mx = 0; mx < env.MAP_W; mx++) {
+          if (env.MAP[my][mx] !== "#") continue;
+          const w = env.mapToWorld(mx, my);
+          pushBox(w.x, w.z, env.CELL / 2, env.CELL / 2, env.WALL_H || 8);
+        }
+      }
+      const wireGeo = new THREE.BufferGeometry();
+      wireGeo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      const group = new THREE.Group();
+      group.visible = false;
+      const wireLines = new THREE.LineSegments(wireGeo, intro.wireMat);
+      wireLines.frustumCulled = false;
+      group.add(wireLines);
+      scene.add(group);
+      intro.wireGroup = group;
+      // Render frontier: a soft light band + a bright core line spanning the map.
+      const softMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+      const coreMat = new THREE.MeshBasicMaterial({ color: 0xe0fbff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+      intro.frontierSoft = new THREE.Mesh(new THREE.PlaneGeometry(320, 34), softMat);
+      intro.frontierCore = new THREE.Mesh(new THREE.PlaneGeometry(320, 1.4), coreMat);
+      for (const m of [intro.frontierSoft, intro.frontierCore]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
+      // Teleport column (Halo grammar: the EVENT precedes the person).
+      const beamMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const beamCoreMat = beamMat.clone(); beamCoreMat.color = new THREE.Color(0xf2ffff);
+      intro.beam = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 7.4, 18, 1, true), beamMat);
+      intro.beamCore = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 7.4, 12, 1, true), beamCoreMat);
+      intro.beamRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.95, 40), beamMat.clone());
+      intro.beamRing.rotation.x = -Math.PI / 2;
+      for (const m of [intro.beam, intro.beamCore, intro.beamRing]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
+    } catch (e) { console.warn("intro fx:", e); }
+  }
+
+  function buildIntroChoir() {
+    if (intro.choir) return;
+    try {
+      const spots = [[-16.4, 152, 0.92], [-13, 146.5, 1.0], [-9.8, 158, 0.85]];
+      intro.choir = spots.map(([x, z, s]) => {
+        const w = createStormWarden(THREE, mergeGeometries, {});
+        w.root.position.set(x, 0, z);
+        w.root.rotation.y = Math.PI; // face -z (toward the interior/player)
+        w.root.scale.setScalar(s);
+        w.root.visible = false;
+        scene.add(w.root);
+        return w;
+      });
+    } catch (e) { console.warn("intro choir:", e); intro.choir = []; }
+  }
+
+  function startIntroCutscene(force = false) {
+    if (cutscene.active) return false;
+    if (!force && window.location.search.includes("test=1")) return false; // specs act immediately after start
+    buildIntroFx();
+    buildIntroChoir();
+    cutscene.active = true;
+    cutscene.introMode = true;
+    cutscene.phase = 0;       // input frozen until the final settle
+    cutscene.t = 0;
+    cutscene.phaseT = 0;      // reused as the intro clock
+    cutscene.introPlayerHidden = true; // the operator hasn't teleported in yet
+    intro.revealed = false;
+    intro.sweepDone = false;
+    for (const e of liveEnemies) { if (e.mesh) e.mesh.visible = false; if (e.hpBar?.mesh) e.hpBar.mesh.visible = false; }
+    if (intro.wireGroup) intro.wireGroup.visible = true;
+    if (intro.frontierSoft) { intro.frontierSoft.visible = true; intro.frontierCore.visible = true; }
+    setCutsceneDomActive(true);
+    ensureCutsceneDom();
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1"; // open from black
+    if (cutscene.subEl) { cutscene.subEl.textContent = ""; }
+    sfxCutsceneHit();
+    return true;
+  }
+
+  function endIntroCutscene() {
+    cutscene.active = false;
+    cutscene.introMode = false;
+    cutscene.introPlayerHidden = false;
+    if (intro.wireGroup) intro.wireGroup.visible = false;
+    if (intro.frontierSoft) { intro.frontierSoft.visible = false; intro.frontierCore.visible = false; }
+    for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
+    if (intro.choir) for (const w of intro.choir) w.root.visible = false;
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "0";
+    if (cutscene.subEl) cutscene.subEl.textContent = "";
+    setCutsceneDomActive(false);
+    ensureAllLiveEnemiesVisible(); // the wave comes online with the world
+  }
+
+  function updateIntroCutscene(dt) {
+    if (!cutscene.active || !cutscene.introMode) return;
+    if (game.state !== "playing" && game.state !== "transition") { endIntroCutscene(); return; }
+    camera.getWorldPosition(cutsceneLivePosTmp);
+    camera.getWorldQuaternion(cutsceneLiveQuatTmp);
+    const liveFov = camera.fov;
+    cutscene.phaseT += dt;
+    cutscene.t = cutscene.phaseT; // shared clock (specs/probes read t)
+    const t = cutscene.phaseT;
+    const now = performance.now();
+
+    if (t < INTRO_DUR_A) {
+      // BEAT A — the render-in. High crane, slow lateral dolly; the frontier
+      // sweeps toward camera along the dolly axis (the move is motivated by the
+      // effect). Continuous — no cut. Caption lands as the frontier crosses mid.
+      const a = t / INTRO_DUR_A;
+      if (cutscene.blackEl) cutscene.blackEl.style.opacity = String(Math.max(0, 1 - t / 0.3));
+      const e = cutsceneEaseCine(a);
+      const frontier = -50 + e * 450; // z sweep across the whole map
+      intro.clipPlane.constant = -frontier;           // wireframe survives z >= frontier
+      intro.frontierSoft.position.set(0, 15, frontier);
+      intro.frontierCore.position.set(0, 15, frontier);
+      // Brightness: flares as it "catches" on the statue plaza and the barricade line.
+      const flare = Math.exp(-Math.pow((frontier - 150) / 14, 2)) + Math.exp(-Math.pow((frontier - 232) / 10, 2));
+      intro.frontierSoft.material.opacity = 0.10 + flare * 0.10;
+      intro.frontierCore.material.opacity = 0.45 + flare * 0.4;
+      // Glitch ticks on the not-yet-rendered wireframe ("the part they let render").
+      intro.wireMat.opacity = 0.42 + (Math.random() < 0.06 ? 0.35 : 0) + Math.sin(now * 0.02) * 0.04;
+      cutsceneEyeTmp.set(70 - 100 * a, 92 - 4 * a, -14 + 8 * a); // linear dolly (varied attack, no ease)
+      cutsceneTargetTmp.set(0, 4, 150);
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
+      if (cutscene.subEl) {
+        cutscene.subEl.textContent = "GRID 07 — RENDER IN PROGRESS";
+        cutscene.subEl.style.opacity = String(Math.max(0, Math.min(1, (t - 1.5) / 0.5)) * (a < 0.94 ? 1 : (1 - (a - 0.94) / 0.06)));
+      }
+    } else if (t < INTRO_DUR_A + INTRO_DUR_B) {
+      // BEAT B — the Choir. HARD CUT on a scan pulse. Low static long-lens frame;
+      // the three constructs advance INTO frame while the camera retreats half a
+      // unit (predator grammar). Cut out on the stride.
+      const b = (t - INTRO_DUR_A) / INTRO_DUR_B;
+      if (!intro.sweepDone) {
+        intro.sweepDone = true;
+        sfxCutsceneCut();
+        intro.wireGroup.visible = false;
+        intro.frontierSoft.visible = false; intro.frontierCore.visible = false;
+        if (intro.choir) for (const w of intro.choir) w.root.visible = true;
+        if (cutscene.subEl) { cutscene.subEl.textContent = "THE CHOIR IS AWAKE"; cutscene.subEl.style.opacity = "0.9"; }
+      }
+      if (intro.choir) {
+        for (const w of intro.choir) {
+          w.root.position.z -= dt * 1.15; // advance toward the interior
+          try { w.update?.(dt, { alive: true, aggroed: true }); } catch (err) { /* pose-only actors */ }
+        }
+      }
+      cutsceneEyeTmp.set(-15.6 + breatheHelperX(now) * 0.2, 0.82, 131.5 - b * 0.5); // slow retreat (lane clear of the fountain + lamppost)
+      cutsceneTargetTmp.set(-13.6, 1.75, 147);
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 32); // long lens
+    } else if (t < INTRO_DUR_A + INTRO_DUR_B + INTRO_DUR_C) {
+      // BEAT C — the teleport. HARD CUT to the EMPTY spawn point, low angle;
+      // the column strikes down, the operator materializes feet-to-head as the
+      // camera tilts up 8°; the column collapse is the cut sound.
+      const c = (t - INTRO_DUR_A - INTRO_DUR_B) / INTRO_DUR_C;
+      if (intro.sweepDone) {
+        intro.sweepDone = false;
+        sfxCutsceneCut();
+        if (intro.choir) for (const w of intro.choir) w.root.visible = false;
+        for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = true;
+        if (cutscene.subEl) { cutscene.subEl.textContent = "OPERATOR INSERTION"; cutscene.subEl.style.opacity = "0.9"; }
+        playEventSound("box_reveal", { volume: 0.55, rate: 0.8 });
+        // Pick the CLEAREST camera azimuth around the spawn (grid-march, no
+        // raycasts) so the low shot never buries itself in a wall or prop.
+        cutsceneTargetTmp.set(yaw.position.x, 1.2, yaw.position.z);
+        let bestAz = yaw.rotation.y + Math.PI, bestClear = -1;
+        for (let i = 0; i < 12; i++) {
+          const az = (i / 12) * Math.PI * 2;
+          cutsceneSunDirTmp.set(Math.cos(az), 0, Math.sin(az));
+          const d = firstWallHitDistance(cutsceneTargetTmp, cutsceneSunDirTmp, 5.2);
+          const clear = Number.isFinite(d) ? d : 5.2;
+          if (clear > bestClear) { bestClear = clear; bestAz = az; }
+        }
+        intro.camAz = bestAz;
+        intro.camDist = Math.max(2.8, Math.min(4.0, bestClear - 0.6));
+      }
+      const px = yaw.position.x, pz = yaw.position.z;
+      // Column: strikes down over 0.35s, holds, collapses after the reveal.
+      const strike = Math.min(1, c / 0.16);
+      const collapse = Math.max(0, (c - 0.62) / 0.3); // clears quickly after the reveal so the operator READS
+      const beamH = 7.4 * strike;
+      for (const m of [intro.beam, intro.beamCore]) {
+        m.position.set(px, 7.4 - beamH / 2, pz);
+        m.scale.set(1 - collapse * 0.9, strike, 1 - collapse * 0.9);
+      }
+      intro.beam.material.opacity = (0.34 + Math.sin(now * 0.02) * 0.08) * strike * (1 - collapse);
+      intro.beamCore.material.opacity = (0.8 + Math.sin(now * 0.05) * 0.15) * strike * (1 - collapse);
+      intro.beamRing.position.set(px, 0.1, pz);
+      intro.beamRing.scale.setScalar(0.6 + c * 2.2);
+      intro.beamRing.material.opacity = 0.5 * (1 - c);
+      // The operator materializes at 45% — reveal + flash pop.
+      if (!intro.revealed && c > 0.45) {
+        intro.revealed = true;
+        cutscene.introPlayerHidden = false;
+        intro.beamCore.material.opacity = 1;
+        playEventSound("lightning", { volume: 0.35, rate: 1.4 });
+      }
+      cutsceneEyeTmp.set(px + Math.cos(intro.camAz) * intro.camDist, 1.0, pz + Math.sin(intro.camAz) * intro.camDist);
+      const tiltUp = cutsceneEaseCine(Math.min(1, c / 0.8));
+      cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz); // feet-first-to-head
+      cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 45);
+    } else {
+      // BEAT D — settle-behind handoff (same grammar as the blackout ending):
+      // hard cut to slightly behind/above the live pose, input live NOW, the
+      // player's own motion finishes the shot.
+      if (cutscene.phase !== 2) {
+        cutscene.phase = 2;
+        for (const m of [intro.beam, intro.beamCore, intro.beamRing]) if (m) m.visible = false;
+        if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
+        sfxCutsceneRiser();
+        setCutsceneDomActive(false);
+      }
+      const st = Math.min(1, (t - INTRO_DUR_A - INTRO_DUR_B - INTRO_DUR_C) / INTRO_DUR_D);
+      const k = 1 - Math.pow(1 - st, 3);
+      _aimFwdTmp.set(0, 0, 1).applyQuaternion(cutsceneLiveQuatTmp);
+      _aimWantDirTmp.set(0, 1, 0).applyQuaternion(cutsceneLiveQuatTmp);
+      cutsceneEyeTmp.copy(cutsceneLivePosTmp)
+        .addScaledVector(_aimFwdTmp, 0.55 * (1 - k))
+        .addScaledVector(_aimWantDirTmp, 0.32 * (1 - k));
+      cutsceneQuatTmp.copy(cutsceneLiveQuatTmp)
+        .multiply(cutsceneRollQuatTmp.setFromAxisAngle(_aimRightAxisTmp.set(1, 0, 0), -0.1 * (1 - k)));
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, liveFov - 5 * (1 - k) + Math.sin(st * Math.PI) * 1.2);
+      if (st >= 1) {
+        applyCutsceneWorldPose(cutsceneLivePosTmp, cutsceneLiveQuatTmp, liveFov);
+        endIntroCutscene();
+      }
+    }
+  }
+  // Tiny helper so beat B can share the breathe without phase-0 locals.
+  function breatheHelperX(now) { return Math.sin(now * 0.0008) * 0.1; }
 
   function updateMovement(dt) {
     if (player.pvpDead) {
@@ -15026,7 +15362,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // Blackout cutscene: freeze enemy AI/attacks in place (still rendered). The
     // co-op host keeps broadcasting these frozen positions, so guests stay in sync.
     if (cutscene.active) {
-      for (const enemy of liveEnemies) ensureLiveEnemyVisible(enemy);
+      if (!cutscene.introMode) for (const enemy of liveEnemies) ensureLiveEnemyVisible(enemy);
       return;
     }
     // Dev preview: freeze all enemy AI/movement in place (still rendered).
@@ -18993,7 +19329,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updateExplosionFlashes(dt);
 
       if (game.state === "playing") {
-        if (mouse.down && gunState.fireCooldown <= 0 && !cutscene.active) fireGun();
+        if (mouse.down && gunState.fireCooldown <= 0 && !(cutscene.active && cutscene.phase < 2)) fireGun();
         const moveState = updateMovement(dt);
         updateThirdPersonCharacter(dt, moveState);
         if (net?.active) sendLocalState(now, moveState);
@@ -19068,6 +19404,7 @@ async function spawnEnemies(wave, options: any = {}) {
       // Blackout cutscene camera: runs AFTER updateCameraFX so it can sample the
       // live gameplay pose (its phase-C landing target) before overwriting it.
       updateCutsceneCamera(dt);
+      updateIntroCutscene(dt);
 
       if (exteriorCityRoot) exteriorCityRoot.visible = true;
 
@@ -19193,6 +19530,8 @@ async function spawnEnemies(wave, options: any = {}) {
       setWaveLighting: (w) => { applyWaveLighting(w); return { darkWaveActive, sun: window.__extSun?.position.toArray() }; },
       // Blackout cutscene test hooks: force-start (applies blackout lighting
       // first so phase A frames the fire dome), and inspect live state.
+      startIntroCutscene: () => startIntroCutscene(true),
+      introJump: (t = 0) => { if (cutscene.introMode) { cutscene.phaseT = t; cutscene.t = t; } return cutscene.phaseT; },
       startBlackoutCutscene: () => {
         applyWaveLighting(10, false);
         return startBlackoutCutscene(true);
