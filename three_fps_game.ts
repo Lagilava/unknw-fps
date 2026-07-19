@@ -1007,6 +1007,13 @@ declare module "three" {
   const PLAYER_PHYSICS_COLLISION = true;
   // Same for enemy movement collision (enemyBlockedAt). Set false to revert.
   const ENEMY_PHYSICS_COLLISION = true;
+  // TP weapon lives IN the right-hand bone (parented with an auto-calibrated
+  // local fit) instead of being world-positioned near the hands each frame —
+  // the gun then moves and POINTS exactly with the hand/arm at any pitch
+  // (research: standard three.js weapon-attachment pattern). Reload and
+  // unified-FP temporarily return it to the scene for their staging. Set false
+  // to restore the legacy world-positioned path.
+  const GUN_IN_HAND = true;
   // Phase 3 showcase: physics-driven debris burst on enemy death (Rapier dynamic
   // bodies rendered by one InstancedMesh — 1 draw call, no lights). Set false off.
   const PHYSICS_DEBRIS = true;
@@ -5302,7 +5309,7 @@ function createLightningEffect() {
 
   function disposeThirdPersonWeapon() {
     if (!thirdPerson.weapon?.gun) return;
-    scene.remove(thirdPerson.weapon.gun);
+    thirdPerson.weapon.gun.parent?.remove(thirdPerson.weapon.gun); // may live in the hand bone
     disposeObject3D(thirdPerson.weapon.gun);
     thirdPerson.weapon = null;
   }
@@ -5318,7 +5325,9 @@ function createLightningEffect() {
       captureThirdPersonPartBase(nextWeapon.slide);
       captureWeaponRigPartBases(nextWeapon, "thirdPersonBase");
       thirdPersonWeaponCache.set(gunType, nextWeapon);
-    } else if (nextWeapon.gun.parent !== scene) {
+    } else if (nextWeapon.gun.parent !== scene && nextWeapon.gun.parent !== thirdPerson.rightHand) {
+      // Re-equip from cache: restore to the scene UNLESS it's already living in
+      // the hand bone (GUN_IN_HAND) — the weapon-pose update owns that parenting.
       scene.add(nextWeapon.gun);
     }
 
@@ -5996,6 +6005,40 @@ function createLightningEffect() {
       magSize: gunState.magSize,
     });
 
+    // ── GUN_IN_HAND: hand-bone parenting ─────────────────────────────────────
+    // Once calibrated, the gun is a CHILD of the right-hand bone with a fixed
+    // local fit — it moves and points exactly with the hand (which the arm solve
+    // aims at the crosshair), at any camera pitch. Reload / unified-FP return it
+    // to the scene so their world-space staging keeps working.
+    const gun = thirdPerson.weapon.gun;
+    const unifiedFpActive = unifiedFirstPersonBodyActive();
+    // Pack-a-Punch bank amount — used by both pose paths and the glow flare below.
+    const tpPackBump = weaponAnim.packAnim > 0 ? Math.sin((1 - weaponAnim.packAnim) * Math.PI) : 0;
+    const gunParented = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
+      && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
+    if (GUN_IN_HAND && !gunParented && gun.parent && gun.parent !== scene) scene.attach(gun);
+    if (gunParented) {
+      if (gun.parent !== thirdPerson.rightHand) thirdPerson.rightHand.add(gun);
+      const fit = thirdPerson.weapon.handFit;
+      gun.position.copy(fit.pos);
+      gun.quaternion.copy(fit.quat);
+      gun.scale.copy(fit.scale);
+      // Subtle additive feel in gun-local space — the hand itself already
+      // carries recoil/sway/lag through the arm solve, so keep these small.
+      if (thirdPerson.equip > 0) {
+        const e = thirdPerson.equip * thirdPerson.equip;
+        gun.position.y -= e * 0.2;
+        gun.rotateX(-e * 0.45);
+      }
+      const tpSpecH = GUN_SPECS[currentGun] || ({} as any);
+      if (tpSpecH.fireCycle === "rattle" && gunState.fireCooldown > 0) {
+        const tj = performance.now();
+        const jAmp = 0.004 * (Number.isFinite(tpSpecH.driftMul) ? tpSpecH.driftMul : 1);
+        gun.position.x += Math.sin(tj * 0.121) * jAmp;
+        gun.position.y += Math.sin(tj * 0.163) * jAmp;
+      }
+      if (tpPackBump > 0) gun.rotateZ(tpPackBump * 0.4);
+    } else {
     // Grip anchor. Normally the two-handed centre; during reload the LEFT (support)
     // hand cradles the gun so the RIGHT hand is free to fetch/insert the fresh clip.
     // Without this the gun stays pinned to the hand-centre and drags toward the right
@@ -6099,10 +6142,22 @@ function createLightningEffect() {
     // Pack-a-Punch on the third-person weapon: a quick bank during the upgrade
     // plus the energy glow (slow shimmer + a bright flare through the upgrade).
     // rotation is set absolutely above, so this addition never accumulates.
-    const tpPackBump = weaponAnim.packAnim > 0 ? Math.sin((1 - weaponAnim.packAnim) * Math.PI) : 0;
     if (tpPackBump > 0) {
       thirdPerson.weapon.gun.rotation.z += tpPackBump * 0.55;
       thirdPerson.weapon.gun.rotation.x -= tpPackBump * 0.22;
+    }
+
+    // Calibration capture (once per weapon): with the legacy pose applied while
+    // AIMING at near-level pitch — arms raised, gun aligned with the view — the
+    // gun's current world transform IS the correct in-hand pose. attach() to the
+    // hand bone converts it to the equivalent hand-local transform, which we
+    // record as this weapon's permanent fit (research: seed-via-attach pattern).
+    if (GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
+        && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.9 && Math.abs(pitch.rotation.x) < 0.12) {
+      gun.updateMatrixWorld(true);
+      thirdPerson.rightHand.attach(gun);
+      thirdPerson.weapon.handFit = { pos: gun.position.clone(), quat: gun.quaternion.clone(), scale: gun.scale.clone() };
+    }
     }
     const tpMats = thirdPerson.weapon.gun.userData.packMats;
     const tpGlowBase = thirdPerson.weapon.gun.userData.packGlowBase || 0;
