@@ -5441,6 +5441,7 @@ function createLightningEffect() {
       pistolStrafe: PLAYER_CHARACTER_ANIMS.pistolStrafe,
       pistolJump:   PLAYER_CHARACTER_ANIMS.pistolJump || PLAYER_CHARACTER_ANIMS.jumpForward,
       grabPistol:   PLAYER_CHARACTER_ANIMS.grabPistol,
+      fallenIdle:   PLAYER_CHARACTER_ANIMS.fallenIdle,
     };
 
     for (const [name, rawClip] of Object.entries(source)) {
@@ -14845,10 +14846,11 @@ async function spawnEnemies(wave, options: any = {}) {
         // into the burning horizon. The blackout is the subject; the player is a
         // small silhouette low in frame. Locked off — only the breathe.
         cutsceneSunDirTmp.copy(BLACKOUT_SUN_DIR); cutsceneSunDirTmp.y = 0; cutsceneSunDirTmp.normalize();
+        const ek = cutsceneEaseCine(Math.min(1, (cutscene.phaseT - T_BLACK) / T_WIDE));
         cutsceneEyeTmp.set(
-          yaw.position.x - cutsceneSunDirTmp.x * 9 + breatheX * 0.3,
-          10.2 + breatheY * 0.3,
-          yaw.position.z - cutsceneSunDirTmp.z * 9
+          yaw.position.x - cutsceneSunDirTmp.x * (9 - ek * 1.7) + breatheX * 0.3,
+          10.2 - ek * 0.6 + breatheY * 0.3,
+          yaw.position.z - cutsceneSunDirTmp.z * (9 - ek * 1.7)
         );
         cutsceneTargetTmp.set(
           yaw.position.x + cutsceneSunDirTmp.x * 30,
@@ -15206,7 +15208,7 @@ async function spawnEnemies(wave, options: any = {}) {
       cutsceneEyeTmp.set(70 - 100 * a, 92 - 4 * a, -14 + 8 * a); // linear dolly
       cutsceneTargetTmp.set(0, 4, 150);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 50 - (a > 0.58 ? cutsceneEase((a - 0.58) / 0.3) * 2.5 : 0));
       if (cutscene.subEl) {
         cutscene.subEl.textContent = a < 0.6 ? "GRID 07 — RENDER IN PROGRESS" : "GRID 07 — RENDER COMPLETE";
         cutscene.subEl.style.opacity = String(Math.max(0, Math.min(1, (t - 1.2) / 0.5)) * (a < 0.93 ? 1 : (1 - (a - 0.93) / 0.07)));
@@ -15289,10 +15291,14 @@ async function spawnEnemies(wave, options: any = {}) {
       if (!intro.revealed && c > 0.45) {
         intro.revealed = true;
         cutscene.introPlayerHidden = false;
+        // The Echo restarts a corpse: the operator appears COLLAPSED in the
+        // stream (Fallen Idle) and only rises to take the pistol in the finale.
+        if (thirdPerson.actions.fallenIdle) thirdPerson.cutsceneAction = "fallenIdle";
         intro.beamCore.material.opacity = 1;
         playEventSound("lightning", { volume: 0.35, rate: 1.4 });
       }
-      cutsceneEyeTmp.set(px + Math.cos(intro.camAz) * intro.camDist, 1.0, pz + Math.sin(intro.camAz) * intro.camDist);
+      const orbAz = intro.camAz + c * 0.38; // slow reverent circle
+      cutsceneEyeTmp.set(px + Math.cos(orbAz) * intro.camDist, 1.0, pz + Math.sin(orbAz) * intro.camDist);
       const tiltUp = cutsceneEaseCine(Math.min(1, c / 0.8));
       cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
@@ -15328,10 +15334,11 @@ async function spawnEnemies(wave, options: any = {}) {
         try { w.update?.(dt, { alive: true, aggroed: true }); } catch (err) { /* pose-only */ }
       }
       // Low camera near the operator, looking INTO the sun — silhouette grammar.
+      const push2 = 2.2 - c2 * 0.9; // dolly into the light
       cutsceneEyeTmp.set(
-        yaw.position.x + intro.sunH.x * 1.6 + breatheHelperX(now) * 0.25,
+        yaw.position.x + intro.sunH.x * push2 + breatheHelperX(now) * 0.25,
         0.55,
-        yaw.position.z + intro.sunH.z * 1.6
+        yaw.position.z + intro.sunH.z * push2
       );
       cutsceneTargetTmp.set(
         yaw.position.x + intro.sunH.x * 9,
@@ -15380,6 +15387,7 @@ async function spawnEnemies(wave, options: any = {}) {
       cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, 15.2 - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);
       cutsceneTargetTmp.set(yaw.position.x, 0.6, yaw.position.z);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
+      cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, grabFrac * 0.45)); // slow god-shot twist
       if (zoomK > 0) {
         cutsceneEyeTmp.lerp(cutsceneLivePosTmp, zoomK);
         cutsceneQuatTmp.slerp(cutsceneLiveQuatTmp, zoomK);
@@ -15417,6 +15425,71 @@ async function spawnEnemies(wave, options: any = {}) {
   }
   // Tiny helper so beat B can share the breathe without phase-0 locals.
   function breatheHelperX(now) { return Math.sin(now * 0.0008) * 0.1; }
+
+  // ── Simple lens flare ──────────────────────────────────────────────────────
+  // Screen-space DOM flare (radial-gradient divs, mix-blend screen) driven by
+  // the sun's projected position — zero GPU/draw cost, no occlusion raycasts.
+  // Ghost elements sit on the sun→screen-centre axis like a real lens.
+  let flareEls = null;
+  const _flareDir = new THREE.Vector3();
+  const _flareV = new THREE.Vector3();
+  const _flareFwd = new THREE.Vector3();
+  function ensureLensFlare() {
+    if (flareEls) return flareEls;
+    const wrap = document.createElement("div");
+    wrap.id = "rb-flare";
+    wrap.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:4;mix-blend-mode:screen;";
+    const mk = (size, color, blur) => {
+      const d = document.createElement("div");
+      d.style.cssText = `position:absolute;width:${size}px;height:${size}px;border-radius:50%;` +
+        `background:radial-gradient(circle, ${color} 0%, transparent 70%);` +
+        (blur ? `filter:blur(${blur}px);` : "") +
+        "transform:translate(-50%,-50%);opacity:0;will-change:transform,opacity;";
+      wrap.appendChild(d);
+      return d;
+    };
+    const core = mk(240, "rgba(255,214,160,0.85)", 2);
+    const streakEl = document.createElement("div");
+    streakEl.style.cssText = "position:absolute;width:420px;height:3px;background:linear-gradient(90deg,transparent,rgba(255,220,180,0.55),transparent);transform:translate(-50%,-50%);opacity:0;will-change:transform,opacity;";
+    wrap.appendChild(streakEl);
+    const g1 = mk(56, "rgba(160,220,255,0.5)", 0);
+    const g2 = mk(96, "rgba(255,180,120,0.35)", 1);
+    const g3 = mk(30, "rgba(255,255,255,0.55)", 0);
+    document.body.appendChild(wrap);
+    flareEls = { wrap, core, streakEl, ghosts: [g1, g2, g3], ghostK: [0.45, 0.85, 1.25] };
+    return flareEls;
+  }
+  function updateLensFlare() {
+    const els = ensureLensFlare();
+    // Sun direction: molten blackout sun during dark waves, day sun otherwise.
+    if (darkWaveActive) _flareDir.copy(BLACKOUT_SUN_DIR);
+    else if ((window as any).__extSun) _flareDir.copy((window as any).__extSun.position);
+    else { els.wrap.style.opacity = "0"; return; }
+    _flareDir.normalize();
+    camera.getWorldDirection(_flareFwd);
+    const facing = _flareFwd.dot(_flareDir);
+    if (facing < 0.35 || (game.state !== "playing" && game.state !== "transition")) {
+      els.wrap.style.opacity = "0";
+      return;
+    }
+    camera.getWorldPosition(_flareV).addScaledVector(_flareDir, 500);
+    _flareV.project(camera);
+    if (_flareV.z > 1 || Math.abs(_flareV.x) > 1.25 || Math.abs(_flareV.y) > 1.25) { els.wrap.style.opacity = "0"; return; }
+    const sx = (_flareV.x * 0.5 + 0.5) * window.innerWidth;
+    const sy = (-_flareV.y * 0.5 + 0.5) * window.innerHeight;
+    const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+    const k = Math.pow(Math.max(0, (facing - 0.35) / 0.65), 2) * (darkWaveActive ? 1 : 0.8);
+    els.wrap.style.opacity = "1";
+    els.core.style.transform = `translate(-50%,-50%) translate(${sx}px,${sy}px)`;
+    els.core.style.opacity = String(0.75 * k);
+    els.streakEl.style.transform = `translate(-50%,-50%) translate(${sx}px,${sy}px)`;
+    els.streakEl.style.opacity = String(0.5 * k);
+    els.ghosts.forEach((g, i) => {
+      const gk = els.ghostK[i];
+      g.style.transform = `translate(-50%,-50%) translate(${sx + (cx - sx) * gk}px,${sy + (cy - sy) * gk}px)`;
+      g.style.opacity = String(0.5 * k * (1 - i * 0.2));
+    });
+  }
 
   function updateMovement(dt) {
     if (player.pvpDead) {
@@ -19606,6 +19679,7 @@ async function spawnEnemies(wave, options: any = {}) {
       // live gameplay pose (its phase-C landing target) before overwriting it.
       updateCutsceneCamera(dt);
       updateIntroCutscene(dt);
+      updateLensFlare();
 
       if (exteriorCityRoot) exteriorCityRoot.visible = true;
 
@@ -19675,6 +19749,9 @@ async function spawnEnemies(wave, options: any = {}) {
       await spawnEnemies(1, { smooth: true, minDistance: 8, preferVisible: true });
       ensureAllLiveEnemiesVisible();
       game.state = "playing";
+      // Death is not an exit: every restart is a fresh insertion — the intro
+      // (unskippable, like the blackout) plays again. Skipped under ?test=1.
+      if (!isCoopGuest()) startIntroCutscene();
       syncGameplayBodyClass();
       updateHUD(0);
       renderMinimap(performance.now());

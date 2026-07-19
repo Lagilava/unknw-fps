@@ -51,6 +51,7 @@ export const PLAYER_ANIMATION_PATHS = {
   pistolStrafe: `assets/Pistol Animations/Pistol Strafe.fbx`,
   pistolJump:   `assets/Pistol Animations/Pistol Jump.fbx`,
   grabPistol:   `assets/Pistol Animations/Grabbing Pistol.fbx`,
+  fallenIdle:   `assets/Pistol Animations/Fallen Idle.fbx`,
 };
 
 export const PLAYER_MODEL_GLTF_PATH = PLAYER_MODEL_PATH.replace(/\.fbx$/i, ".glb");
