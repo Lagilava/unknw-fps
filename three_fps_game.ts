@@ -14677,9 +14677,9 @@ async function spawnEnemies(wave, options: any = {}) {
     // Timings + FOV are dev-tunable (modules/dev_engine.js "cutscenes" category);
     // re-read every run so a live preset edit takes effect on the next trigger.
     cutscene.durA = devVal("cutscenes", "blackoutDurA", 5.1);
-    cutscene.durB = devVal("cutscenes", "blackoutDurB", 4.0);
+    cutscene.durB = devVal("cutscenes", "blackoutDurB", 6.0);
     cutscene.durC = devVal("cutscenes", "blackoutHandoffDur", 0.45); // settle-behind handoff, not a long ease-blend
-    cutscene.sunTiltFov = devVal("cutscenes", "blackoutSunTiltFov", 46);
+    cutscene.sunTiltFov = devVal("cutscenes", "blackoutSunTiltFov", 83);
     cutscene.cutFired = false;
     cutscene.cutFired2 = false;
     cutscene.advanceLatch = false;
@@ -15065,25 +15065,25 @@ async function spawnEnemies(wave, options: any = {}) {
   // "cutscenes" dev-console category — recomputeIntroTimeline() re-reads them
   // from devVal() at the start of every intro run, so a saved/live-applied
   // preset takes effect on the next New Mission without a reload.
-  let INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3;
-  let INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.6, INTRO_DUR_D = 0.45;
+  let INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.0;
+  let INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.3, INTRO_DUR_D = 0.45;
   let INTRO_T_B = INTRO_DUR_A, INTRO_T_C = INTRO_T_B + INTRO_DUR_B, INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
   let INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2, INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB, INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
   function recomputeIntroTimeline() {
     INTRO_DUR_A = devVal("cutscenes", "introDurA", 3.4);
     INTRO_DUR_B = devVal("cutscenes", "introDurB", 2.2);
-    INTRO_DUR_C = devVal("cutscenes", "introDurC", 2.3);
+    INTRO_DUR_C = devVal("cutscenes", "introDurC", 2.0);
     INTRO_DUR_C2 = devVal("cutscenes", "introDurC2", 2.0);
     INTRO_DUR_GRAB = devVal("cutscenes", "introDurGrab", 2.0);
-    INTRO_DUR_ZOOM = devVal("cutscenes", "introDurZoom", 0.6);
+    INTRO_DUR_ZOOM = devVal("cutscenes", "introDurZoom", 0.3);
     INTRO_T_B = INTRO_DUR_A;
     INTRO_T_C = INTRO_T_B + INTRO_DUR_B;
     INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
     INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2;
     INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB;
     INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
-    intro.teleportFov = devVal("cutscenes", "introTeleportFov", 45);
-    intro.overheadH = devVal("cutscenes", "introGrabOverheadHeight", 15.2);
+    intro.teleportFov = devVal("cutscenes", "introTeleportFov", 37);
+    intro.overheadH = devVal("cutscenes", "introGrabOverheadHeight", 40);
   }
   const intro: any = {
     fxBuilt: false, wireGroup: null, wireMat: null, clipPlane: null,

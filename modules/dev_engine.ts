@@ -315,16 +315,16 @@ export const DEFAULTS = {
     blackoutEnabled: true,    // wave%10 blackout cutscene
     introDurA: 3.4,           // beat A: render-in (Tron grid -> reveal)
     introDurB: 2.2,           // beat B: the Choir, all three in frame
-    introDurC: 2.3,           // beat C: Halo-style teleport
+    introDurC: 2.0,           // beat C: Halo-style teleport
     introDurC2: 2.0,          // beat C2: the Choir arrives out of the sun
     introDurGrab: 2.0,        // beat E: overhead pistol grab
-    introDurZoom: 0.6,        // crash zoom into the settle-behind handoff
-    introTeleportFov: 45,     // teleport-beat camera FOV
-    introGrabOverheadHeight: 15.2, // overhead camera height during the grab
+    introDurZoom: 0.3,        // crash zoom into the settle-behind handoff
+    introTeleportFov: 37,     // teleport-beat camera FOV
+    introGrabOverheadHeight: 40, // overhead camera height during the grab
     blackoutDurA: 5.1,        // act 1: black -> wide -> push -> sun tilt-up
-    blackoutDurB: 4.0,        // hero arc (2.3s) + the pack advancing (1.7s)
+    blackoutDurB: 6.0,        // hero arc + the pack advancing
     blackoutHandoffDur: 0.45, // cut-on-action settle into gameplay
-    blackoutSunTiltFov: 44,   // sun-reveal shot FOV
+    blackoutSunTiltFov: 83,   // sun-reveal shot FOV
   },
 };
 
