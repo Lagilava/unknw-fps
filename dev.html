@@ -206,6 +206,14 @@ const FIELDS = {
     godMode: ["b"], freezeEnemies: ["b"], spawnWaveOverride: ["i", 0, 200],
     showConfigBanner: ["b"], autoReloadOnStructural: ["b"],
   },
+  cutscenes: {
+    introEnabled: ["b"], blackoutEnabled: ["b"],
+    introDurA: ["n", 0.2, 15, 0.1], introDurB: ["n", 0.2, 15, 0.1], introDurC: ["n", 0.2, 15, 0.1],
+    introDurC2: ["n", 0.2, 15, 0.1], introDurGrab: ["n", 0.2, 15, 0.1], introDurZoom: ["n", 0.1, 5, 0.05],
+    introTeleportFov: ["n", 10, 120, 0.5], introGrabOverheadHeight: ["n", 3, 60, 0.5],
+    blackoutDurA: ["n", 0.5, 20, 0.1], blackoutDurB: ["n", 0.5, 20, 0.1],
+    blackoutHandoffDur: ["n", 0.1, 3, 0.05], blackoutSunTiltFov: ["n", 10, 120, 0.5],
+  },
 };
 const LABELS = {
   hp: "Health", maxHp: "Max health", radius: "Collision radius", speed: "Walk speed", sprintSpeed: "Sprint speed",
@@ -233,6 +241,12 @@ const LABELS = {
   renderer: "Renderer backend", autoFallback: "Auto-fallback slow WebGPU→WebGL", renderScaleCap: "Max render scale (0=default)",
   shadows: "Shadows", autoPerfGovernor: "Auto perf governor (drop shadows if slow)",
   pixelRatioCap: "Max pixel ratio (0=default)", maxActiveLights: "Max interior lights (0=default)",
+  introEnabled: "New-Mission intro enabled", blackoutEnabled: "Blackout cutscene enabled",
+  introDurA: "Intro A: render-in (s)", introDurB: "Intro B: the Choir (s)", introDurC: "Intro C: teleport (s)",
+  introDurC2: "Intro C2: Choir arrives (s)", introDurGrab: "Intro E: pistol grab (s)", introDurZoom: "Intro: crash-zoom (s)",
+  introTeleportFov: "Intro: teleport FOV", introGrabOverheadHeight: "Intro: overhead height",
+  blackoutDurA: "Blackout act 1 (s)", blackoutDurB: "Blackout arc + hunt (s)",
+  blackoutHandoffDur: "Blackout: handoff settle (s)", blackoutSunTiltFov: "Blackout: sun-reveal FOV",
 };
 const SECTION_SUB = {
   presets: "Master presets & the whole developer configuration.",
@@ -246,6 +260,7 @@ const SECTION_SUB = {
   player: "Player stats, movement, stamina, jump and loadout.",
   quality: "Renderer backend & performance caps for all devices (reload on save).",
   debug: "God mode, freeze, wave preview and preview toggles.",
+  cutscenes: "New-Mission intro + blackout cutscene timing, FOVs and on/off toggles. Live-applied — re-run a cutscene to see changes.",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,7 +325,7 @@ function currentConfig(cat) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Nav
 // ─────────────────────────────────────────────────────────────────────────────
-const SECTIONS = ["presets", "map", "camera", "lighting", "gameplay", "weapons", "enemies", "spawn", "player", "quality", "debug"];
+const SECTIONS = ["presets", "map", "camera", "lighting", "gameplay", "weapons", "enemies", "spawn", "player", "quality", "cutscenes", "debug"];
 let activeSection = "presets";
 function buildNav() {
   const nav = $("#nav"); nav.innerHTML = "";

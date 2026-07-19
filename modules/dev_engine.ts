@@ -40,6 +40,7 @@ export const CATEGORIES = [
   "map",
   "quality",
   "debug",
+  "cutscenes",
 ];
 
 export const CATEGORY_LABELS = {
@@ -53,6 +54,7 @@ export const CATEGORY_LABELS = {
   map: "Map",
   quality: "Performance",
   debug: "Debug / Preview",
+  cutscenes: "Cutscenes",
 };
 
 // Categories that require a full geometry/lighting/collision rebuild to take
@@ -304,6 +306,26 @@ export const DEFAULTS = {
     showConfigBanner: true, // show a banner in-game when a dev preset is active
     autoReloadOnStructural: true,
   },
+  // New-Mission intro + blackout-wave cutscenes. Mirrors the constants hand-tuned
+  // in three_fps_game.ts (INTRO_DUR_*, cutscene.durA/durB, camera FOVs/distances)
+  // so a developer can re-time or disable them without touching code. Both
+  // cutscenes stay ENABLED and unskippable by design unless toggled off here.
+  cutscenes: {
+    introEnabled: true,       // New-Mission intro (Tron render-in -> teleport -> grab)
+    blackoutEnabled: true,    // wave%10 blackout cutscene
+    introDurA: 3.4,           // beat A: render-in (Tron grid -> reveal)
+    introDurB: 2.2,           // beat B: the Choir, all three in frame
+    introDurC: 2.3,           // beat C: Halo-style teleport
+    introDurC2: 2.0,          // beat C2: the Choir arrives out of the sun
+    introDurGrab: 2.0,        // beat E: overhead pistol grab
+    introDurZoom: 0.6,        // crash zoom into the settle-behind handoff
+    introTeleportFov: 45,     // teleport-beat camera FOV
+    introGrabOverheadHeight: 15.2, // overhead camera height during the grab
+    blackoutDurA: 5.1,        // act 1: black -> wide -> push -> sun tilt-up
+    blackoutDurB: 4.0,        // hero arc (2.3s) + the pack advancing (1.7s)
+    blackoutHandoffDur: 0.45, // cut-on-action settle into gameplay
+    blackoutSunTiltFov: 44,   // sun-reveal shot FOV
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -486,6 +508,24 @@ export function sanitizeCategory(category, raw) {
         spawnWaveOverride: Math.max(0, Math.round(num(src.spawnWaveOverride, def.spawnWaveOverride))),
         showConfigBanner: bool(src.showConfigBanner, def.showConfigBanner),
         autoReloadOnStructural: bool(src.autoReloadOnStructural, def.autoReloadOnStructural),
+      };
+    }
+    case "cutscenes": {
+      return {
+        introEnabled: bool(src.introEnabled, def.introEnabled),
+        blackoutEnabled: bool(src.blackoutEnabled, def.blackoutEnabled),
+        introDurA: Math.max(0.2, num(src.introDurA, def.introDurA)),
+        introDurB: Math.max(0.2, num(src.introDurB, def.introDurB)),
+        introDurC: Math.max(0.2, num(src.introDurC, def.introDurC)),
+        introDurC2: Math.max(0.2, num(src.introDurC2, def.introDurC2)),
+        introDurGrab: Math.max(0.2, num(src.introDurGrab, def.introDurGrab)),
+        introDurZoom: Math.max(0.1, num(src.introDurZoom, def.introDurZoom)),
+        introTeleportFov: Math.max(10, Math.min(120, num(src.introTeleportFov, def.introTeleportFov))),
+        introGrabOverheadHeight: Math.max(3, Math.min(60, num(src.introGrabOverheadHeight, def.introGrabOverheadHeight))),
+        blackoutDurA: Math.max(0.5, num(src.blackoutDurA, def.blackoutDurA)),
+        blackoutDurB: Math.max(0.5, num(src.blackoutDurB, def.blackoutDurB)),
+        blackoutHandoffDur: Math.max(0.1, num(src.blackoutHandoffDur, def.blackoutHandoffDur)),
+        blackoutSunTiltFov: Math.max(10, Math.min(120, num(src.blackoutSunTiltFov, def.blackoutSunTiltFov))),
       };
     }
     default:

@@ -7,8 +7,8 @@ test("dev.html renders and activating a preset writes the resolved snapshot", as
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${BASE}/dev.html`, { waitUntil: "networkidle" });
 
-  // Sections + nav rendered.
-  await expect(page.locator("#nav .nav-btn")).toHaveCount(11);
+  // Sections + nav rendered (10 tunable categories + Presets + Cutscenes).
+  await expect(page.locator("#nav .nav-btn")).toHaveCount(12);
 
   // Go to Player, edit the "Default" preset's speed, activate it.
   await page.click('#nav button[data-sec="player"]');

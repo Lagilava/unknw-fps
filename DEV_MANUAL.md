@@ -52,10 +52,10 @@ re-seed, clear `localStorage.rb-dev-starter-installed`.
 ## 3. Core concepts
 
 ### 3.1 Categories
-Configuration is split into ten categories:
+Configuration is split into eleven categories:
 
 `player` · `camera` · `weapons` · `enemies` · `gameplay` · `spawn` ·
-`lighting` · `map` · `quality` (Performance) · `debug`
+`lighting` · `map` · `quality` (Performance) · `debug` · `cutscenes`
 
 ### 3.2 Presets
 A **preset** is a named, full set of values for one category. Every category
@@ -210,6 +210,26 @@ console triggers a reload on save). **Escape hatches** (no console needed):
 - `showConfigBanner` — the in-game "DEV PRESET" badge.
 - `autoReloadOnStructural` — auto-reload the game tab on map/lighting changes.
 
+### 5.11 Cutscenes
+Tunes the New-Mission intro (Tron render-in → the Choir → teleport → the Choir
+arrives → overhead pistol grab → handoff) and the blackout-wave cutscene
+(scenery establish → sun reveal → hero arc → the pack advances → handoff),
+without touching code:
+- `introEnabled` / `blackoutEnabled` — turn either cutscene off entirely (the
+  wave/mission still starts normally, just without the cinematic).
+- `introDurA/B/C/C2/Grab/Zoom` — per-beat durations (seconds) for the intro's
+  six beats; the cumulative timeline is recomputed from these automatically.
+- `introTeleportFov`, `introGrabOverheadHeight` — lens/height feel for the
+  teleport and overhead-grab shots.
+- `blackoutDurA/B`, `blackoutHandoffDur`, `blackoutSunTiltFov` — act 1 length,
+  the hero-arc + hunt-begins beat length, the cut-on-action settle duration,
+  and the sun-reveal shot's FOV.
+
+Read fresh at the **start of every cutscene run** (not mid-shot), so a live
+edit applies the next time the intro or a blackout wave triggers — use the
+`__rbTest.startIntroCutscene()` / `startBlackoutCutscene()` console hooks to
+preview a re-timed cut immediately without waiting for wave 10.
+
 ---
 
 ## 6. How changes reach the game — **live, no reload**
@@ -222,6 +242,7 @@ no lost session. A brief **"● LIVE-APPLIED"** pill confirms each edit landed.
 |--------|----------|
 | Player, Camera, Weapons, Gameplay, Spawn, Lighting, Debug, Performance caps | **Hot-applied live**, no reload. |
 | Enemies | **Live** — applies to the next spawn/wave (already-spawned enemies keep their stats, so wave scaling never drifts). |
+| Cutscenes | **Live for the next run** — read fresh each time a cutscene starts, not mid-shot. |
 | **Map** layout | Reloads once (full geometry + collision + minimap rebuild). |
 | **Renderer backend** (`quality.renderer`) | Reloads once (a GPU backend can't be swapped mid-session). |
 

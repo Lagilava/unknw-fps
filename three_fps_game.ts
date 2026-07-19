@@ -14667,11 +14667,19 @@ async function spawnEnemies(wave, options: any = {}) {
   function startBlackoutCutscene(force = false) {
     if (cutscene.active) return false;
     if (!force && (game.wave % 10 !== 0 || game.wave < 10)) return false;
+    // Developer control: a dev-console "cutscenes" preset can disable it outright
+    // (still counts as "played" so blackout gameplay rules aren't blocked on it).
+    if (!devVal("cutscenes", "blackoutEnabled", true)) return false;
     cutscene.active = true;
     cutscene.phase = 0;
     cutscene.t = 0;
     cutscene.phaseT = 0;
-    cutscene.durC = 0.45; // settle-behind handoff, not a long ease-blend
+    // Timings + FOV are dev-tunable (modules/dev_engine.js "cutscenes" category);
+    // re-read every run so a live preset edit takes effect on the next trigger.
+    cutscene.durA = devVal("cutscenes", "blackoutDurA", 5.1);
+    cutscene.durB = devVal("cutscenes", "blackoutDurB", 4.0);
+    cutscene.durC = devVal("cutscenes", "blackoutHandoffDur", 0.45); // settle-behind handoff, not a long ease-blend
+    cutscene.sunTiltFov = devVal("cutscenes", "blackoutSunTiltFov", 46);
     cutscene.cutFired = false;
     cutscene.cutFired2 = false;
     cutscene.advanceLatch = false;
@@ -14923,9 +14931,9 @@ async function spawnEnemies(wave, options: any = {}) {
           .addScaledVector(cutsceneSunDirTmp, 300);
         cutsceneTargetTmp.y = cutsceneEyeTmp.y + (-95 + (cutsceneSunDirTmp.y * 300 + 95) * tiltUp);
         cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-        // Lens polish: slow creep from 46 → 44 across the reveal (subtle zoom
-        // INTO the sun disc as the tilt-up completes).
-        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 46 - 2 * k);
+        // Lens polish: slow creep from the dev-tunable base FOV down 2° across the
+        // reveal (subtle zoom INTO the sun disc as the tilt-up completes).
+        applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, (cutscene.sunTiltFov ?? 46) - 2 * k);
       }
     } else if (cutscene.phase === 1 && cutscene.phaseT >= 2.3) {
       // PHASE B2 — THE HUNT BEGINS: low over-shoulder frame of the pack closing
@@ -15053,10 +15061,30 @@ async function spawnEnemies(wave, options: any = {}) {
   // enemy freeze, invulnerability) via cutscene.introMode.
   // Timeline (cumulative): A render-in 3.4 | B choir 2.2 | C teleport 2.3 |
   // C2 sun arrival 2.0 | E overhead grab 2.0 + crash zoom 0.6 | D settle 0.45
-  const INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3;
-  const INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.6, INTRO_DUR_D = 0.45;
-  const INTRO_T_B = INTRO_DUR_A, INTRO_T_C = INTRO_T_B + INTRO_DUR_B, INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
-  const INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2, INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB, INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
+  // Durations (and the two FOV/height feel params below) are dev-tunable via the
+  // "cutscenes" dev-console category — recomputeIntroTimeline() re-reads them
+  // from devVal() at the start of every intro run, so a saved/live-applied
+  // preset takes effect on the next New Mission without a reload.
+  let INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.3;
+  let INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.6, INTRO_DUR_D = 0.45;
+  let INTRO_T_B = INTRO_DUR_A, INTRO_T_C = INTRO_T_B + INTRO_DUR_B, INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
+  let INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2, INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB, INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
+  function recomputeIntroTimeline() {
+    INTRO_DUR_A = devVal("cutscenes", "introDurA", 3.4);
+    INTRO_DUR_B = devVal("cutscenes", "introDurB", 2.2);
+    INTRO_DUR_C = devVal("cutscenes", "introDurC", 2.3);
+    INTRO_DUR_C2 = devVal("cutscenes", "introDurC2", 2.0);
+    INTRO_DUR_GRAB = devVal("cutscenes", "introDurGrab", 2.0);
+    INTRO_DUR_ZOOM = devVal("cutscenes", "introDurZoom", 0.6);
+    INTRO_T_B = INTRO_DUR_A;
+    INTRO_T_C = INTRO_T_B + INTRO_DUR_B;
+    INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
+    INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2;
+    INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB;
+    INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
+    intro.teleportFov = devVal("cutscenes", "introTeleportFov", 45);
+    intro.overheadH = devVal("cutscenes", "introGrabOverheadHeight", 15.2);
+  }
   const intro: any = {
     fxBuilt: false, wireGroup: null, wireMat: null, clipPlane: null,
     frontierSoft: null, frontierCore: null,
@@ -15193,6 +15221,9 @@ async function spawnEnemies(wave, options: any = {}) {
   function startIntroCutscene(force = false) {
     if (cutscene.active) return false;
     if (!force && window.location.search.includes("test=1")) return false; // specs act immediately after start
+    // Developer control: a dev-console "cutscenes" preset can disable the intro.
+    if (!devVal("cutscenes", "introEnabled", true)) return false;
+    recomputeIntroTimeline();
     buildIntroFx();
     buildIntroChoir();
     cutscene.active = true;
@@ -15400,7 +15431,7 @@ async function spawnEnemies(wave, options: any = {}) {
       const tiltUp = cutsceneEaseCine(Math.min(1, c / 0.8));
       cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, 45);
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, intro.teleportFov ?? 45);
     } else if (t < INTRO_T_GRAB) {
       // BEAT C2 — THE CHOIR ARRIVES, sun at their backs: three silhouettes
       // striding toward the operator out of the light.
@@ -15520,7 +15551,7 @@ async function spawnEnemies(wave, options: any = {}) {
         yaw.rotation.y = bestAz2;
       }
       const zoomK = t < INTRO_T_ZOOM ? 0 : cutsceneEase((t - INTRO_T_ZOOM) / INTRO_DUR_ZOOM);
-      cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, 15.2 - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);
+      cutsceneEyeTmp.set(yaw.position.x - (-Math.sin(yaw.rotation.y)) * 1.4, (intro.overheadH ?? 15.2) - 1.4 * grabFrac, yaw.position.z - (-Math.cos(yaw.rotation.y)) * 1.4);
       cutsceneTargetTmp.set(yaw.position.x, 0.6, yaw.position.z);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
       cutsceneQuatTmp.multiply(cutsceneRollQuatTmp.setFromAxisAngle(CUTSCENE_ROLL_AXIS, grabFrac * 0.45)); // slow god-shot twist
@@ -19909,6 +19940,11 @@ async function spawnEnemies(wave, options: any = {}) {
         camPos: camera.getWorldPosition(new THREE.Vector3()).toArray(),
         camFov: camera.fov,
         tpLocalPos: resolveThirdPersonCameraPosition(0, 0, 0).toArray(),
+        // Dev-console "cutscenes" tuning as currently resolved (diagnostic).
+        introDurA: INTRO_DUR_A,
+        introTeleportFov: intro.teleportFov,
+        blackoutDurA: cutscene.durA,
+        blackoutSunTiltFov: cutscene.sunTiltFov,
       }),
       getFpState: () => {
         const cw = new THREE.Vector3();
