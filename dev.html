@@ -19,7 +19,18 @@
     transition: grid-template-columns .18s ease;
   }
   body.preview-open { grid-template-columns: 232px 1fr 420px; }
+  /* Collapsed sidebar: drop the first grid column and hide the aside. */
+  body.sidebar-collapsed { grid-template-columns: 0 1fr; }
+  body.sidebar-collapsed.preview-open { grid-template-columns: 0 1fr 420px; }
+  body.sidebar-collapsed aside { display: none; }
   code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* Small icon button used by the sidebar collapse + preview close toggles. */
+  .icon-btn {
+    background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+    border-radius: 7px; padding: 5px 9px; font-size: 13px; line-height: 1; cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--ink); border-color: var(--accent); }
 
   /* Sidebar */
   aside {
@@ -163,9 +174,12 @@
 
   <main>
     <header class="top">
-      <div>
-        <h2 id="secTitle">Presets</h2>
-        <div class="sub" id="secSub">Manage the developer preset library.</div>
+      <div class="row-flex">
+        <button class="icon-btn" id="sidebarToggle" title="Show/hide sidebar">☰</button>
+        <div>
+          <h2 id="secTitle">Presets</h2>
+          <div class="sub" id="secSub">Manage the developer preset library.</div>
+        </div>
       </div>
       <div class="row-flex">
         <span class="chip" id="liveChip">● live-linked</span>
@@ -180,6 +194,7 @@
       <div class="pd-title">
         <strong>LIVE PREVIEW</strong>
         <span class="pd-status" id="pdStatus">Stopped</span>
+        <button class="icon-btn" id="pdClose" title="Close live preview">✕</button>
       </div>
       <div class="pd-toolbar">
         <button class="btn small primary" id="pdStart">▶ Start</button>
@@ -234,7 +249,7 @@ const FIELDS = {
     staminaDrain: ["n", 0, 200, 1], staminaRegen: ["n", 0, 200, 1],
     jumpVelocity: ["n", 0, 20, 0.05], jumpGravity: ["n", 1, 40, 0.1], maxJumpOffset: ["n", 0, 5, 0.01],
     unlimitedHealth: ["b"], unlimitedSprint: ["b"], unlimitedAmmo: ["b"],
-    startingWeapon: ["s", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "railgun", "flak"]],
+    startingWeapon: ["s", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "flak"]],
   },
   camera: {
     fpWalkFov: ["n", 30, 140, 0.5], fpSprintFov: ["n", 30, 160, 0.5], tpWalkFov: ["n", 30, 140, 0.5],
@@ -275,6 +290,17 @@ const FIELDS = {
     blackoutDurA: ["n", 0.5, 20, 0.1], blackoutDurB: ["n", 0.5, 20, 0.1],
     blackoutHandoffDur: ["n", 0.1, 3, 0.05], blackoutSunTiltFov: ["n", 10, 120, 0.5],
   },
+  cinematic: {
+    exposureMul: ["n", 0.3, 2, 0.02], contrast: ["n", 0.5, 2.5, 0.01], desaturate: ["n", 0, 1, 0.01],
+    darken: ["n", 0.3, 1.3, 0.01], blackCrush: ["n", 0, 0.15, 0.005], gloss: ["n", 0, 2, 0.02],
+    vignette: ["n", 0, 1, 0.02], grain: ["n", 0, 0.12, 0.005],
+    shadowR: ["n", -0.2, 0.2, 0.002], shadowG: ["n", -0.2, 0.2, 0.002], shadowB: ["n", -0.2, 0.2, 0.002],
+    highR: ["n", -0.2, 0.2, 0.002], highG: ["n", -0.2, 0.2, 0.002], highB: ["n", -0.2, 0.2, 0.002],
+    bloomStrength: ["n", 0, 2, 0.02], bloomThreshold: ["n", 0, 1, 0.02], bloomRadius: ["n", 0, 1.5, 0.05],
+    chromaIntensity: ["n", 0, 1, 0.02], chromaOffset: ["n", 0, 0.03, 0.0002],
+    motionBlurMax: ["n", 0, 0.9, 0.02], motionBlurTurn: ["n", 0, 20, 0.1], motionBlurMove: ["n", 0, 20, 0.1],
+    cssContrast: ["n", 0.5, 2, 0.01], cssSaturate: ["n", 0, 2, 0.01], cssBrightness: ["n", 0.3, 1.5, 0.01],
+  },
 };
 const LABELS = {
   hp: "Health", maxHp: "Max health", radius: "Collision radius", speed: "Walk speed", sprintSpeed: "Sprint speed",
@@ -308,6 +334,15 @@ const LABELS = {
   introTeleportFov: "Intro: teleport FOV", introGrabOverheadHeight: "Intro: overhead height",
   blackoutDurA: "Blackout act 1 (s)", blackoutDurB: "Blackout arc + hunt (s)",
   blackoutHandoffDur: "Blackout: handoff settle (s)", blackoutSunTiltFov: "Blackout: sun-reveal FOV",
+  exposureMul: "Exposure ×", contrast: "Contrast (S-curve)", desaturate: "Desaturate (bleach)",
+  darken: "Overall darken ×", blackCrush: "Black crush", gloss: "Highlight glow",
+  vignette: "Vignette", grain: "Film grain",
+  shadowR: "Shadow tint R", shadowG: "Shadow tint G", shadowB: "Shadow tint B",
+  highR: "Highlight tint R", highG: "Highlight tint G", highB: "Highlight tint B",
+  bloomStrength: "Bloom strength", bloomThreshold: "Bloom threshold", bloomRadius: "Bloom radius",
+  chromaIntensity: "Chromatic aberration", chromaOffset: "Chroma RGB split",
+  motionBlurMax: "Motion blur max", motionBlurTurn: "Motion blur: turning", motionBlurMove: "Motion blur: movement",
+  cssContrast: "CSS contrast", cssSaturate: "CSS saturation", cssBrightness: "CSS brightness",
 };
 const SECTION_SUB = {
   presets: "Master presets & the whole developer configuration.",
@@ -322,6 +357,7 @@ const SECTION_SUB = {
   quality: "Renderer backend & performance caps for all devices (reload on save).",
   debug: "God mode, freeze, wave preview and preview toggles.",
   cutscenes: "New-Mission intro + blackout cutscene timing, FOVs and on/off toggles. Live-applied — re-run a cutscene to see changes.",
+  cinematic: "Cinematic post-grade: colour grade, bloom, chromatic aberration, motion blur & exposure. Live-applied while the Cinematic toggle is ON (does NOT touch the always-on default grade).",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,7 +422,7 @@ function currentConfig(cat) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Nav
 // ─────────────────────────────────────────────────────────────────────────────
-const SECTIONS = ["presets", "map", "camera", "lighting", "gameplay", "weapons", "enemies", "spawn", "player", "quality", "cutscenes", "debug"];
+const SECTIONS = ["presets", "map", "camera", "lighting", "gameplay", "weapons", "enemies", "spawn", "player", "quality", "cutscenes", "cinematic", "debug"];
 let activeSection = "presets";
 function buildNav() {
   const nav = $("#nav"); nav.innerHTML = "";
@@ -549,7 +585,7 @@ function renderSection(cat) {
   if (cat === "presets") return renderPresets();
   if (cat === "map") return renderMap();
   if (cat === "spawn") return renderSpawn();
-  if (cat === "weapons") return renderGrouped("weapons", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "railgun", "flak"], GUN_FIELDS, (g) => g.toUpperCase());
+  if (cat === "weapons") return renderGrouped("weapons", ["rifle", "shotgun", "sniper", "pistol", "smg", "lmg", "dmr", "akimbo", "flak"], GUN_FIELDS, (g) => g.toUpperCase());
   if (cat === "enemies") return renderGrouped("enemies", Object.keys(DE.DEFAULTS.enemies), ENEMY_FIELDS, (g) => g);
   return renderFlat(cat);
 }
@@ -802,7 +838,18 @@ function pdSetOpen(open) {
   try { localStorage.setItem(PREVIEW_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
 }
 $("#previewToggle").onclick = () => pdSetOpen(!document.body.classList.contains("preview-open"));
+$("#pdClose").onclick = () => pdSetOpen(false);
 if (localStorage.getItem(PREVIEW_OPEN_KEY) === "1") pdSetOpen(true);
+
+// Sidebar collapse toggle (persisted, same pattern as the preview dock).
+const SIDEBAR_COLLAPSED_KEY = "rb-dev-sidebar-collapsed";
+function setSidebarCollapsed(collapsed) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  $("#sidebarToggle").classList.toggle("on", collapsed);
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (_) {}
+}
+$("#sidebarToggle").onclick = () => setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") setSidebarCollapsed(true);
 
 function pdSetToolbarEnabled(enabled) {
   for (const id of ["pdRestart", "pdWave", "pdJumpWave", "pdGodMode", "pdIntro", "pdBlackout"]) {

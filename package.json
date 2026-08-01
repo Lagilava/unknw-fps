@@ -16,6 +16,7 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",
     "express": "^4.22.2",
+    "howler": "^2.2.4",
     "miniplex": "^2.0.0",
     "peer": "^1.0.2",
     "peerjs": "^1.5.4",
@@ -26,6 +27,7 @@
     "@gltf-transform/extensions": "^4.4.0",
     "@gltf-transform/functions": "^4.4.0",
     "@playwright/test": "^1.61.1",
+    "@types/howler": "^2.2.13",
     "@types/three": "^0.166.0",
     "fbx2gltf": "^0.9.7-p1",
     "meshoptimizer": "^1.1.1",

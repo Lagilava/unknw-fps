@@ -119,8 +119,12 @@ export function initDebrisPool(): void {
         .setLinearDamping(0.15)
         .setAngularDamping(0.25),
     );
+    // Small cylinder, Y-axis aligned like the CylinderGeometry rendering it (a
+    // brass shell casing tumbling on the floor) — not a cube. Only the shell-
+    // casing spawner (spawnCasing) uses this pool now; the death-debris burst
+    // (spawnDebrisBurst) was removed from the enemy-death path.
     world.createCollider(
-      RAPIER.ColliderDesc.cuboid(0.08, 0.08, 0.08).setRestitution(0.4).setFriction(0.9),
+      RAPIER.ColliderDesc.cylinder(0.03, 0.016).setRestitution(0.4).setFriction(0.9),
       body,
     );
     body.sleep();

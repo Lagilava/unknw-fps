@@ -15,29 +15,33 @@
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;600;700;900&display=swap');
 
   /* ════════════════════════════════════════════
-     DESIGN SYSTEM — Cold Classified / Redacted
-     Cyan accent #22d3ee · steel-white · danger red
+     DESIGN SYSTEM — Cold Classified (Kimi Refinement)
   ════════════════════════════════════════════ */
   :root {
-    --bg:            #05070a;
-    --surface:       rgba(10,15,22,0.92);
-    --surface-soft:  rgba(12,17,24,0.78);
-    --accent:        #22d3ee;
-    --accent-hot:    #67e8f9;
-    --accent-dim:    rgba(34,211,238,0.55);
-    --accent-faint:  rgba(34,211,238,0.10);
-    --steel:         #d7e2ea;
-    --steel-dim:     rgba(215,226,234,0.42);
-    --line:          rgba(34,211,238,0.22);
-    --line-strong:   rgba(34,211,238,0.50);
-    --text-hi:       #d7e2ea;
-    --text-mid:      rgba(184,199,212,0.68);
-    --text-lo:       rgba(140,160,178,0.42);
-    --danger:        #ff4d5e;
-    --danger-dim:    rgba(255,77,94,0.22);
+    --bg:            #04060a;
+    --surface:       rgba(10,16,26,0.94);
+    --surface-soft:  rgba(12,18,28,0.82);
+    --accent:        #2dd4bf;
+    --accent-hot:    #5eead4;
+    --accent-dim:    rgba(45,212,191,0.50);
+    --accent-faint:  rgba(45,212,191,0.10);
+    --steel:         #e2e8f0;
+    --steel-dim:     rgba(226,232,240,0.45);
+    --line:          rgba(45,212,191,0.20);
+    --line-strong:   rgba(45,212,191,0.50);
+    --text-hi:       #f1f5f9;
+    --text-mid:      rgba(148,163,184,0.72);
+    --text-lo:       rgba(100,116,139,0.48);
+    --danger:        #fb7185;
+    --danger-dim:    rgba(251,113,133,0.22);
     --green:         #34d399;
-    --redact:        rgba(140,160,178,0.16);
-    --redact-bar:    rgba(120,140,158,0.60);
+    --redact:        rgba(100,116,139,0.14);
+    --redact-bar:    rgba(148,163,184,0.55);
+    --shadow-sm:     0 2px 8px rgba(0,0,0,0.40);
+    --shadow-md:     0 8px 28px rgba(0,0,0,0.50);
+    --shadow-lg:     0 16px 48px rgba(0,0,0,0.60);
+    --glow-accent:   0 0 24px rgba(45,212,191,0.25);
+    --glow-strong:   0 0 40px rgba(45,212,191,0.15);
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -45,17 +49,30 @@
   html, body {
     width: 100%; height: 100%;
     overflow: hidden;
-    background: linear-gradient(180deg, #0a0f16 0%, #05070a 100%);
+    background: radial-gradient(ellipse 80% 60% at 50% 0%, #0d1520 0%, #04060a 60%, #020305 100%);
     font-family: 'Share Tech Mono', monospace;
     color: var(--text-hi);
     -webkit-user-select: none;
     user-select: none;
   }
 
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(45,212,191,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(45,212,191,0.025) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+  }
+
   body::after {
     content: '';
     position: fixed; inset: 0;
-    background: radial-gradient(ellipse at center, transparent 46%, rgba(0,0,0,0.68) 100%);
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.65) 100%);
     pointer-events: none;
     z-index: 0;
   }
@@ -67,7 +84,6 @@
     cursor: crosshair;
   }
 
-  /* ── HUD root ── */
   #hud {
     position: fixed; inset: 0;
     pointer-events: none;
@@ -75,19 +91,22 @@
     isolation: isolate;
   }
 
-  /* ── Crosshair ── */
   #xhair {
     position: absolute;
     left: 50%; top: 50%;
     transform: translate(-50%, -50%);
     width: 32px; height: 32px;
-    filter: drop-shadow(0 0 5px rgba(34,211,238,0.4));
+    animation: xhairBreathe 3s ease-in-out infinite;
+  }
+  @keyframes xhairBreathe {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50%      { transform: translate(-50%, -50%) scale(1.04); }
   }
   .xhair-seg {
     position: absolute;
     border-radius: 1px;
     background: rgba(228,216,184,0.92);
-    box-shadow: 0 0 6px rgba(34,211,238,0.7), 0 0 2px rgba(0,0,0,0.95);
+    box-shadow: 0 0 8px rgba(45,212,191,0.6), 0 0 2px rgba(0,0,0,0.95);
   }
   .xhair-v-top    { left:15px; top:1px;    width:2px; height:10px; }
   .xhair-v-bottom { left:15px; bottom:1px; width:2px; height:10px; }
@@ -98,10 +117,10 @@
     transform: translate(-50%,-50%);
     width:4px; height:4px; border-radius:50%;
     border: 1px solid rgba(228,216,184,0.82);
-    background: rgba(34,211,238,0.42);
+    background: rgba(45,212,191,0.45);
+    box-shadow: 0 0 6px rgba(45,212,191,0.5);
   }
 
-  /* ── Hit marker ── */
   #hit-marker {
     position: absolute;
     left: 50%; top: 50%;
@@ -116,206 +135,223 @@
     content: '';
     position: absolute;
     background: var(--accent-hot);
-    box-shadow: 0 0 6px rgba(34,211,238,0.85);
+    box-shadow: 0 0 10px rgba(45,212,191,0.9), 0 0 20px rgba(45,212,191,0.4);
   }
   #hit-marker::before { left:13px; top:0;   width:2px; height:28px; }
   #hit-marker::after  { left:0;   top:13px; width:28px; height:2px; }
 
-  /* ── Damage vignette ── */
   #damage-vignette {
     position: fixed; inset: 0;
-    background: radial-gradient(ellipse at center, transparent 38%, rgba(160,30,10,0.62) 100%);
+    background: radial-gradient(ellipse at center, transparent 35%, rgba(180,40,30,0.55) 100%);
     opacity: 0;
     pointer-events: none;
     z-index: 6;
-    transition: opacity 0.05s;
+    transition: opacity 0.06s;
   }
 
-  /* ── Top center: objective + kill feed ── */
+  /* ADS focus vignette: darkens the edges as aim comes up, tightening further
+     (and cooling toward blue-black) once the sniper is fully scoped, so aiming
+     reads as a deliberate focus pull instead of just a narrower FOV. */
+  #ads-vignette {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 42%, rgba(2,4,8,0.82) 118%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 5;
+    will-change: opacity;
+  }
+
   #center-hud {
     position: absolute;
-    left: 50%; top: 14px;
+    left: 50%; top: 16px;
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 5px;
-    min-width: 240px;
-    filter: drop-shadow(0 8px 20px rgba(0,0,0,0.40));
+    gap: 6px;
+    min-width: 260px;
+    filter: drop-shadow(0 10px 30px rgba(0,0,0,0.45));
   }
 
   #objective {
     font-size: 10px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.18em;
     color: var(--text-hi);
     background: var(--surface);
     border: 1px solid var(--line-strong);
     border-top: 2px solid var(--accent-dim);
-    border-radius: 2px;
-    padding: 6px 18px;
-    backdrop-filter: blur(6px);
+    border-radius: 3px;
+    padding: 7px 20px;
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
     text-transform: uppercase;
     text-align: center;
-    min-width: 238px;
+    min-width: 260px;
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,0.04);
   }
 
   #wave-badge {
     font-size: 10px;
-    letter-spacing: 0.2em;
-    padding: 3px 12px;
-    border-radius: 2px;
+    letter-spacing: 0.22em;
+    padding: 4px 14px;
+    border-radius: 3px;
     background: var(--surface);
     border: 1px solid var(--line);
     color: var(--accent-hot);
     text-transform: uppercase;
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-sm);
   }
 
   #score-badge {
     font-size: 11px;
-    letter-spacing: 0.18em;
-    padding: 3px 14px;
-    border-radius: 2px;
-    background: linear-gradient(90deg, rgba(8,12,18,0.72), rgba(16,22,32,0.72), rgba(8,12,18,0.72));
+    letter-spacing: 0.2em;
+    padding: 4px 16px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, rgba(8,14,22,0.78), rgba(16,24,36,0.78), rgba(8,14,22,0.78));
     border: 1px solid var(--line);
     color: var(--accent-hot);
     text-transform: uppercase;
+    backdrop-filter: blur(6px);
+    box-shadow: var(--shadow-sm);
   }
   #score-badge .score-best {
     color: var(--text-lo);
     font-size: 9px;
-    margin-left: 8px;
+    margin-left: 10px;
   }
 
   #kill-feed {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
   }
   .kill-entry {
     font-size: 11px;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     color: var(--accent-hot);
-    animation: killFade 2.2s forwards;
+    animation: killFade 2.4s forwards;
     white-space: nowrap;
+    text-shadow: 0 0 8px rgba(45,212,191,0.4);
   }
   @keyframes killFade {
     0%   { opacity: 1; transform: translateY(0) scale(1); }
     15%  { transform: translateY(0) scale(1.06); }
     70%  { opacity: 1; }
-    100% { opacity: 0; transform: translateY(-8px) scale(0.92); }
+    100% { opacity: 0; transform: translateY(-10px) scale(0.9); }
   }
 
   #streak-block {
     font-size: 12px;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.2em;
     color: var(--accent-hot);
-    text-shadow: 0 0 12px rgba(34,211,238,0.65);
-    padding: 4px 14px;
-    background: rgba(14,20,29,0.72);
+    text-shadow: 0 0 16px rgba(45,212,191,0.7);
+    padding: 5px 16px;
+    background: rgba(14,22,32,0.78);
     border: 1px solid var(--line-strong);
-    border-radius: 2px;
+    border-radius: 3px;
     text-transform: uppercase;
     opacity: 0;
     transform: scale(0.85);
-    transition: opacity 0.2s, transform 0.2s;
+    transition: opacity 0.25s cubic-bezier(0.22,1,0.36,1), transform 0.25s cubic-bezier(0.22,1,0.36,1);
+    backdrop-filter: blur(6px);
+    box-shadow: var(--glow-accent);
   }
   #streak-block.active {
     opacity: 1;
     transform: scale(1);
-    animation: streakPulse 0.3s ease-out;
+    animation: streakPulse 0.35s cubic-bezier(0.22,1.5,0.4,1);
   }
+  @keyframes streakPulse {
+    0%   { transform: scale(1.3); }
+    100% { transform: scale(1); }
+  }
+
   #pack-prompt {
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 10px;
     font-size: 11px;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     color: var(--text-hi);
     font-weight: 700;
-    background: rgba(9,15,22,0.85);
+    background: rgba(9,16,24,0.88);
     border: 1px solid var(--line-strong);
     border-radius: 999px;
-    padding: 5px 16px 5px 5px;
+    padding: 6px 18px 6px 6px;
     opacity: 0;
     transform: translateY(-4px) scale(0.92);
-    transition: opacity 0.15s, transform 0.15s;
+    transition: opacity 0.2s cubic-bezier(0.22,1,0.36,1), transform 0.2s cubic-bezier(0.22,1,0.36,1);
     text-transform: uppercase;
-    backdrop-filter: blur(8px);
-    box-shadow: 0 6px 20px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(34,211,238,0.14);
+    backdrop-filter: blur(10px) saturate(1.2);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(45,212,191,0.12);
   }
   #pack-prompt.active {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
-  #pack-prompt.pop { animation: promptPop 0.3s cubic-bezier(0.22,1.5,0.4,1); }
+  #pack-prompt.pop { animation: promptPop 0.35s cubic-bezier(0.22,1.5,0.4,1); }
   @keyframes promptPop {
-    0%   { transform: scale(0.82); }
-    55%  { transform: scale(1.08); }
+    0%   { transform: scale(0.78); }
+    55%  { transform: scale(1.1); }
     100% { transform: scale(1); }
   }
   #pack-prompt-key {
     display: none;
     align-items: center;
     justify-content: center;
-    width: 20px; height: 20px;
+    width: 22px; height: 22px;
     flex-shrink: 0;
-    border-radius: 5px;
+    border-radius: 6px;
     background: linear-gradient(180deg, var(--accent-hot), var(--accent));
     color: #04121a;
     font-weight: 900;
     font-size: 11px;
-    box-shadow: 0 0 10px rgba(34,211,238,0.7), inset 0 -2px 0 rgba(0,0,0,0.25);
+    box-shadow: 0 0 12px rgba(45,212,191,0.6), inset 0 -2px 0 rgba(0,0,0,0.25);
     animation: promptKeyBounce 1.6s ease-in-out infinite;
   }
   #pack-prompt.has-key #pack-prompt-key { display: inline-flex; }
   @keyframes promptKeyBounce {
     0%, 100% { transform: translateY(0); }
-    50%      { transform: translateY(-2px); }
+    50%      { transform: translateY(-3px); }
   }
   #pack-prompt-text {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    line-height: 1.3;
+    line-height: 1.35;
   }
   #pack-prompt-cost {
     font-size: 9px;
     color: var(--accent-hot);
-    opacity: 0.85;
-    letter-spacing: 0.14em;
-  }
-  @keyframes streakPulse {
-    0%   { transform: scale(1.28); }
-    100% { transform: scale(1); }
+    opacity: 0.9;
+    letter-spacing: 0.16em;
   }
 
-  /* ── Minimap ── */
-  /* GTA-style circular radar — the canvas draws its own rim ring/vignette;
-     CSS just rounds the hit-area and adds the drop glow. */
   #minimap-canvas {
     position: absolute;
-    top: 16px; right: 16px;
+    top: 18px; right: 18px;
     width: 200px; height: 200px;
     border-radius: 50%;
     opacity: 0.96;
     background: transparent;
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.55),
-                0 14px 32px rgba(0,0,0,0.50),
-                0 0 22px rgba(34,211,238,0.10);
+    box-shadow: 0 0 0 1px rgba(45,212,191,0.10),
+                0 12px 32px rgba(0,0,0,0.45),
+                0 0 24px rgba(45,212,191,0.10);
   }
 
-  /* ── Bottom HUD bar ── */
   #bottom-hud {
     position: absolute;
     bottom: 0; left: 0; right: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    padding: 0 24px 18px;
+    gap: 18px;
+    padding: 0 28px 22px;
     background: linear-gradient(to top,
-      rgba(0,0,0,0.92) 0%,
-      rgba(0,0,0,0.42) 48%,
+      rgba(0,0,0,0.82) 0%,
+      rgba(0,0,0,0.30) 55%,
       transparent 100%);
     pointer-events: none;
   }
@@ -323,30 +359,38 @@
   .hud-block {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    min-width: 176px;
-    padding: 11px 15px 12px;
-    background: rgba(10,15,22,0.88);
-    border: 1px solid var(--line-strong);
-    border-top: 2px solid var(--accent);
-    backdrop-filter: blur(6px);
-    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
-    box-shadow: inset 0 1px 0 rgba(103,232,249,0.05), 0 12px 30px rgba(0,0,0,0.45);
+    gap: 6px;
+    min-width: 190px;
+    padding: 13px 18px 15px;
+    background: linear-gradient(180deg, rgba(12,20,29,0.78), rgba(7,11,17,0.82));
+    border: 1px solid rgba(45,212,191,0.14);
+    border-radius: 8px;
+    backdrop-filter: blur(14px) saturate(1.15);
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.04);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s;
   }
-  .hud-block.center {
-    align-items: center;
-    clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
+  /* Single, softer accent hairline shared by all three panels (was three hard
+     directional gradients + a bright 0.6 line — read as busy). */
+  .hud-block::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.45;
   }
-  .hud-block.end {
-    align-items: flex-end;
-    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
-  }
+  .hud-block.center { align-items: center; }
+  .hud-block.end { align-items: flex-end; }
 
   .hud-label {
-    font-size: 9px;
-    letter-spacing: 0.24em;
+    font-size: 9.5px;
+    letter-spacing: 0.22em;
     color: var(--accent-dim);
     text-transform: uppercase;
+    opacity: 0.85;
+    font-weight: 600;
   }
 
   .hud-value {
@@ -355,78 +399,79 @@
     font-weight: 700;
     color: var(--text-hi);
     line-height: 1;
-    text-shadow: 0 0 14px rgba(34,211,238,0.28), 0 2px 0 rgba(0,0,0,0.60);
+    /* Soft accent glow instead of the dated hard drop-shadow. */
+    text-shadow: 0 0 18px rgba(45,212,191,0.18), 0 1px 2px rgba(0,0,0,0.55);
     letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
   }
   #weapon-val {
     font-size: 14px;
     font-weight: 700;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.16em;
     color: var(--text-hi);
     text-transform: uppercase;
     margin-bottom: 4px;
-    max-width: 240px;
+    max-width: 260px;
     text-align: right;
-    text-shadow: 0 0 12px rgba(34,211,238,0.35), 0 2px 0 rgba(0,0,0,0.6);
+    text-shadow: 0 0 12px rgba(45,212,191,0.22), 0 1px 2px rgba(0,0,0,0.55);
   }
-  .hud-value.danger   { color: var(--danger); text-shadow: 0 0 16px rgba(192,40,40,0.85); animation: dangerPulse 0.45s infinite alternate; }
+  .hud-value.danger   { color: var(--danger); animation: dangerPulse 0.5s infinite alternate; }
   .hud-value.low-ammo { color: var(--accent-hot); }
 
   @keyframes dangerPulse {
     from { opacity: 1; }
-    to   { opacity: 0.58; }
+    to   { opacity: 0.55; }
   }
 
   #hp-bar-wrap {
-    width: 148px; height: 4px;
+    width: 152px; height: 6px;
     background: rgba(255,255,255,0.06);
-    border-radius: 1px;
-    margin-top: 5px;
+    border-radius: 3px;
+    margin-top: 7px;
     overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.35);
   }
   #hp-bar {
     width: 100%; height: 100%;
-    background: linear-gradient(90deg, #3a7030, #5ab048);
-    transition: width 0.18s, background 0.18s;
-    box-shadow: 0 0 8px rgba(80,168,64,0.55);
+    background: linear-gradient(90deg, #2d7a3a, #4ade80);
+    transition: width 0.2s cubic-bezier(0.22,1,0.36,1), background 0.2s;
+    box-shadow: 0 0 8px rgba(74,222,128,0.3);
   }
 
   #stamina-bar-wrap { display: none; }
   #stamina-bar { display: none; }
 
   #reload-bar-wrap {
-    width: 112px; height: 3px;
+    width: 116px; height: 5px;
     background: rgba(255,255,255,0.06);
-    border-radius: 1px;
-    margin-top: 6px;
+    border-radius: 3px;
+    margin-top: 8px;
     opacity: 0;
-    transition: opacity 0.1s;
+    transition: opacity 0.12s;
     overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
   }
   #reload-bar-wrap.active { opacity: 1; }
   #reload-bar {
     height: 100%;
     background: linear-gradient(90deg, #0e7490, var(--accent-hot));
-    box-shadow: 0 0 8px rgba(34,211,238,0.65);
     transition: width 0.04s linear;
+    box-shadow: 0 0 8px rgba(45,212,191,0.3);
   }
 
   #sprint-status {
-    margin-top: 5px;
-    padding-top: 4px;
+    margin-top: 6px;
+    padding-top: 5px;
     border-top: 1px solid var(--line);
     font-size: 9px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: rgba(100,180,80,0.72);
+    color: rgba(100,200,120,0.75);
   }
 
-  .ammo-reserve { font-size: 18px; opacity: 0.36; font-weight: 400; }
+  .ammo-reserve { font-size: 18px; opacity: 0.38; font-weight: 400; }
   .sprint-indicator { display: none; }
 
-  /* ════════════════════════════════════════════════
-     STARTUP LOADING SCREEN
-  ════════════════════════════════════════════════ */
   #loading-screen {
     position: fixed;
     inset: 0;
@@ -435,96 +480,20 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background:
-      radial-gradient(ellipse 55% 45% at 50% 40%, rgba(34,211,238,0.10) 0%, transparent 60%),
-      linear-gradient(180deg, #0a0f16 0%, #080705 100%);
+    background: radial-gradient(ellipse 70% 50% at 50% 0%, #0f1a2a 0%, #06090f 50%, #020305 100%);
     overflow: hidden;
-    transition: opacity 0.5s ease, visibility 0.5s ease;
+    transition: opacity 0.6s cubic-bezier(0.22,1,0.36,1), visibility 0.6s;
   }
   #loading-screen.hidden {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
   }
-
-  .ls-grid {
-    position: absolute; inset: 0;
-    background-image:
-      linear-gradient(var(--line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--line) 1px, transparent 1px);
-    background-size: 56px 56px;
-    opacity: 0.28;
-    -webkit-mask-image: radial-gradient(ellipse 75% 75% at 50% 50%, black, transparent);
-    mask-image: radial-gradient(ellipse 75% 75% at 50% 50%, black, transparent);
+  #loading-screen[data-ready="true"] {
+    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
   }
-
-  .ls-glow {
-    position: absolute; inset: 0; pointer-events: none;
-    background:
-      radial-gradient(ellipse 52% 42% at 50% 46%, rgba(34,211,238,0.09) 0%, transparent 65%),
-      radial-gradient(ellipse 24% 28% at 18% 78%, rgba(14,116,144,0.06) 0%, transparent 55%);
-  }
-
-  .ls-rings-wrap {
-    position: absolute;
-    top: 50%; left: 50%;
-    pointer-events: none;
-  }
-  .ls-ring {
-    position: absolute;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-    transform: translate(-50%, -50%);
-    animation: lsRingPulse 4s ease-out infinite;
-  }
-  .ls-ring:nth-child(1) { width: 180px; height: 180px; animation-delay: 0s; }
-  .ls-ring:nth-child(2) { width: 380px; height: 380px; animation-delay: 1.4s; }
-  .ls-ring:nth-child(3) { width: 620px; height: 620px; animation-delay: 2.8s; }
-  @keyframes lsRingPulse {
-    0%   { opacity: 0.7; transform: translate(-50%,-50%) scale(0.2); }
-    80%  { opacity: 0; }
-    100% { opacity: 0; transform: translate(-50%,-50%) scale(1); }
-  }
-
-  .ls-scan {
-    position: absolute;
-    left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, transparent 0%, var(--accent-dim) 40%, var(--accent) 50%, var(--accent-dim) 60%, transparent 100%);
-    animation: lsScan 3.5s linear infinite;
-    pointer-events: none;
-    z-index: 1;
-  }
-  @keyframes lsScan {
-    0%   { top: -4px; opacity: 0; }
-    4%   { opacity: 1; }
-    96%  { opacity: 0.6; }
-    100% { top: 100%; opacity: 0; }
-  }
-
-  .ls-bracket {
-    position: absolute;
-    width: 52px; height: 52px;
-    opacity: 0.38;
-  }
-  .ls-bracket::before, .ls-bracket::after {
-    content: ''; position: absolute;
-    background: linear-gradient(180deg, var(--accent), rgba(34,211,238,0.6));
-  }
-  .ls-bracket::before { width: 2px; height: 100%; }
-  .ls-bracket::after  { width: 100%; height: 2px; }
-  .ls-bracket.tl { top: 36px; left: 36px; }
-  .ls-bracket.tl::before { top:0; left:0; }
-  .ls-bracket.tl::after  { top:0; left:0; }
-  .ls-bracket.tr { top: 36px; right: 36px; transform: scaleX(-1); }
-  .ls-bracket.tr::before { top:0; left:0; }
-  .ls-bracket.tr::after  { top:0; left:0; }
-  .ls-bracket.bl { bottom: 36px; left: 36px; transform: scaleY(-1); }
-  .ls-bracket.bl::before { top:0; left:0; }
-  .ls-bracket.bl::after  { top:0; left:0; }
-  .ls-bracket.br { bottom: 36px; right: 36px; transform: scale(-1); }
-  .ls-bracket.br::before { top:0; left:0; }
-  .ls-bracket.br::after  { top:0; left:0; }
 
   .ls-content {
     position: relative;
@@ -538,11 +507,12 @@
 
   .ls-eyebrow {
     font-size: 10px;
-    letter-spacing: 0.55em;
+    letter-spacing: 0.4em;
     color: var(--accent-dim);
     text-transform: uppercase;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
     animation: lsFadeIn 0.8s ease both;
+    opacity: 0.85;
   }
 
   .ls-title {
@@ -552,7 +522,7 @@
     text-transform: uppercase;
     line-height: 0.88;
     animation: lsFadeIn 0.8s ease 0.15s both;
-    text-shadow: 0 3px 14px rgba(0,0,0,0.42);
+    text-shadow: 0 4px 20px rgba(0,0,0,0.5);
   }
   .ls-title-room {
     display: block;
@@ -561,33 +531,38 @@
   }
   .ls-title-breach {
     display: block;
-    color: transparent;
-    -webkit-text-stroke: 2px var(--accent);
+    color: var(--accent);
     letter-spacing: 0.14em;
     margin-top: 4px;
+    text-shadow: 0 0 40px rgba(45,212,191,0.35), 0 0 80px rgba(45,212,191,0.15);
+    animation: titleGlow 3s ease-in-out infinite;
+  }
+  @keyframes titleGlow {
+    0%, 100% { text-shadow: 0 0 40px rgba(45,212,191,0.35), 0 0 80px rgba(45,212,191,0.15); }
+    50%      { text-shadow: 0 0 60px rgba(45,212,191,0.5), 0 0 100px rgba(45,212,191,0.25); }
   }
 
   .ls-divider {
-    width: 300px;
+    width: 220px;
     height: 1px;
-    margin: 28px auto 24px;
+    margin: 32px auto 28px;
     background: linear-gradient(90deg, transparent, var(--line-strong), transparent);
     position: relative;
     animation: lsFadeIn 0.6s ease 0.3s both;
   }
   .ls-divider::after {
-    content: '◆';
+    content: '';
     position: absolute;
     left: 50%; top: 50%;
     transform: translate(-50%, -50%);
-    color: var(--accent-dim);
-    font-size: 8px;
-    background: #070b10;
-    padding: 0 10px;
+    width: 6px; height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(45,212,191,0.6);
   }
 
   .ls-progress-wrap {
-    width: min(380px, 88vw);
+    width: min(400px, 88vw);
     animation: lsFadeIn 0.6s ease 0.45s both;
   }
 
@@ -595,12 +570,12 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 9px;
+    margin-bottom: 10px;
   }
 
   .ls-status-text {
     font-size: 10px;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.24em;
     color: var(--accent-dim);
     text-transform: uppercase;
   }
@@ -628,194 +603,161 @@
     background: linear-gradient(90deg, #155e75, var(--accent));
     border-radius: 2px;
     position: relative;
-    transition: width 0.18s ease;
+    transition: width 0.2s cubic-bezier(0.22,1,0.36,1);
+    box-shadow: 0 0 12px rgba(45,212,191,0.4);
   }
-
   #loading-fill::after {
     content: '';
     position: absolute;
-    right: -1px; top: -3px;
-    width: 2px; height: 9px;
-    background: var(--text-hi);
-    box-shadow: 0 0 10px rgba(228,216,184,0.88);
-    border-radius: 1px;
+    right: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 8px; height: 8px;
+    background: var(--accent-hot);
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(45,212,191,0.8);
+    animation: loadPulse 1.5s ease-in-out infinite;
   }
-
-  .ls-seg-row {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 7px;
+  @keyframes loadPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(45,212,191,0.6); }
+    50%      { box-shadow: 0 0 18px rgba(45,212,191,1); }
   }
-
-  .ls-seg {
-    font-size: 8px;
-    letter-spacing: 0.1em;
-    color: var(--text-lo);
-    text-transform: uppercase;
-    transition: color 0.3s ease, text-shadow 0.3s ease;
-  }
-  .ls-seg.active {
-    color: var(--accent-hot, #ffb347);
-    text-shadow: 0 0 8px rgba(34,211,238,0.6);
-  }
-
-  .ls-bottom {
-    position: absolute;
-    bottom: 28px; left: 0; right: 0;
-    display: flex;
-    justify-content: space-between;
-    padding: 0 44px;
-    pointer-events: none;
-  }
-
-  .ls-sys {
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    color: var(--text-lo);
-    text-transform: uppercase;
-  }
-  .ls-sys-build { color: var(--accent-dim); }
 
   @keyframes lsFadeIn {
-    from { opacity: 0; transform: translateY(10px); }
+    from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
-  /* ════════════════════════════════════════════════
-     WIN / DEATH OVERLAY
-  ════════════════════════════════════════════════ */
   #state-overlay {
     display: none;
     position: fixed; inset: 0;
     z-index: 25;
-    background: transparent;
+    background: rgba(2,4,8,0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 20px;
+    gap: 24px;
     font-family: var(--font);
-    /* Subtle radial darkening at edges so text pops against the 3D scene */
-    box-shadow: inset 0 0 180px rgba(0,0,0,0.55);
+    box-shadow: inset 0 0 200px rgba(0,0,0,0.6);
   }
   #state-overlay.active { display: flex; }
 
-  /* Card backdrop so stats/title remain readable over any scene content */
   #state-overlay > * {
-    filter: drop-shadow(0 2px 12px rgba(0,0,0,0.9));
+    filter: drop-shadow(0 4px 16px rgba(0,0,0,0.9));
   }
 
   #state-title {
-    font-size: 52px;
+    font-size: 56px;
     font-weight: 700;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.24em;
     text-transform: uppercase;
     color: var(--accent);
-    text-shadow: 0 0 28px currentColor, 0 0 60px rgba(0,0,0,1);
-    margin-bottom: 4px;
-    /* Readable against any background */
-    background: rgba(0,0,0,0.45);
-    padding: 8px 32px;
-    border-radius: 2px;
+    text-shadow: 0 0 32px currentColor, 0 0 64px rgba(0,0,0,1);
+    margin-bottom: 6px;
+    background: rgba(0,0,0,0.5);
+    padding: 10px 36px;
+    border-radius: 3px;
+    border: 1px solid var(--line);
+    backdrop-filter: blur(8px);
   }
-  #state-title.dead  { color: #e84a20; text-shadow: 0 0 28px rgba(232,74,32,0.8); }
+  #state-title.dead  { color: #fb7185; text-shadow: 0 0 32px rgba(251,113,133,0.8); }
   #state-title.won   { color: var(--accent); }
 
   #state-sub {
     font-size: 12px;
-    letter-spacing: 0.26em;
+    letter-spacing: 0.28em;
     color: var(--text-dim);
     text-transform: uppercase;
+    opacity: 0.8;
   }
 
   #stats-panel {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    min-width: 340px;
-    background: rgba(5,7,10,0.88);
+    gap: 8px;
+    min-width: 360px;
+    background: rgba(5,8,12,0.9);
     border: 1px solid var(--line);
-    padding: 20px 28px;
-    border-radius: 2px;
-    margin: 4px 0;
+    padding: 22px 32px;
+    border-radius: 3px;
+    margin: 6px 0;
+    backdrop-filter: blur(10px);
+    box-shadow: var(--shadow-lg);
   }
   .stat-row {
     display: flex;
     justify-content: space-between;
     font-size: 12px;
-    letter-spacing: 0.13em;
+    letter-spacing: 0.14em;
     color: var(--text);
     text-transform: uppercase;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
   }
-  .stat-row span:last-child { color: var(--accent); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row span:last-child { color: var(--accent); font-weight: 600; }
 
   #state-actions {
     display: flex;
-    gap: 12px;
+    gap: 14px;
   }
   #state-actions.hidden { display: none; }
 
   .state-action-btn {
-    padding: 11px 32px;
+    padding: 12px 36px;
     font-size: 12px;
     font-family: var(--font);
-    letter-spacing: 0.2em;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
-    background: rgba(8,12,18,0.85);
+    background: rgba(10,16,24,0.88);
     border: 1px solid var(--line-strong);
     color: var(--text);
     cursor: pointer;
-    border-radius: 2px;
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    border-radius: 3px;
+    transition: all 0.2s cubic-bezier(0.22,1,0.36,1);
+    backdrop-filter: blur(4px);
   }
   .state-action-btn:hover {
     background: var(--accent);
     color: #000;
     border-color: var(--accent);
+    box-shadow: var(--glow-accent);
+    transform: translateY(-1px);
   }
   .state-action-btn.danger:hover {
-    background: #e84a20;
-    border-color: #e84a20;
+    background: #fb7185;
+    border-color: #fb7185;
     color: #fff;
+    box-shadow: 0 0 24px rgba(251,113,133,0.4);
   }
 
-  /* ════════════════════════════════════════════════
-     MAIN MENU
-  ════════════════════════════════════════════════ */
   #overlay {
     position: fixed; inset: 0;
     display: flex;
     z-index: 20;
-    background:
-      radial-gradient(ellipse 80% 60% at 68% 50%, rgba(34,211,238,0.07) 0%, transparent 55%),
-      radial-gradient(ellipse 30% 40% at 12% 80%, rgba(14,116,144,0.06) 0%, transparent 50%),
-      linear-gradient(160deg, #0a0f16 0%, #070b10 45%, #07090a 100%);
+    background: radial-gradient(ellipse 80% 60% at 30% 20%, #0c1420 0%, #070a0f 50%, #04060a 100%);
     overflow: hidden;
     opacity: 1;
     visibility: visible;
     pointer-events: auto;
-    transition: opacity 0.36s ease, visibility 0.36s ease;
+    transition: opacity 0.4s cubic-bezier(0.22,1,0.36,1), visibility 0.4s, transform 0.4s cubic-bezier(0.22,1,0.36,1);
     isolation: isolate;
   }
   #overlay.hidden {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
+    transform: translateY(-12px);
   }
 
-  .ov-bg-grid {
-    position: absolute; inset: 0; pointer-events: none;
-    background-image:
-      linear-gradient(var(--line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--line) 1px, transparent 1px);
-    background-size: 56px 56px;
-    opacity: 0.22;
-  }
   .ov-bg-glow {
     position: absolute; inset: 0; pointer-events: none;
+    opacity: 0.35;
     background:
-      radial-gradient(ellipse 44% 58% at 65% 50%, rgba(34,211,238,0.10) 0%, transparent 60%),
-      radial-gradient(ellipse 20% 28% at 12% 80%, rgba(14,116,144,0.07) 0%, transparent 55%),
-      radial-gradient(ellipse 22% 20% at 85% 18%, rgba(34,211,238,0.05) 0%, transparent 50%);
+      radial-gradient(ellipse 44% 58% at 65% 50%, rgba(45,212,191,0.10) 0%, transparent 60%),
+      radial-gradient(ellipse 20% 28% at 12% 80%, rgba(14,116,144,0.08) 0%, transparent 55%),
+      radial-gradient(ellipse 22% 20% at 85% 18%, rgba(45,212,191,0.06) 0%, transparent 50%);
   }
 
   .ov-left {
@@ -826,44 +768,42 @@
     z-index: 2;
     display: flex;
     flex-direction: column;
-    /* Scroll the nav column when it doesn't fit (e.g. short landscape phones)
-       so every menu item stays reachable. */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 44px 36px 32px;
-    background: linear-gradient(180deg, rgba(10,14,20,0.96), rgba(6,9,13,0.98));
+    padding: 48px 38px 36px;
+    background: linear-gradient(180deg, rgba(10,16,24,0.96), rgba(6,10,14,0.98));
     border-right: 1px solid var(--line-strong);
-    box-shadow: 12px 0 48px rgba(0,0,0,0.45);
-    transition: transform 0.36s ease, opacity 0.36s ease;
+    box-shadow: 16px 0 56px rgba(0,0,0,0.5);
+    transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.4s;
   }
-
-  #overlay.hidden .ov-left { transform: translateX(-18px); opacity: 0; }
-  #overlay.hidden .ov-right { transform: translateX(18px); opacity: 0; }
+  #overlay.hidden .ov-left {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
 
   .ov-left::before {
     content: '';
     position: absolute;
     left: 0; top: 0; bottom: 0;
-    width: 3px;
-    background: linear-gradient(180deg, var(--accent-hot) 0%, var(--accent) 55%, transparent 100%);
-    box-shadow: 0 0 10px rgba(34,211,238,0.18);
+    width: 1px;
+    background: var(--line-strong);
   }
 
-  .ov-logo { margin-bottom: 44px; }
+  .ov-logo { margin-bottom: 48px; }
 
   .ov-eyebrow {
     font-size: 9px;
-    letter-spacing: 0.5em;
+    letter-spacing: 0.52em;
     color: var(--accent-dim);
     text-transform: uppercase;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
   }
   .ov-eyebrow::before {
     content: '';
-    width: 18px; height: 1px;
+    width: 20px; height: 1px;
     background: var(--accent-dim);
     flex-shrink: 0;
   }
@@ -871,7 +811,7 @@
   .ov-title {
     font-family: 'Orbitron', sans-serif;
     font-weight: 900;
-    font-size: 42px;
+    font-size: 44px;
     text-transform: uppercase;
     line-height: 0.9;
   }
@@ -879,29 +819,30 @@
     display: block;
     color: #ffffff;
     letter-spacing: 0.06em;
-    text-shadow: 0 2px 12px rgba(0,0,0,0.65);
+    text-shadow: 0 2px 16px rgba(0,0,0,0.7);
   }
   .ov-title .t-breach {
     display: block;
     color: var(--accent-hot);
-    letter-spacing: 0.1em;
-    margin-top: 2px;
-    text-shadow: 0 0 32px rgba(34,211,238,0.65), 0 2px 8px rgba(0,0,0,0.55);
+    letter-spacing: 0.12em;
+    margin-top: 3px;
+    text-shadow: 0 0 36px rgba(45,212,191,0.6), 0 2px 10px rgba(0,0,0,0.6);
   }
 
   .ov-tagline {
-    margin-top: 14px;
+    margin-top: 16px;
     font-size: 9px;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.24em;
     color: var(--accent-dim);
     text-transform: uppercase;
+    opacity: 0.85;
   }
 
   .ov-nav {
     list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     flex: 1;
   }
 
@@ -909,14 +850,14 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 13px 14px;
-    border: 1px solid rgba(34,211,238,0.08);
-    border-radius: 2px;
+    padding: 14px 16px;
+    border: 1px solid rgba(45,212,191,0.08);
+    border-radius: 3px;
     cursor: pointer;
     position: relative;
     overflow: hidden;
-    background: rgba(10,14,20,0.60);
-    transition: background 0.15s, border-color 0.15s;
+    background: rgba(10,16,24,0.65);
+    transition: all 0.2s cubic-bezier(0.22,1,0.36,1);
   }
 
   .ov-nav-item::before {
@@ -926,21 +867,22 @@
     width: 2px;
     background: var(--accent);
     transform: scaleY(0);
-    transition: transform 0.15s ease;
+    transition: transform 0.2s cubic-bezier(0.22,1,0.36,1);
   }
 
   .ov-nav-item:hover,
   .ov-nav-item.active-nav {
-    background: rgba(15,21,30,0.90);
+    background: rgba(16,24,36,0.92);
     border-color: var(--line-strong);
+    transform: translateX(3px);
   }
   .ov-nav-item:hover::before,
   .ov-nav-item.active-nav::before { transform: scaleY(1); }
 
   .ov-nav-item.nav-primary:hover,
   .ov-nav-item.nav-primary.active-nav {
-    background: rgba(20,28,40,0.88);
-    border-color: rgba(14,116,144,0.38);
+    background: rgba(22,32,48,0.9);
+    border-color: rgba(14,116,144,0.4);
   }
   .ov-nav-item.nav-primary::before { background: var(--accent-hot); }
 
@@ -950,7 +892,7 @@
     font-weight: 600;
     color: var(--text-lo);
     min-width: 22px;
-    transition: color 0.15s;
+    transition: color 0.2s;
   }
   .ov-nav-item:hover .ov-nav-num,
   .ov-nav-item.active-nav .ov-nav-num { color: var(--accent); }
@@ -960,7 +902,7 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: rgba(240,225,195,0.78);
-    transition: color 0.15s;
+    transition: color 0.2s;
   }
   .ov-nav-item:hover .ov-nav-text,
   .ov-nav-item.active-nav .ov-nav-text { color: #ffffff; }
@@ -969,60 +911,24 @@
     margin-left: auto;
     font-size: 11px;
     color: transparent;
-    transition: all 0.15s;
+    transition: all 0.2s;
   }
-  .ov-nav-item:hover .ov-nav-arrow { color: var(--accent-dim); transform: translateX(3px); }
+  .ov-nav-item:hover .ov-nav-arrow { color: var(--accent-dim); transform: translateX(4px); }
 
   .ov-footer {
-    margin-top: 20px;
-    padding-top: 16px;
+    margin-top: 24px;
+    padding-top: 18px;
     border-top: 1px solid var(--line);
     display: flex;
     justify-content: space-between;
   }
   .ov-footer span {
     font-size: 8px;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.2em;
     color: var(--text-lo);
     text-transform: uppercase;
   }
 
-  .ov-status-strip {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-    margin: -22px 0 22px;
-  }
-  .ov-status-cell {
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 8px 8px 7px;
-    min-width: 0;
-  }
-  .ov-status-cell span,
-  .ov-status-cell strong {
-    display: block;
-    text-transform: uppercase;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .ov-status-cell span {
-    font-size: 8px;
-    letter-spacing: 0.18em;
-    color: var(--text-lo);
-    margin-bottom: 3px;
-  }
-  .ov-status-cell strong {
-    font-size: 10px;
-    letter-spacing: 0.16em;
-    color: var(--text-hi);
-  }
-
-  /* ════════════════════════════════════════════════
-     RIGHT PANEL
-  ════════════════════════════════════════════════ */
   .ov-right {
     flex: 1 1 0;
     min-width: 0;
@@ -1031,37 +937,25 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.4s;
   }
-
-  .ov-bracket {
-    position: absolute;
-    z-index: 3;
-    pointer-events: none;
+  #overlay.hidden .ov-right {
+    transform: translateX(24px);
+    opacity: 0;
   }
-  .ov-bracket.tl { top: 18px; left: 18px; }
-  .ov-bracket.br { bottom: 18px; right: 18px; transform: rotate(180deg); }
-  .ov-bracket::before,
-  .ov-bracket::after {
-    content: '';
-    position: absolute;
-    background: linear-gradient(180deg, var(--accent), rgba(34,211,238,0.4));
-    box-shadow: 0 0 8px rgba(34,211,238,0.2);
-  }
-  .ov-bracket::before { width: 2px; height: 22px; top: 0; left: 0; }
-  .ov-bracket::after  { width: 22px; height: 2px; top: 0; left: 0; }
 
   .ov-panel {
     position: absolute; inset: 0;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 36px 40px 48px;
+    padding: 40px 44px 52px;
     opacity: 0;
-    transform: translateX(14px);
-    transition: opacity 0.22s ease, transform 0.22s ease;
+    transform: translateX(18px);
+    transition: opacity 0.28s cubic-bezier(0.22,1,0.36,1), transform 0.28s cubic-bezier(0.22,1,0.36,1);
     pointer-events: none;
     scrollbar-gutter: stable;
-    padding-bottom: max(48px, env(safe-area-inset-bottom));
-    background: linear-gradient(180deg, rgba(10,14,20,0.92), rgba(6,9,13,0.94));
+    padding-bottom: max(52px, env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, rgba(10,16,24,0.94), rgba(6,10,14,0.96));
   }
   .ov-panel.active {
     opacity: 1;
@@ -1070,15 +964,21 @@
     overscroll-behavior: contain;
   }
 
+  .ov-panel::-webkit-scrollbar { width: 4px; }
+  .ov-panel::-webkit-scrollbar-track { background: transparent; }
+  .ov-panel::-webkit-scrollbar-thumb { background: var(--accent-dim); border-radius: 2px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--accent-dim) transparent; }
+
   .ov-panel-title {
     font-family: 'Orbitron', sans-serif;
-    font-size: clamp(34px, 5vw, 52px);
+    font-size: clamp(36px, 5vw, 56px);
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-hi);
     line-height: 0.9;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.4);
   }
 
   .ov-panel-copy {
@@ -1086,19 +986,20 @@
     letter-spacing: 0.12em;
     color: var(--text-mid);
     text-transform: uppercase;
-    margin-bottom: 28px;
-    line-height: 1.6;
+    margin-bottom: 32px;
+    line-height: 1.7;
+    max-width: 720px;
   }
 
   .ov-section-title {
     font-size: 9px;
-    letter-spacing: 0.4em;
+    letter-spacing: 0.42em;
     text-transform: uppercase;
     color: var(--accent-dim);
-    margin: 28px 0 12px;
+    margin: 32px 0 14px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
   }
   .ov-section-title::after {
     content: '';
@@ -1110,13 +1011,14 @@
   .ov-tag {
     display: inline-block;
     font-size: 8px;
-    letter-spacing: 0.3em;
+    letter-spacing: 0.32em;
     text-transform: uppercase;
     color: var(--accent);
     border: 1px solid var(--line-strong);
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 2px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    background: rgba(45,212,191,0.04);
   }
 
   .ov-brief-header {
@@ -1126,72 +1028,94 @@
     letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--text-mid);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
   }
 
   .ov-brief-line {
     font-size: 11px;
     letter-spacing: 0.06em;
     color: var(--text-mid);
-    line-height: 1.65;
-    padding-left: 12px;
+    line-height: 1.7;
+    padding-left: 14px;
     border-left: 2px solid var(--line);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
 
-  /* Wave cards */
   .ov-wave-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 10px;
-    margin-bottom: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
   }
 
   .ov-wave-card {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 14px 14px 12px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 16px 16px 14px;
     cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    transition: all 0.2s cubic-bezier(0.22,1,0.36,1);
+    position: relative;
+    overflow: hidden;
   }
-  .ov-wave-card:hover { border-color: var(--line-strong); background: rgba(14,20,29,0.88); }
-  .ov-wave-card.selected { border-color: var(--accent); background: rgba(15,21,30,0.92); }
+  .ov-wave-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .ov-wave-card:hover { 
+    border-color: var(--line-strong); 
+    background: rgba(16,24,36,0.9);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+  }
+  .ov-wave-card:hover::before { opacity: 1; }
+  .ov-wave-card.selected { 
+    border-color: var(--accent); 
+    background: rgba(16,26,38,0.94);
+    box-shadow: var(--glow-accent);
+  }
 
   .ov-wc-num {
     font-family: 'Orbitron', sans-serif;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 900;
     color: var(--accent);
     line-height: 1;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
+    text-shadow: 0 0 12px rgba(45,212,191,0.3);
   }
   .ov-wc-label {
     font-size: 9px;
-    letter-spacing: 0.28em;
+    letter-spacing: 0.3em;
     text-transform: uppercase;
     color: var(--text-lo);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
   }
   .ov-wc-desc {
     font-size: 10px;
     letter-spacing: 0.06em;
     color: var(--text-mid);
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
-  /* Settings */
-  .ov-settings { display: flex; flex-direction: column; gap: 8px; }
+  .ov-settings { display: flex; flex-direction: column; gap: 10px; }
 
   .ov-setting {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 10px 14px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 12px 16px;
+    transition: border-color 0.2s;
   }
+  .ov-setting:hover { border-color: var(--line-strong); }
 
   .ov-set-label {
     font-size: 10px;
@@ -1208,29 +1132,30 @@
     color: var(--accent);
   }
 
-  /* Controls */
   .ov-ctrl-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 8px;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 10px;
   }
 
   .ov-ctrl {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 9px 12px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 10px 14px;
+    transition: border-color 0.2s, transform 0.2s;
   }
+  .ov-ctrl:hover { border-color: var(--line-strong); transform: translateX(2px); }
 
   .ov-ctrl-header {
     font-size: 9px;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--text-lo);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
 
   .ov-ctrl-desc {
@@ -1247,100 +1172,118 @@
     font-weight: 700;
     color: var(--accent);
     border: 1px solid var(--line-strong);
-    padding: 3px 7px;
-    border-radius: 2px;
+    padding: 4px 8px;
+    border-radius: 3px;
     background: var(--surface);
     white-space: nowrap;
     letter-spacing: 0.1em;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
   }
 
-  /* Room scan */
   .ov-room-scan {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 20px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 24px;
     text-align: center;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
   }
-  /* Match the canvas to the map's portrait aspect (34:41) and centre it so the
-     room scan fills its frame instead of letterboxing into a wide dead band. */
+  .ov-room-scan::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(45,212,191,0.03), transparent);
+    pointer-events: none;
+  }
   #ov-scan-canvas {
     display: block;
     width: 100%;
-    max-width: 230px;
+    max-width: 240px;
     aspect-ratio: 34 / 41;
     margin: 0 auto;
   }
 
-  /* Flow/op grid */
   .flow-grid,
   .op-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 10px;
-    margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
   }
 
   .flow-card {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 14px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    transition: all 0.2s;
   }
+  .flow-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
   .flow-card span {
     font-size: 10px;
     color: var(--text-mid);
     letter-spacing: 0.06em;
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
   .op-pill {
     border: 1px solid var(--line-strong);
-    border-radius: 2px;
+    border-radius: 3px;
     background: var(--surface);
-    padding: 8px 12px;
+    padding: 10px 14px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    transition: all 0.2s;
   }
+  .op-pill:hover { border-color: var(--accent-dim); }
 
-  /* Loadout */
   .loadout-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
   }
 
   .loadout-card {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
+    border-radius: 4px;
+    background: rgba(10,16,24,0.85);
     overflow: hidden;
     cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    transition: all 0.25s cubic-bezier(0.22,1,0.36,1);
+    position: relative;
   }
-  .loadout-card:hover { border-color: var(--line-strong); }
-  .loadout-card.selected { border-color: var(--accent); }
-  .loadout-card { position: relative; }
+  .loadout-card:hover { 
+    border-color: var(--line-strong); 
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md), var(--glow-accent);
+  }
+  .loadout-card.selected { 
+    border-color: var(--accent); 
+    box-shadow: var(--glow-accent);
+  }
+  .loadout-card.selected::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+
   .loadout-tag {
-    position: absolute; top: 8px; right: 8px; z-index: 2;
+    position: absolute; top: 10px; right: 10px; z-index: 2;
     font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
-    padding: 2px 7px; border-radius: 999px; pointer-events: none;
+    padding: 3px 8px; border-radius: 999px; pointer-events: none;
+    backdrop-filter: blur(4px);
   }
-  .loadout-tag.starter { color: #6effb0; border: 1px solid rgba(110,255,176,0.5); background: rgba(6,20,14,0.85); }
-  .loadout-tag.box { color: #ffd166; border: 1px solid rgba(255,209,102,0.45); background: rgba(24,16,4,0.85); }
-  .loadout-emblem {
-    display: flex; align-items: center; justify-content: center;
-    width: 100%; aspect-ratio: 16 / 9;
-    font-size: 26px; font-weight: 800; letter-spacing: 0.3em;
-    color: rgba(124,243,255,0.55);
-    text-shadow: 0 0 18px rgba(34,211,238,0.35);
-  }
+  .loadout-tag.starter { color: #6effb0; border: 1px solid rgba(110,255,176,0.5); background: rgba(6,20,14,0.9); }
+  .loadout-tag.box { color: #ffd166; border: 1px solid rgba(255,209,102,0.5); background: rgba(24,16,4,0.9); }
 
   .loadout-preview {
     aspect-ratio: 16 / 7;
@@ -1348,43 +1291,29 @@
     position: relative;
     overflow: hidden;
   }
-  .loadout-preview::before {
-    content: '';
-    position: absolute; inset: 0;
-    background:
-      radial-gradient(circle at 60% 40%, rgba(34,211,238,0.1), transparent 40%),
-      var(--surface);
-  }
-  .loadout-preview::after {
-    content: '';
-    position: absolute; inset: 0;
-    background:
-      linear-gradient(90deg, transparent, rgba(34,211,238,0.07), transparent),
-      repeating-linear-gradient(180deg, rgba(255,255,255,0.02) 0 1px, transparent 1px 6px);
-  }
 
   .loadout-name {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.04em;
     color: var(--text-hi, #f4e9d6);
-    padding: 10px 12px 0;
+    padding: 12px 14px 0;
   }
 
   .loadout-role {
     font-size: 8px;
-    letter-spacing: 0.3em;
+    letter-spacing: 0.32em;
     text-transform: uppercase;
     color: var(--text-lo);
-    padding: 4px 12px 8px;
+    padding: 4px 14px 10px;
   }
 
   .loadout-stat {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 10px;
-    padding: 5px 12px;
+    gap: 12px;
+    padding: 6px 14px;
     font-size: 10px;
     border-top: 1px solid rgba(255,255,255,0.05);
   }
@@ -1397,92 +1326,95 @@
     color: var(--accent);
     font-variant-numeric: tabular-nums;
     text-align: right;
+    font-weight: 600;
   }
 
-  /* Kit / Intel */
   .kit-grid,
   .intel-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 8px;
-    margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
   }
 
   .kit-item,
   .intel-record {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 12px 14px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 14px 16px;
+    transition: border-color 0.2s;
   }
+  .kit-item:hover,
+  .intel-record:hover { border-color: var(--line-strong); }
 
   .kit-item strong,
   .intel-record strong {
     display: block;
     font-size: 10px;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--accent);
-    margin-bottom: 4px;
+    margin-bottom: 5px;
   }
 
   .kit-item span,
   .intel-record span {
     font-size: 10px;
     color: var(--text-mid);
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
-  /* Mind map */
   .mind-map {
     display: grid;
-    grid-template-columns: minmax(200px, 0.9fr) minmax(260px, 1.1fr) minmax(200px, 0.9fr);
-    gap: 16px;
-    margin-bottom: 16px;
+    grid-template-columns: minmax(220px, 0.9fr) minmax(280px, 1.1fr) minmax(220px, 0.9fr);
+    gap: 18px;
+    margin-bottom: 20px;
     position: relative;
   }
 
   .mind-core,
   .mind-branch {
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 14px;
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 16px;
   }
 
   .mind-core {
     border-color: var(--line-strong);
-    background: rgba(14,20,29,0.88);
+    background: rgba(14,22,32,0.9);
     grid-column: 2;
     grid-row: 1;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    box-shadow: var(--shadow-sm);
   }
 
-  /* Branches stack their nodes vertically with clear separation. */
   .mind-branch {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
   .mind-branch.left  { grid-column: 1; grid-row: 1; }
   .mind-branch.right { grid-column: 3; grid-row: 1; }
 
-  /* Each intel node: its own bordered card so titles + copy read as records. */
   .mind-node {
-    border-left: 2px solid var(--accent-dim, rgba(34,211,238,0.5));
-    background: rgba(10,15,22,0.55);
-    border-radius: 2px;
-    padding: 9px 11px;
+    border-left: 2px solid var(--accent-dim, rgba(45,212,191,0.5));
+    background: rgba(10,16,24,0.6);
+    border-radius: 3px;
+    padding: 10px 13px;
+    transition: all 0.2s;
   }
+  .mind-node:hover { background: rgba(16,24,36,0.7); }
 
   .mind-core-tag {
     font-size: 8px;
-    letter-spacing: 0.32em;
+    letter-spacing: 0.36em;
     text-transform: uppercase;
-    color: var(--accent-hot, #ffb347);
-    margin-bottom: 4px;
+    color: var(--accent-hot, #5eead4);
+    margin-bottom: 5px;
   }
 
   .mind-node strong,
@@ -1490,10 +1422,10 @@
   .mind-foot strong {
     display: block;
     font-size: 10px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--accent);
-    margin-bottom: 4px;
+    margin-bottom: 5px;
   }
 
   .mind-core span,
@@ -1501,698 +1433,19 @@
   .mind-foot span {
     font-size: 10px;
     color: var(--text-mid);
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
   .mind-foot {
     grid-column: 1 / -1;
     border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 12px 14px;
-    margin-top: 8px;
-  }
-
-  /* Quit box */
-  .quit-box {
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 16px;
-    margin-bottom: 14px;
-  }
-  .quit-box strong {
-    display: block;
-    font-size: 11px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--text-hi);
-    margin-bottom: 6px;
-  }
-  .quit-box span {
-    font-size: 10px;
-    color: var(--text-mid);
-    line-height: 1.55;
-  }
-
-  /* Action buttons */
-  .ov-action-row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 20px;
-  }
-
-  .ov-action-btn {
-    border: 1px solid var(--line-strong);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    color: var(--text-hi);
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    padding: 12px 22px;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, transform 0.15s;
-  }
-  .ov-action-btn:hover {
-    background: rgba(15,21,30,0.90);
-    border-color: var(--accent);
-    transform: translateY(-1px);
-  }
-  .ov-action-btn.primary {
-    border-color: var(--accent);
-    background: rgba(20,28,40,0.90);
-    color: var(--accent-hot);
-  }
-  .ov-action-btn.primary:hover {
-    background: rgba(24,34,48,0.95);
-    box-shadow: 0 0 18px rgba(34,211,238,0.28);
-  }
-  .ov-action-btn.danger { border-color: var(--danger-dim); }
-  .ov-action-btn.danger:hover { border-color: var(--danger); }
-
-  .ov-selected-note {
-    font-size: 10px;
-    letter-spacing: 0.16em;
-    color: var(--accent-dim);
-    text-transform: uppercase;
-    margin-top: 10px;
-  }
-
-  /* ════════════════════════════════════════════════
-     MULTIPLAYER PANEL
-  ════════════════════════════════════════════════ */
-  #mp-panel {
-    position: fixed; inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 22;
-    background: rgba(0,0,0,0.72);
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-    padding: 18px;
-  }
-  #mp-panel.active { display: flex; }
-
-  #mp-panel .mp-card {
-    width: min(460px, calc(100vw - 36px));
-    max-height: calc(100vh - 36px);
-    overflow-y: auto;
-    background: linear-gradient(180deg, #0e141d 0%, #0a0f16 100%);
-    border: 1px solid var(--line-strong);
-    border-top: 2px solid var(--accent);
     border-radius: 3px;
-    box-shadow: 0 20px 72px rgba(0,0,0,0.85), 0 0 0 1px rgba(34,211,238,0.10), inset 0 1px 0 rgba(255,255,255,0.04);
-    padding: 28px 28px 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  #mp-panel .mp-title {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 18px;
-    font-weight: 900;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-hi);
-    margin-bottom: 2px;
-  }
-
-  #mp-panel .mp-eyebrow {
-    font-size: 9px;
-    letter-spacing: 0.4em;
-    text-transform: uppercase;
-    color: var(--accent-dim);
-    margin-bottom: 8px;
-  }
-
-  .mp-row {
-    display: flex;
-    gap: 8px;
-    align-items: stretch;
-  }
-
-  .mp-btn {
-    font-size: 11px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    border: 1px solid var(--line-strong);
-    background: rgba(10,15,22,0.82);
-    color: var(--text-hi);
-    padding: 10px 18px;
-    border-radius: 2px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: border-color 0.15s, background 0.15s;
-    min-height: 40px;
-  }
-  .mp-btn:hover { border-color: var(--accent); background: rgba(15,21,30,0.9); }
-  .mp-btn.primary {
-    border-color: var(--accent);
-    background: rgba(20,28,40,0.88);
-    color: var(--accent-hot);
-  }
-  .mp-btn.primary:hover {
-    background: rgba(24,34,48,0.95);
-    box-shadow: 0 0 14px rgba(34,211,238,0.2);
-  }
-  .mp-btn.danger { border-color: var(--danger-dim); color: #ffd6d6; }
-  .mp-btn.danger:hover { border-color: var(--danger); }
-
-  #mp-code-input,
-  #mp-name-input {
-    flex: 1;
-    background: rgba(10,15,22,0.82);
-    border: 1px solid var(--line-strong);
-    border-radius: 2px;
-    color: var(--text-hi);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 13px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    padding: 10px 14px;
-    outline: none;
-    min-height: 40px;
-  }
-  #mp-code-input:focus,
-  #mp-name-input:focus { border-color: var(--accent); }
-
-  #mp-status {
-    font-size: 11px;
-    letter-spacing: 0.12em;
-    color: var(--text-mid);
-    text-transform: uppercase;
-    min-height: 18px;
-  }
-  #mp-status.ok  { color: var(--green); }
-  #mp-status.err { color: var(--danger); }
-
-  #mp-code-wrap {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  #mp-code-display {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 28px;
-    font-weight: 900;
-    letter-spacing: 0.18em;
-    color: var(--accent);
-    text-shadow: 0 0 20px rgba(34,211,238,0.4);
-  }
-
-  .mp-roster {
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    background: rgba(10,15,22,0.82);
-    padding: 10px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 40px;
-  }
-
-  .mp-roster-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    color: var(--text-mid);
-    text-transform: uppercase;
-  }
-  .mp-roster-row.self { color: var(--accent); }
-  .mp-roster-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--accent-dim);
-    flex-shrink: 0;
-  }
-  .mp-roster-row.self .mp-roster-dot { background: var(--accent); }
-
-  .mp-foot {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .mp-hint {
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    color: var(--text-lo);
-    text-transform: uppercase;
-    line-height: 1.6;
-  }
-
-  #mp-room-badge {
-    position: fixed;
-    top: 14px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 12;
-    font-size: 10px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--accent);
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-radius: 2px;
-    padding: 5px 14px;
-    pointer-events: none;
-    white-space: nowrap;
-  }
-  #mp-room-badge.hidden { display: none; }
-
-  /* ════════════════════════════════════════════════
-     PVP HUD + CLICK-TO-PLAY
-  ════════════════════════════════════════════════ */
-  #pvp-hud {
-    position: fixed;
-    top: 60px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 11;
-    display: none;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    pointer-events: none;
-  }
-  #pvp-hud.active { display: flex; }
-
-  #pvp-title {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.4em;
-    text-transform: uppercase;
-    color: var(--accent-dim);
-  }
-
-  .pvp-row {
-    display: flex;
-    gap: 18px;
-    align-items: center;
-  }
-
-  .pvp-frag-count {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 26px;
-    font-weight: 900;
-    color: var(--text-hi);
-    letter-spacing: 0.08em;
-  }
-  .pvp-frag-count.self { color: var(--accent); }
-
-  #pvp-respawn {
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    color: var(--danger);
-    text-transform: uppercase;
-    text-align: center;
-  }
-
-  #click-to-play {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    z-index: 18;
-    background: rgba(0,0,0,0.58);
-    -webkit-backdrop-filter: blur(2px);
-    backdrop-filter: blur(2px);
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.25s;
-  }
-  #click-to-play.visible { opacity: 1; pointer-events: auto; }
-
-  #click-to-play-text {
-    font-family: 'Orbitron', sans-serif;
-    font-size: clamp(18px, 3vw, 28px);
-    font-weight: 900;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--accent-hot);
-    animation: ctpPulse 2s ease-in-out infinite;
-  }
-
-  #click-to-play-sub {
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--text-lo);
+    background: rgba(10,16,24,0.85);
+    padding: 14px 16px;
     margin-top: 10px;
   }
 
-  @keyframes ctpPulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.52; }
-  }
-
-  /* ════════════════════════════════════════════════
-     KEYFRAME ANIMATIONS
-  ════════════════════════════════════════════════ */
-  @keyframes ruggedRise {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  @keyframes loadingToMenu {
-    0%   { opacity: 1; }
-    100% { opacity: 0; pointer-events: none; }
-  }
-
-  @keyframes contentLiftOut {
-    from { opacity: 1; transform: translateY(0); }
-    to   { opacity: 0; transform: translateY(-14px); }
-  }
-
-  @keyframes bgShearOut {
-    from { opacity: 1; clip-path: inset(0 0 0 0); }
-    to   { opacity: 0; clip-path: inset(0 0 100% 0); }
-  }
-
-  @keyframes menuReveal {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  @keyframes menuDismiss {
-    from { opacity: 1; transform: translateY(0); }
-    to   { opacity: 0; transform: translateY(-10px); }
-  }
-
-  @keyframes sidePanelOut {
-    from { opacity: 1; transform: translateX(0); }
-    to   { opacity: 0; transform: translateX(-18px); }
-  }
-
-  @keyframes mainPanelOut {
-    from { opacity: 1; transform: translateX(0); }
-    to   { opacity: 0; transform: translateX(18px); }
-  }
-
-  @keyframes panelSlideIn {
-    from { opacity: 0; transform: translateX(14px); }
-    to   { opacity: 1; transform: translateX(0); }
-  }
-
-  /* ════════════════════════════════════════════════
-     PRODUCTION POLISH
-  ════════════════════════════════════════════════ */
-  #loading-screen[data-ready="true"] {
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  #mp-panel {
-    align-items: center;
-    justify-content: center;
-    padding: 18px;
-  }
-  #mp-panel .mp-card {
-    width: min(460px, calc(100vw - 36px));
-    max-height: calc(100vh - 36px);
-    overflow: auto;
-  }
-  .mp-row {
-    align-items: stretch;
-  }
-  #mp-panel input,
-  #mp-panel .mp-btn {
-    min-height: 40px;
-  }
-  @media (max-width: 1100px) {
-    .flow-grid,
-    .op-strip {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .mind-map {
-      display: grid;
-      grid-template-columns: 1fr;
-    }
-    .mind-map::before,
-    .mind-node::after,
-    .mind-core::before {
-      display: none;
-    }
-    .mind-core,
-    .mind-branch.left,
-    .mind-branch.right,
-    .mind-foot {
-      grid-column: 1;
-      grid-row: auto;
-      padding-left: 0;
-      padding-right: 0;
-    }
-  }
-  @media (max-width: 640px) {
-    #overlay {
-      height: 100dvh;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      flex-direction: column;
-    }
-    .ov-left {
-      width: 100%;
-      min-width: 0;
-      overflow-y: visible;
-      padding: 24px 18px 18px;
-    }
-    .ov-logo {
-      margin-bottom: 18px;
-    }
-    .ov-status-strip {
-      margin: 0 0 14px;
-    }
-    .ov-right {
-      min-height: 0;
-      overflow: visible;
-    }
-    .ov-panel {
-      position: relative;
-      min-height: auto;
-      padding: 22px 18px 34px;
-      overflow: visible;
-    }
-    .ov-wave-cards,
-    .loadout-grid,
-    .kit-grid,
-    .intel-grid,
-    .flow-grid,
-    .op-strip {
-      grid-template-columns: 1fr;
-    }
-    .ov-ctrl-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .ov-panel-title {
-      font-size: 34px;
-      overflow-wrap: anywhere;
-    }
-    .loadout-preview {
-      aspect-ratio: 16 / 8;
-    }
-    #mp-panel {
-      padding: 12px;
-    }
-    #mp-panel .mp-card {
-      width: calc(100vw - 24px);
-      max-height: calc(100dvh - 24px);
-    }
-    .mp-row,
-    .mp-foot {
-      flex-wrap: wrap;
-    }
-    .mp-row > *,
-    .mp-foot > * {
-      flex: 1 1 100%;
-    }
-  }
-
-  /* Short screens (landscape phones): tighten the menu so the whole nav fits /
-     scrolls cleanly, and let the overlay itself scroll as a fallback. */
-  @media (max-height: 560px) {
-    #overlay { height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-    .ov-left { padding: 16px 20px; }
-    .ov-logo { margin-bottom: 12px; }
-    .ov-status-strip { margin: 0 0 8px; }
-    .ov-nav-item { padding: 8px 12px; }
-    .ov-panel { padding: 18px 20px 28px; }
-  }
-
-  /* ════════════════ TOUCH CONTROLS ════════════════ */
-  /* Hidden by default; shown only when body.touch-device is set by the JS. */
-  #touch-controls { display: none; }
-  body.touch-device.gameplay-view #touch-controls {
-    display: block;
-    position: fixed; inset: 0;
-    z-index: 60;
-    pointer-events: none;            /* children opt back in */
-    touch-action: none;
-    -webkit-user-select: none; user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  /* Look layer: right ~60% of screen, drag to aim. */
-  #tc-look {
-    position: absolute; top: 0; right: 0; bottom: 0; left: 38%;
-    pointer-events: auto;
-  }
-  /* Move layer: left 42% of screen, dynamic joystick. */
-  #tc-move {
-    position: absolute; top: 0; left: 0; bottom: 0; width: 42%;
-    pointer-events: auto;
-  }
-  #tc-move-base, #tc-move-knob {
-    position: absolute; border-radius: 50%;
-    pointer-events: none; opacity: 0;
-    transition: opacity 0.12s ease;
-    will-change: transform, opacity;
-  }
-  #tc-move-base {
-    width: 132px; height: 132px; margin: -66px 0 0 -66px;
-    border: 2px solid rgba(34,211,238,0.55);
-    background: radial-gradient(circle, rgba(34,211,238,0.10), rgba(0,0,0,0.18));
-    box-shadow: 0 0 18px rgba(0,0,0,0.4);
-  }
-  #tc-move-knob {
-    width: 62px; height: 62px; margin: -31px 0 0 -31px;
-    border: 2px solid rgba(103,232,249,0.9);
-    background: radial-gradient(circle, rgba(103,232,249,0.85), rgba(14,116,144,0.6));
-    box-shadow: 0 0 14px rgba(34,211,238,0.6);
-  }
-  body.touch-device.tc-move-active #tc-move-base,
-  body.touch-device.tc-move-active #tc-move-knob { opacity: 0.92; }
-
-  /* Action buttons (bottom-right cluster). */
-  #tc-actions {
-    position: absolute; right: 0; bottom: 0;
-    width: 300px; height: 280px;
-    pointer-events: none;
-  }
-  .tc-btn {
-    position: absolute;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 50%;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 13px; letter-spacing: 0.04em;
-    color: #cfeef7;
-    background: radial-gradient(circle at 38% 30%, rgba(15,21,30,0.82), rgba(8,12,18,0.74));
-    border: 2px solid rgba(34,211,238,0.55);
-    box-shadow: 0 0 12px rgba(0,0,0,0.45);
-    pointer-events: auto;
-    touch-action: none;
-    -webkit-user-select: none; user-select: none;
-  }
-  .tc-btn:active, .tc-btn.tc-held {
-    background: radial-gradient(circle at 38% 30%, rgba(34,211,238,0.5), rgba(13,90,110,0.55));
-    border-color: rgba(103,232,249,0.95);
-    box-shadow: 0 0 18px rgba(34,211,238,0.7);
-  }
-  .tc-fire  { right: 30px;  bottom: 110px; width: 96px;  height: 96px; font-size: 16px; }
-  #tc-ads   { right: 138px; bottom: 150px; width: 74px;  height: 74px; }
-  #tc-jump  { right: 150px; bottom: 56px;  width: 66px;  height: 66px; }
-  #tc-reload{ right: 36px;  bottom: 14px;  width: 66px;  height: 66px; }
-  #tc-melee { right: 112px; bottom: 4px;   width: 56px;  height: 56px; font-size: 11px; }
-  #tc-sprint{ right: 220px; bottom: 30px;  width: 62px;  height: 62px; }
-
-  /* Top mini buttons (weapon switch, pack, view, pause). */
-  #tc-top {
-    position: absolute; top: calc(env(safe-area-inset-top, 0px) + 8px);
-    right: 50%; transform: translateX(50%);
-    display: flex; gap: 8px;
-    pointer-events: none;
-  }
-  .tc-mini {
-    pointer-events: auto;
-    min-width: 42px; height: 34px; padding: 0 8px;
-    font-family: 'Share Tech Mono', monospace; font-size: 12px;
-    color: #a9e6f2;
-    background: rgba(10,15,22,0.72);
-    border: 1px solid rgba(34,211,238,0.5);
-    border-radius: 6px;
-    touch-action: none;
-  }
-  .tc-mini:active, .tc-mini.tc-held {
-    background: rgba(34,211,238,0.4); color: #fff;
-  }
-
-  /* On touch devices, hide the desktop click-to-play prompt and shrink the HUD
-     so it fits a phone screen and stays clear of the thumbs. */
-  body.touch-device #click-to-play { display: none !important; }
-  body.touch-device #bottom-hud { transform: scale(0.74); transform-origin: bottom center; bottom: 2px; }
-  body.touch-device #minimap-canvas { transform: scale(0.62); transform-origin: top right; }
-  body.touch-device #center-hud { transform: scale(0.82); transform-origin: top center; }
-  body.touch-device #xhair { transform: scale(0.85); }
-
-  /* Landscape phones are short — tighten further. */
-  @media (max-height: 480px) {
-    body.touch-device #bottom-hud { transform: scale(0.64); }
-    .tc-fire  { width: 84px; height: 84px; bottom: 92px; }
-    #tc-actions { height: 240px; }
-  }
-</style>
-
-  <style id="rb-restraint">
-  /* ══ RESTRAINT PASS — AAA polish: one accent, clean panels, calm motion. ══
-     Overrides the earlier decorative styling (grids/rings/scanlines/brackets/
-     notches/glows) without touching markup or IDs. Keep this block LAST. */
-
-  /* Loading screen: dark field, wordmark, one thin bar. Nothing else moves. */
-  .ls-grid, .ls-rings-wrap, .ls-scan, .ls-bracket, .ls-glow { display: none !important; }
-  #loading-screen { background: linear-gradient(180deg, #0a0e14 0%, #07090c 100%) !important; }
-  .ls-title-breach { color: var(--accent) !important; -webkit-text-stroke: 0 !important; }
-  .ls-eyebrow { letter-spacing: 0.34em !important; }
-  .ls-divider { width: 210px !important; }
-  .ls-divider::after { content: '' !important; padding: 0 !important; }
-  .ls-seg-row { display: none !important; }
-  #loading-fill::after { display: none !important; }
-
-  /* Main menu: flat dark field, hairline column edge, no grid/glow wallpaper. */
-  .ov-bg-grid { display: none !important; }
-  .ov-bg-glow { opacity: 0.3 !important; }
-  #overlay { background: linear-gradient(160deg, #0a0e14 0%, #07090c 100%) !important; }
-  .ov-left::before { width: 1px !important; background: var(--line-strong) !important; box-shadow: none !important; }
-  .ov-action-btn.primary:hover { box-shadow: none !important; }
-
-  /* Model previews: clean surface — no radial glow, no scanline texture. */
-  .loadout-preview::before, .loadout-preview::after { display: none !important; }
-
-  /* HUD: quiet rectangular panels, one hairline accent, minimal glow. */
-  .hud-block {
-    clip-path: none !important;
-    border: 1px solid rgba(140,165,185,0.20) !important;
-    border-radius: 3px !important;
-    background: rgba(8,12,17,0.78) !important;
-    box-shadow: 0 10px 26px rgba(0,0,0,0.40) !important;
-    position: relative;
-  }
-  .hud-block::after {
-    content: ''; position: absolute; left: 10px; right: 10px; top: 0; height: 1px;
-    background: linear-gradient(90deg, var(--accent), transparent); opacity: 0.55;
-  }
-  .hud-block.end::after { background: linear-gradient(270deg, var(--accent), transparent); }
-  .hud-value { text-shadow: 0 1px 0 rgba(0,0,0,0.6) !important; }
-  #weapon-val { text-shadow: 0 1px 0 rgba(0,0,0,0.6) !important; }
-  #minimap-canvas { box-shadow: 0 0 0 1px rgba(0,0,0,0.55), 0 10px 26px rgba(0,0,0,0.45) !important; }
-  #bottom-hud { background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.30) 55%, transparent 100%) !important; }
-  #hp-bar, #reload-bar { box-shadow: none !important; }
-  /* Restraint additions: kill the CRT scanline wash, menu corner brackets and
-     the flavor status chips (Power/Seal/Echo) — polish over pastiche. */
-  #loading-screen::before, #overlay::before, #state-overlay::before { display: none !important; }
-  .ov-bracket { display: none !important; }
-  .ov-status-strip { display: none !important; }
-
-  /* Intel: animated neural brain (SVG + CSS only - no runtime cost off-menu). */
-  .mind-brain { display: flex; justify-content: center; margin-bottom: 10px; }
+  .mind-brain { display: flex; justify-content: center; margin-bottom: 12px; }
   .mind-brain .mb-outline { stroke: rgba(140,165,185,0.45); stroke-width: 1.2; }
   .mind-brain .mb-stem { stroke: rgba(140,165,185,0.35); stroke-width: 1.2; }
   .mind-brain .mb-syn {
@@ -2210,7 +1463,540 @@
   .mind-brain .n8 { animation-delay: -1.0s; } .mind-brain .n9 { animation-delay: -1.4s; }
   .mind-brain .n10 { animation-delay: -0.6s; }
   @keyframes mbPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
-  </style>
+
+  .quit-box {
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .quit-box strong {
+    display: block;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-hi);
+    margin-bottom: 8px;
+  }
+  .quit-box span {
+    font-size: 10px;
+    color: var(--text-mid);
+    line-height: 1.6;
+  }
+
+  .ov-action-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 24px;
+  }
+
+  .ov-action-btn {
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    background: rgba(10,16,24,0.88);
+    color: var(--text-hi);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    padding: 14px 26px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.22,1,0.36,1);
+    backdrop-filter: blur(4px);
+    position: relative;
+    overflow: hidden;
+  }
+  .ov-action-btn::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+    opacity: 0.5;
+  }
+  .ov-action-btn:hover {
+    background: rgba(18,28,40,0.95);
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md), var(--glow-accent);
+  }
+  .ov-action-btn.primary {
+    border-color: var(--accent);
+    background: rgba(20,32,44,0.92);
+    color: var(--accent-hot);
+  }
+  .ov-action-btn.primary:hover {
+    background: rgba(26,42,56,0.98);
+    box-shadow: var(--glow-strong);
+  }
+  .ov-action-btn.danger { border-color: var(--danger-dim); }
+  .ov-action-btn.danger:hover { 
+    border-color: var(--danger); 
+    box-shadow: 0 8px 24px rgba(251,113,133,0.25);
+  }
+
+  .ov-selected-note {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--accent-dim);
+    text-transform: uppercase;
+    margin-top: 12px;
+  }
+
+  #mp-panel {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 22;
+    background: rgba(2,4,8,0.75);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    padding: 20px;
+  }
+  #mp-panel.active { display: flex; }
+
+  #mp-panel .mp-card {
+    width: min(480px, calc(100vw - 40px));
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    background: linear-gradient(180deg, #0e161f 0%, #0a1016 100%);
+    border: 1px solid var(--line-strong);
+    border-top: 2px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.9), 0 0 0 1px rgba(45,212,191,0.1), inset 0 1px 0 rgba(255,255,255,0.04);
+    padding: 32px 32px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #mp-panel .mp-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-hi);
+    margin-bottom: 3px;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
+  #mp-panel .mp-eyebrow {
+    font-size: 9px;
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    margin-bottom: 10px;
+  }
+
+  .mp-row {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .mp-btn {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    border: 1px solid var(--line-strong);
+    background: rgba(10,16,24,0.88);
+    color: var(--text-hi);
+    padding: 11px 20px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s cubic-bezier(0.22,1,0.36,1);
+    min-height: 42px;
+    backdrop-filter: blur(4px);
+  }
+  .mp-btn:hover { 
+    border-color: var(--accent); 
+    background: rgba(16,24,36,0.95);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
+  }
+  .mp-btn.primary {
+    border-color: var(--accent);
+    background: rgba(20,32,44,0.9);
+    color: var(--accent-hot);
+  }
+  .mp-btn.primary:hover {
+    background: rgba(26,42,56,0.98);
+    box-shadow: 0 0 16px rgba(45,212,191,0.25);
+  }
+  .mp-btn.danger { border-color: var(--danger-dim); color: #ffd6d6; }
+  .mp-btn.danger:hover { border-color: var(--danger); box-shadow: 0 0 16px rgba(251,113,133,0.2); }
+
+  #mp-code-input,
+  #mp-name-input {
+    flex: 1;
+    background: rgba(10,16,24,0.88);
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    color: var(--text-hi);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 11px 16px;
+    outline: none;
+    min-height: 42px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  #mp-code-input:focus,
+  #mp-name-input:focus { 
+    border-color: var(--accent); 
+    box-shadow: 0 0 12px rgba(45,212,191,0.15);
+  }
+
+  #mp-status {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--text-mid);
+    text-transform: uppercase;
+    min-height: 18px;
+  }
+  #mp-status.ok  { color: var(--green); }
+  #mp-status.err { color: var(--danger); }
+
+  #mp-code-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  #mp-code-display {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 30px;
+    font-weight: 900;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    text-shadow: 0 0 24px rgba(45,212,191,0.5);
+  }
+
+  .mp-roster {
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: rgba(10,16,24,0.85);
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  .mp-roster-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--text-mid);
+    text-transform: uppercase;
+    padding: 2px 0;
+  }
+  .mp-roster-row.self { color: var(--accent); }
+  .mp-roster-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    flex-shrink: 0;
+  }
+  .mp-roster-row.self .mp-roster-dot { background: var(--accent); box-shadow: 0 0 6px rgba(45,212,191,0.6); }
+
+  .mp-foot {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .mp-hint {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--text-lo);
+    text-transform: uppercase;
+    line-height: 1.6;
+  }
+
+  #mp-room-badge {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 12;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    padding: 6px 16px;
+    pointer-events: none;
+    white-space: nowrap;
+    backdrop-filter: blur(8px);
+    box-shadow: var(--shadow-sm);
+  }
+  #mp-room-badge.hidden { display: none; }
+
+  #pvp-hud {
+    position: fixed;
+    top: 64px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 11;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    pointer-events: none;
+  }
+  #pvp-hud.active { display: flex; }
+
+  #pvp-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+  }
+
+  .pvp-row {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .pvp-frag-count {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 28px;
+    font-weight: 900;
+    color: var(--text-hi);
+    letter-spacing: 0.08em;
+  }
+  .pvp-frag-count.self { color: var(--accent); text-shadow: 0 0 12px rgba(45,212,191,0.4); }
+
+  #pvp-respawn {
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    color: var(--danger);
+    text-transform: uppercase;
+    text-align: center;
+  }
+
+  #click-to-play {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 18;
+    background: rgba(2,4,8,0.62);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #click-to-play.visible { opacity: 1; pointer-events: auto; }
+
+  #click-to-play-text {
+    font-family: 'Orbitron', sans-serif;
+    font-size: clamp(20px, 3vw, 30px);
+    font-weight: 900;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--accent-hot);
+    animation: ctpPulse 2.2s ease-in-out infinite;
+    text-shadow: 0 0 24px rgba(45,212,191,0.5);
+  }
+
+  #click-to-play-sub {
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-lo);
+    margin-top: 12px;
+  }
+
+  @keyframes ctpPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.48; }
+  }
+
+  #touch-controls { display: none; }
+  body.touch-device.gameplay-view #touch-controls {
+    display: block;
+    position: fixed; inset: 0;
+    z-index: 60;
+    pointer-events: none;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #tc-look {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 38%;
+    pointer-events: auto;
+  }
+  #tc-move {
+    position: absolute; top: 0; left: 0; bottom: 0; width: 42%;
+    pointer-events: auto;
+  }
+  #tc-move-base, #tc-move-knob {
+    position: absolute; border-radius: 50%;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.15s ease;
+    will-change: transform, opacity;
+  }
+  #tc-move-base {
+    width: 140px; height: 140px; margin: -70px 0 0 -70px;
+    border: 2px solid rgba(45,212,191,0.55);
+    background: radial-gradient(circle, rgba(45,212,191,0.12), rgba(0,0,0,0.2));
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+  }
+  #tc-move-knob {
+    width: 66px; height: 66px; margin: -33px 0 0 -33px;
+    border: 2px solid rgba(94,234,212,0.92);
+    background: radial-gradient(circle, rgba(94,234,212,0.9), rgba(14,116,144,0.65));
+    box-shadow: 0 0 16px rgba(45,212,191,0.7);
+  }
+  body.touch-device.tc-move-active #tc-move-base,
+  body.touch-device.tc-move-active #tc-move-knob { opacity: 0.95; }
+
+  #tc-actions {
+    position: absolute; right: 0; bottom: 0;
+    width: 300px; height: 280px;
+    pointer-events: none;
+  }
+  .tc-btn {
+    position: absolute;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px; letter-spacing: 0.04em;
+    color: #cfeef7;
+    background: radial-gradient(circle at 38% 30%, rgba(15,22,32,0.88), rgba(8,12,18,0.8));
+    border: 2px solid rgba(45,212,191,0.55);
+    box-shadow: 0 0 14px rgba(0,0,0,0.5);
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    transition: all 0.15s;
+  }
+  .tc-btn:active, .tc-btn.tc-held {
+    background: radial-gradient(circle at 38% 30%, rgba(45,212,191,0.55), rgba(13,90,110,0.6));
+    border-color: rgba(94,234,212,0.95);
+    box-shadow: 0 0 20px rgba(45,212,191,0.8);
+    transform: scale(0.96);
+  }
+  .tc-fire  { right: 30px;  bottom: 110px; width: 96px;  height: 96px; font-size: 16px; }
+  #tc-ads   { right: 138px; bottom: 150px; width: 74px;  height: 74px; }
+  #tc-jump  { right: 150px; bottom: 56px;  width: 66px;  height: 66px; }
+  #tc-reload{ right: 36px;  bottom: 14px;  width: 66px;  height: 66px; }
+  #tc-melee { right: 112px; bottom: 4px;   width: 56px;  height: 56px; font-size: 11px; }
+  #tc-sprint{ right: 220px; bottom: 30px;  width: 62px;  height: 62px; }
+
+  #tc-top {
+    position: absolute; top: calc(env(safe-area-inset-top, 0px) + 8px);
+    right: 50%; transform: translateX(50%);
+    display: flex; gap: 8px;
+    pointer-events: none;
+  }
+  .tc-mini {
+    pointer-events: auto;
+    min-width: 44px; height: 36px; padding: 0 10px;
+    font-family: 'Share Tech Mono', monospace; font-size: 12px;
+    color: #a9e6f2;
+    background: rgba(10,16,24,0.78);
+    border: 1px solid rgba(45,212,191,0.5);
+    border-radius: 8px;
+    touch-action: none;
+    transition: all 0.15s;
+  }
+  .tc-mini:active, .tc-mini.tc-held {
+    background: rgba(45,212,191,0.45); color: #fff;
+    border-color: rgba(94,234,212,0.9);
+  }
+
+  body.touch-device #click-to-play { display: none !important; }
+  body.touch-device #bottom-hud { transform: scale(0.74); transform-origin: bottom center; bottom: 2px; }
+  body.touch-device #minimap-canvas { transform: scale(0.62); transform-origin: top right; }
+  body.touch-device #center-hud { transform: scale(0.82); transform-origin: top center; }
+  body.touch-device #xhair { transform: scale(0.85); }
+
+  @media (max-width: 1100px) {
+    .flow-grid, .op-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .mind-map {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+    .mind-core, .mind-branch.left, .mind-branch.right, .mind-foot {
+      grid-column: 1;
+      grid-row: auto;
+    }
+  }
+
+  @media (max-width: 640px) {
+    #overlay {
+      height: 100dvh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      flex-direction: column;
+    }
+    .ov-left {
+      width: 100%;
+      min-width: 0;
+      overflow-y: visible;
+      padding: 24px 18px 18px;
+    }
+    .ov-logo { margin-bottom: 18px; }
+    .ov-right {
+      min-height: 0;
+      overflow: visible;
+    }
+    .ov-panel {
+      position: relative;
+      min-height: auto;
+      padding: 24px 18px 36px;
+      overflow: visible;
+    }
+    .ov-wave-cards, .loadout-grid, .kit-grid, .intel-grid, .flow-grid, .op-strip {
+      grid-template-columns: 1fr;
+    }
+    .ov-ctrl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ov-panel-title { font-size: 36px; overflow-wrap: anywhere; }
+    .loadout-preview { aspect-ratio: 16 / 8; }
+    #mp-panel { padding: 12px; }
+    #mp-panel .mp-card { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+    .mp-row, .mp-foot { flex-wrap: wrap; }
+    .mp-row > *, .mp-foot > * { flex: 1 1 100%; }
+  }
+
+  @media (max-height: 560px) {
+    #overlay { height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .ov-left { padding: 16px 20px; }
+    .ov-logo { margin-bottom: 12px; }
+    .ov-nav-item { padding: 8px 12px; }
+    .ov-panel { padding: 18px 20px 28px; }
+  }
+
+  @media (max-height: 480px) {
+    body.touch-device #bottom-hud { transform: scale(0.64); }
+    .tc-fire { width: 84px; height: 84px; bottom: 92px; }
+    #tc-actions { height: 240px; }
+  }
+
+  .hidden { display: none !important; }
+</style>
+<!-- Halo-CE style menu + loading shell. Loaded LAST so it overrides the block
+     above; shared verbatim with the legacy entry point. -->
+<link rel="stylesheet" href="/menu_halo.css">
+<base target="_blank">
 </head>
 <body>
 
@@ -2230,7 +2016,6 @@
 
   <div id="hit-marker"></div>
 
-  <!-- Pointer-lock prompt: visible when the game is active but mouse isn't captured -->
   <div id="click-to-play">
     <div id="click-to-play-text">CLICK TO ENGAGE</div>
     <div id="click-to-play-sub">Click the screen to lock cursor &amp; play</div>
@@ -2271,10 +2056,10 @@
   <div class="sprint-indicator" id="sprint-ind">SPRINT</div>
 </div>
 
-<!-- Mobile render diagnostic (only shown on touch devices; helps debug black-screen) -->
+<!-- Mobile render diagnostic -->
 <div id="mobile-diag" style="display:none; position:fixed; top:2px; left:2px; z-index:200; font:10px/1.3 monospace; color:#7fff9f; background:rgba(0,0,0,0.55); padding:3px 5px; pointer-events:none; max-width:60vw; white-space:pre-wrap;"></div>
 
-<!-- ════════════════ TOUCH CONTROLS (mobile) ════════════════ -->
+<!-- ════════════════ TOUCH CONTROLS ════════════════ -->
 <div id="touch-controls" aria-hidden="true">
   <div id="tc-look"></div>
   <div id="tc-move">
@@ -2306,24 +2091,10 @@
 </div>
 
 <div id="damage-vignette"></div>
+<div id="ads-vignette"></div>
 
 <!-- ════════════════ LOADING SCREEN ════════════════ -->
 <div id="loading-screen">
-  <div class="ls-grid"></div>
-  <div class="ls-glow"></div>
-  <div class="ls-scan"></div>
-
-  <div class="ls-rings-wrap">
-    <div class="ls-ring"></div>
-    <div class="ls-ring"></div>
-    <div class="ls-ring"></div>
-  </div>
-
-  <div class="ls-bracket tl"></div>
-  <div class="ls-bracket tr"></div>
-  <div class="ls-bracket bl"></div>
-  <div class="ls-bracket br"></div>
-
   <div class="ls-content">
     <div class="ls-eyebrow">Unknown Containment Protocol</div>
     <div class="ls-title"><span class="ls-title-room">UN</span><span class="ls-title-breach">KNW</span></div>
@@ -2336,19 +2107,7 @@
       <div class="ls-track">
         <div id="loading-fill"></div>
       </div>
-      <div class="ls-seg-row">
-        <span class="ls-seg">SYS</span>
-        <span class="ls-seg">ENV</span>
-        <span class="ls-seg">AI</span>
-        <span class="ls-seg">AUDIO</span>
-        <span class="ls-seg">READY</span>
-      </div>
     </div>
-  </div>
-
-  <div class="ls-bottom">
-    <div class="ls-sys">Platform: WebGL 2.0 · Three.js r166</div>
-    <div class="ls-sys ls-sys-build">V3.0.1 · Build 2047</div>
   </div>
 </div>
 
@@ -2364,11 +2123,9 @@
 </div>
 
 <!-- ════════════════ MAIN MENU ════════════════ -->
-<div id="overlay">
-  <div class="ov-bg-grid"></div>
+<div id="overlay" data-panel="root">
   <div class="ov-bg-glow"></div>
 
-  <!-- Left nav panel -->
   <div class="ov-left">
     <div class="ov-logo">
       <div class="ov-eyebrow">Unknown Containment Protocol</div>
@@ -2376,54 +2133,60 @@
       <div class="ov-tagline">// UNKNW - Containment Protocol //</div>
     </div>
 
-    <div class="ov-status-strip" aria-label="Mission status">
-      <div class="ov-status-cell"><span>Power</span><strong>Aux</strong></div>
-      <div class="ov-status-cell"><span>Seal</span><strong>Broken</strong></div>
-      <div class="ov-status-cell"><span>Echo</span><strong>Live</strong></div>
-    </div>
-
     <ul class="ov-nav">
-      <li class="ov-nav-item nav-primary active-nav" id="startBtn" role="button" tabindex="0" aria-label="Start new mission" title="Start new mission">
+      <li class="ov-nav-item nav-primary active-nav" id="startBtn" role="button" tabindex="0" aria-label="Start new mission" title="Start new mission" data-desc="Breach the room and hold it. Resets score, waves, weapons and upgrades.">
         <span class="ov-nav-num">01</span>
         <span class="ov-nav-text">New Mission</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item nav-primary hidden-menu" id="resumeBtn" role="button" tabindex="0" aria-label="Resume game" title="Resume game">
+      <li class="ov-nav-item nav-primary hidden-menu" id="resumeBtn" role="button" tabindex="0" aria-label="Resume game" title="Resume game" data-desc="Return to the run in progress.">
         <span class="ov-nav-num">01</span>
         <span class="ov-nav-text">Resume</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item hidden-menu" id="restartBtn" role="button" tabindex="0" aria-label="Restart mission" title="Restart mission">
+      <li class="ov-nav-item hidden-menu" id="restartBtn" role="button" tabindex="0" aria-label="Restart mission" title="Restart mission" data-desc="Stand the current run down and rebuild wave one.">
         <span class="ov-nav-num">02</span>
         <span class="ov-nav-text">Restart</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="loadoutBtn" role="button" tabindex="0" aria-label="Open loadout" title="Open loadout">
+      <li class="ov-nav-item nav-primary" id="multiplayerBtn" role="button" tabindex="0" aria-label="Open multiplayer" title="Open multiplayer" data-desc="Co-op waves or PvP free-for-all over a peer-to-peer link.">
         <span class="ov-nav-num">03</span>
-        <span class="ov-nav-text">Loadout</span>
-        <span class="ov-nav-arrow">▶</span>
-      </li>
-      <li class="ov-nav-item" id="intelBtn" role="button" tabindex="0" aria-label="Open intel records" title="Open intel records">
-        <span class="ov-nav-num">04</span>
-        <span class="ov-nav-text">Intel Records</span>
-        <span class="ov-nav-arrow">▶</span>
-      </li>
-      <li class="ov-nav-item nav-primary" id="multiplayerBtn" role="button" tabindex="0" aria-label="Open multiplayer" title="Open multiplayer">
-        <span class="ov-nav-num">05</span>
         <span class="ov-nav-text">Multiplayer</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="modelEditorBtn" role="button" tabindex="0" aria-label="Open model editor" title="Open model editor">
+      <li class="ov-nav-item" id="loadoutBtn" role="button" tabindex="0" aria-label="Open loadout" title="Open loadout" data-desc="Pick the weapon you carry through the breach.">
+        <span class="ov-nav-num">04</span>
+        <span class="ov-nav-text">Loadout</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="briefingBtn" role="button" tabindex="0" aria-label="Open mission briefing" title="Open mission briefing" data-desc="Breach plan, live room scan and the opening wave pattern.">
+        <span class="ov-nav-num">05</span>
+        <span class="ov-nav-text">Briefing</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="settingsBtn" role="button" tabindex="0" aria-label="Open settings" title="Open settings" data-desc="Video, audio and control options.">
         <span class="ov-nav-num">06</span>
+        <span class="ov-nav-text">Settings</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="intelBtn" role="button" tabindex="0" aria-label="Open intel records" title="Open intel records" data-desc="Recovered dossier: the blackouts, the Echo, and the Choir.">
+        <span class="ov-nav-num">07</span>
+        <span class="ov-nav-text">Intel Records</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="modelEditorBtn" role="button" tabindex="0" aria-label="Open model editor" title="Open model editor" data-desc="Developer tool — inspect character rigs and animation clips.">
+        <span class="ov-nav-num">08</span>
         <span class="ov-nav-text">Model Editor</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="quitBtn" role="button" tabindex="0" aria-label="Open quit confirmation" title="Open quit confirmation">
-        <span class="ov-nav-num">07</span>
+      <li class="ov-nav-item" id="quitBtn" role="button" tabindex="0" aria-label="Open quit confirmation" title="Open quit confirmation" data-desc="Stand down and close the session.">
+        <span class="ov-nav-num">09</span>
         <span class="ov-nav-text">Quit</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
     </ul>
+
+    <div class="halo-desc" id="halo-desc"></div>
 
     <div class="ov-footer">
       <span>© 2047 Breach Systems</span>
@@ -2431,17 +2194,11 @@
     </div>
   </div>
 
-  <!-- Right briefing panel -->
   <div class="ov-right">
-    <div class="ov-right-glow"></div>
-    <div class="ov-bracket btl"></div>
-    <div class="ov-bracket bbr"></div>
-
-    <div class="ov-briefing ov-panel active" id="briefingPanel" data-menu-panel="briefing">
+    <div class="ov-panel" id="briefingPanel" data-menu-panel="briefing">
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Mission Board</div>
         <div class="ov-tag red">Room Seal: Compromised</div>
-        <div class="ov-brief-line"></div>
       </div>
 
       <div class="ov-panel-title">Breach Plan</div>
@@ -2477,49 +2234,171 @@
         </div>
       </div>
 
-      <!-- Settings -->
-      <div class="ov-settings">
-        <div class="ov-setting">
-          <span class="ov-set-label">Mouse Sens.</span>
-          <input type="range" id="sens-slider" min="0.3" max="3.0" step="0.1" value="1.0"
-            aria-label="Mouse sensitivity" title="Mouse sensitivity"
-            oninput="document.getElementById('sens-val').textContent = parseFloat(this.value).toFixed(1) + 'x'">
-          <span class="ov-set-val" id="sens-val">1.0x</span>
+    </div>
+
+    <!-- ── SETTINGS: video / audio / controls ───────────────────────────── -->
+    <div class="ov-panel" id="settingsPanel" data-menu-panel="settings">
+      <div class="ov-brief-header">
+        <div class="ov-tag cyan">Settings</div>
+        <div class="ov-tag red">Saved Locally</div>
+      </div>
+
+      <div class="ov-panel-title">Settings</div>
+      <div class="ov-panel-copy">Every option below applies immediately and is remembered on this machine. Only the renderer backend needs a reload, because it swaps the GPU pipeline the whole scene is compiled against.</div>
+
+      <div class="set-groups">
+        <!-- ── VIDEO ─────────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Video</div>
+
+          <div class="set-row">
+            <span class="set-label">Renderer
+              <span class="set-hint">Auto picks WebGL on desktop, WebGPU on mobile. Reloads the page.</span>
+            </span>
+            <span class="set-choice" id="opt-renderer">
+              <button type="button" data-value="auto">Auto</button>
+              <button type="button" data-value="webgl">WebGL</button>
+              <button type="button" data-value="webgpu">WebGPU</button>
+            </span>
+            <span class="set-val" id="opt-renderer-val"></span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Resolution
+              <span class="set-hint">Upper limit for the adaptive render scale.</span>
+            </span>
+            <input type="range" id="opt-resscale" min="50" max="100" step="5" value="100" aria-label="Resolution scale">
+            <span class="set-val" id="opt-resscale-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Brightness</span>
+            <input type="range" id="opt-brightness" min="60" max="160" step="5" value="100" aria-label="Brightness">
+            <span class="set-val" id="opt-brightness-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Field Of View
+              <span class="set-hint">Offset applied on top of the per-stance FOV.</span>
+            </span>
+            <input type="range" id="opt-fov" min="-10" max="20" step="1" value="0" aria-label="Field of view offset">
+            <span class="set-val" id="opt-fov-val">+0°</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Cinematic FX
+              <span class="set-hint">Film grade, grain and motion blur. Costs GPU fill.</span>
+            </span>
+            <span class="set-choice" id="opt-cinematic">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-cinematic-val"></span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Performance Overlay
+              <span class="set-hint">FPS, frame time and draw calls. Also toggled with F9.</span>
+            </span>
+            <span class="set-choice" id="opt-perf">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-perf-val"></span>
+          </div>
         </div>
-        <div class="ov-setting">
-          <span class="ov-set-label">Cinematic</span>
-          <input type="checkbox" id="cinematic-toggle" checked
-            aria-label="Cinematic" title="Cinematic"
-            onchange="document.getElementById('cinematic-val').textContent = this.checked ? 'ON' : 'OFF'">
-          <span class="ov-set-val" id="cinematic-val">ON</span>
+
+        <!-- ── AUDIO ─────────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Audio</div>
+
+          <div class="set-row">
+            <span class="set-label">Master</span>
+            <input type="range" id="opt-vol-master" min="0" max="100" step="1" value="100" aria-label="Master volume">
+            <span class="set-val" id="opt-vol-master-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Gunfire
+              <span class="set-hint">Your weapon and enemy fire.</span>
+            </span>
+            <input type="range" id="opt-vol-weapons" min="0" max="100" step="1" value="100" aria-label="Gunfire volume">
+            <span class="set-val" id="opt-vol-weapons-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Voices
+              <span class="set-hint">Enemy vocals and the Choir.</span>
+            </span>
+            <input type="range" id="opt-vol-voices" min="0" max="100" step="1" value="100" aria-label="Voice volume">
+            <span class="set-val" id="opt-vol-voices-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">World
+              <span class="set-hint">Impacts, interface, ambience and abilities.</span>
+            </span>
+            <input type="range" id="opt-vol-world" min="0" max="100" step="1" value="100" aria-label="World volume">
+            <span class="set-val" id="opt-vol-world-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Mute When Unfocused
+              <span class="set-hint">Silence the game when you switch tab or window.</span>
+            </span>
+            <span class="set-choice" id="opt-mute-blur">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-mute-blur-val"></span>
+          </div>
+        </div>
+
+        <!-- ── CONTROLS ──────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Controls</div>
+
+          <div class="set-row">
+            <span class="set-label">Mouse Sensitivity</span>
+            <input type="range" id="sens-slider" min="0.3" max="3.0" step="0.1" value="1.0"
+              aria-label="Mouse sensitivity" title="Mouse sensitivity">
+            <span class="set-val" id="sens-val">1.0x</span>
+          </div>
+
+          <div class="ov-ctrl-header">Keybindings</div>
+          <div class="ov-ctrl-grid">
+            <div class="ov-ctrl"><span class="ov-key">W A S D</span><span class="ov-ctrl-desc">Move</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Mouse</span><span class="ov-ctrl-desc">Look</span></div>
+            <div class="ov-ctrl"><span class="ov-key">LMB</span><span class="ov-ctrl-desc">Fire</span></div>
+            <div class="ov-ctrl"><span class="ov-key">RMB</span><span class="ov-ctrl-desc">Aim</span></div>
+            <div class="ov-ctrl"><span class="ov-key">R</span><span class="ov-ctrl-desc">Reload</span></div>
+            <div class="ov-ctrl"><span class="ov-key">V</span><span class="ov-ctrl-desc">Melee</span></div>
+            <div class="ov-ctrl"><span class="ov-key">E</span><span class="ov-ctrl-desc">Interact</span></div>
+            <div class="ov-ctrl"><span class="ov-key">1 2 3</span><span class="ov-ctrl-desc">Weapons</span></div>
+            <div class="ov-ctrl"><span class="ov-key">F</span><span class="ov-ctrl-desc">Light</span></div>
+            <div class="ov-ctrl"><span class="ov-key">C</span><span class="ov-ctrl-desc">Look Back</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Shift</span><span class="ov-ctrl-desc">Sprint</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Space</span><span class="ov-ctrl-desc">Jump</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Esc</span><span class="ov-ctrl-desc">Pause</span></div>
+            <div class="ov-ctrl"><span class="ov-key">F9</span><span class="ov-ctrl-desc">Perf Overlay</span></div>
+          </div>
         </div>
       </div>
 
-      <!-- Controls -->
-      <div class="ov-ctrl-header">Keybindings</div>
-      <div class="ov-ctrl-grid">
-        <div class="ov-ctrl"><span class="ov-key">W A S D</span><span class="ov-ctrl-desc">Move</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Mouse</span><span class="ov-ctrl-desc">Look</span></div>
-        <div class="ov-ctrl"><span class="ov-key">LMB</span><span class="ov-ctrl-desc">Fire</span></div>
-        <div class="ov-ctrl"><span class="ov-key">RMB</span><span class="ov-ctrl-desc">Aim</span></div>
-        <div class="ov-ctrl"><span class="ov-key">R</span><span class="ov-ctrl-desc">Reload</span></div>
-        <div class="ov-ctrl"><span class="ov-key">V</span><span class="ov-ctrl-desc">Melee</span></div>
-        <div class="ov-ctrl"><span class="ov-key">E</span><span class="ov-ctrl-desc">Upgrade</span></div>
-        <div class="ov-ctrl"><span class="ov-key">1 2 3</span><span class="ov-ctrl-desc">Weapons</span></div>
-        <div class="ov-ctrl"><span class="ov-key">F</span><span class="ov-ctrl-desc">Light</span></div>
-        <div class="ov-ctrl"><span class="ov-key">C</span><span class="ov-ctrl-desc">Look Back</span></div>
-        <div class="ov-ctrl"><span class="ov-key">M</span><span class="ov-ctrl-desc">View Toggle</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Shift</span><span class="ov-ctrl-desc">Sprint</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Esc</span><span class="ov-ctrl-desc">Pause</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Space</span><span class="ov-ctrl-desc">Replay</span></div>
+      <div class="set-foot">
+        <button class="ov-action-btn" id="settingsResetBtn" type="button">Reset To Defaults</button>
+        <span class="set-note" id="settings-note">Settings are stored in this browser only.</span>
       </div>
+
+      <!-- Legacy control the engine already binds to; the buttons above drive it. -->
+      <input type="checkbox" id="cinematic-toggle" checked class="hidden" aria-hidden="true" tabindex="-1">
+      <span id="cinematic-val" class="hidden">ON</span>
     </div>
 
     <div class="ov-panel" id="loadoutPanel" data-menu-panel="loadout">
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Armory Link</div>
         <div class="ov-tag red">Live Loadout</div>
-        <div class="ov-brief-line"></div>
       </div>
 
       <div class="ov-panel-title">Loadout</div>
@@ -2598,15 +2477,6 @@
           <div class="loadout-stat"><span>Cadence</span><span>Auto / Fast</span></div>
           <div class="loadout-stat"><span>Profile</span><span>Run &amp; Gun</span></div>
         </div>
-        <div class="loadout-card" data-loadout="railgun">
-          <div class="loadout-tag box">MYSTERY BOX</div>
-          <div class="loadout-name">Lancer Railgun</div>
-          <div class="loadout-role">Heavy Target Deletion</div>
-          <div class="loadout-stat"><span>Damage</span><span>430 / shot</span></div>
-          <div class="loadout-stat"><span>Magazine</span><span>3 cells</span></div>
-          <div class="loadout-stat"><span>Optics</span><span>24° FOV Zoom</span></div>
-          <div class="loadout-stat"><span>Profile</span><span>Slow / Devastating</span></div>
-        </div>
         <div class="loadout-card" data-loadout="flak">
           <div class="loadout-tag box">MYSTERY BOX</div>
           <div class="loadout-name">Mauler Auto-Shotgun</div>
@@ -2632,91 +2502,220 @@
       </div>
     </div>
 
+    <!-- ── INTEL RECORDS: recovered-document terminal ───────────────────── -->
     <div class="ov-panel" id="intelPanel" data-menu-panel="intel">
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Intel Records</div>
         <div class="ov-tag red">Recovered Data</div>
-        <div class="ov-brief-line"></div>
       </div>
 
-      <div class="ov-panel-title">Breach Dossier</div>
-      <div class="ov-panel-copy">In 1994 the city went dark for eleven minutes. Every light, every clock, every heart monitor. The official record calls it a grid failure. The record is wrong. Something was rewiring the block — and it has been rewiring it every tenth wave since. You died finding that out. The Echo restarted you to finish the report.</div>
+      <div class="intel-shell">
+        <!-- Record index -->
+        <aside class="intel-rail">
+          <div class="intel-rail-head">
+            <span class="intel-case">CASE UNK-94-11</span>
+            <span class="intel-class">RESTRICTED</span>
+          </div>
 
-      <div class="op-strip">
-        <div class="op-pill"><b>01</b>Operator Status: Revived</div>
-        <div class="op-pill"><b>02</b>Grid: Compromised</div>
-        <div class="op-pill"><b>03</b>Blackout Cycle: Every 10th Wave</div>
-        <div class="op-pill"><b>04</b>The Choir: Active</div>
-      </div>
+          <div class="intel-group">Site</div>
+          <button type="button" class="intel-entry is-active" data-record="minutes" data-tier="site">
+            <span class="intel-code">UNK-01</span><span class="intel-name">The Eleven Minutes</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="room" data-tier="site">
+            <span class="intel-code">UNK-02</span><span class="intel-name">Room Spec</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="city" data-tier="site">
+            <span class="intel-code">UNK-03</span><span class="intel-name">Perimeter</span>
+          </button>
 
-      <div class="ov-section-title">Echo — Neural Reconstruction</div>
-      <div class="mind-map">
-        <div class="mind-branch left">
-          <div class="mind-node">
-            <strong>The Blackouts</strong>
-            <span>Every tenth wave the power dies and the sky catches fire. Instruments log it as a solar event happening below the roofline, which is impossible, which is the point. It is not weather. It is maintenance. The city is a machine that must be stopped to be adjusted — and the things that adjust it do not leave witnesses. They hunt faster in the dark. They hit harder. And the Echo pays double for every one you drop while the grid is open. It believes they are exposed mid-shift. Prove it.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Echo</strong>
-            <span>It lives between stations, on a frequency the war decommissioned. It does not speak in sentences — it speaks in urgency, straight into the wet parts of your skull. It restarted your heart for a reason it has not fully disclosed: the dead carry a clean copy of the signal that killed them, and you are the only copy left that can still hold a rifle.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The City</strong>
-            <span>Walk to the barricades and look past them. The district runs for miles and nobody lives there. Windows lit on timers. Cars that never rust. Rain that never lands. It is a set — an antenna dressed as a skyline. The block you can walk is the only part of the machine that is real. Or the only part they let render. The Echo will not say which possibility scares it more.</span>
-          </div>
-        </div>
+          <div class="intel-group">Signal</div>
+          <button type="button" class="intel-entry" data-record="echo" data-tier="signal">
+            <span class="intel-code">UNK-04</span><span class="intel-name">The Echo</span>
+          </button>
 
-        <div class="mind-core">
-          <div class="mind-brain" aria-hidden="true">
-            <svg viewBox="0 0 220 150" width="100%" height="132" fill="none">
-              <path class="mb-outline" d="M32 84 C24 58 44 32 72 28 C84 12 122 10 136 24 C168 16 196 34 198 60 C214 74 208 100 192 108 C188 124 166 136 146 131 C130 145 96 146 82 134 C56 140 32 126 30 106 C20 100 18 92 32 84 Z"/>
-              <path class="mb-stem" d="M112 138 L112 150 M104 144 L120 144"/>
-              <path class="mb-syn s1" d="M50 80 C70 60 92 66 108 52"/>
-              <path class="mb-syn s2" d="M108 52 C132 44 152 58 172 66"/>
-              <path class="mb-syn s3" d="M60 104 C86 96 112 104 138 92"/>
-              <path class="mb-syn s4" d="M138 92 C156 86 170 94 182 88"/>
-              <path class="mb-syn s5" d="M76 44 C82 66 74 88 88 112"/>
-              <path class="mb-syn s6" d="M148 40 C142 62 152 84 142 110"/>
-              <circle class="mb-node n1" cx="50" cy="80" r="3"/>
-              <circle class="mb-node n2" cx="108" cy="52" r="4"/>
-              <circle class="mb-node n3" cx="172" cy="66" r="3"/>
-              <circle class="mb-node n4" cx="60" cy="104" r="3"/>
-              <circle class="mb-node n5" cx="138" cy="92" r="4"/>
-              <circle class="mb-node n6" cx="182" cy="88" r="2.5"/>
-              <circle class="mb-node n7" cx="76" cy="44" r="2.5"/>
-              <circle class="mb-node n8" cx="148" cy="40" r="3"/>
-              <circle class="mb-node n9" cx="88" cy="112" r="3"/>
-              <circle class="mb-node n10" cx="142" cy="110" r="2.5"/>
-            </svg>
-          </div>
-          <div class="mind-core-tag">Primary Objective</div>
-          <strong>The Room</strong>
-          <span>A sealed chamber under the plaza, built to hold information, not prisoners. Thirty years ago it broadcast a single word on the dead frequency, and the first wave answered. The door was not broken open. It was invited open. Clear the waves, keep the block, and find out who sent the invitation — because the Echo is certain of exactly one thing: it was not us.</span>
-        </div>
+          <div class="intel-group">Hostiles</div>
+          <button type="button" class="intel-entry" data-record="drones" data-tier="hostile">
+            <span class="intel-code">UNK-05</span><span class="intel-name">Siege Drones</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="ghosts" data-tier="hostile">
+            <span class="intel-code">UNK-06</span><span class="intel-name">Cloned Ghosts</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="returned" data-tier="hostile">
+            <span class="intel-code">UNK-07</span><span class="intel-name">The Returned</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="choir" data-tier="hostile">
+            <span class="intel-code">UNK-08</span><span class="intel-name">The Choir</span>
+          </button>
+        </aside>
 
-        <div class="mind-branch right">
-          <div class="mind-node">
-            <strong>Siege Drones</strong>
-            <span>Recovery units from the original grid crews, re-tasked by whatever runs the schedule now. They were built to retrieve assets from hostile environments. Tonight the hostile environment is you. Engage at range — their arc weaponry does not miss at contact distance, and they always know where you are standing. The room tells them.</span>
-          </div>
-          <div class="mind-node">
-            <strong>Cloned Ghosts</strong>
-            <span>The chamber read your biometrics while you were dead on its floor, and it printed copies. They move like you. They shoot like a version of you that died afraid. They know every angle of the block because they were compiled from your memory of it. Pressure them — copies break under pressure. Try not to think about what that implies.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Returned</strong>
-            <span>The crews that worked the grid before your team. The city does not bury its dead — it re-tasks them, and after thirty years of blackout shifts there is not much left to re-task. They come in close, they come in numbers, and they scream on the way. The Echo asks that you be efficient. Some of them were colleagues.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Choir</strong>
-            <span>Warden. Seraph. Cherub. They arrive when the sky burns — the shift supervisors of the blackout. The field teams called them angels because of the light. The survivors called them nothing at all, because survivors of the Choir do not talk. The Warden judges from range. The Seraph flanks through folded space. The Cherub collapses the safe ground under your feet. They are not defending the city. They are defending the schedule.</span>
-          </div>
-        </div>
+        <!-- Selected record -->
+        <section class="intel-doc" id="intel-doc">
 
-        <div class="mind-foot">
-          <strong>Last Transmission — Echo, timestamp unknown</strong>
-          <span>"Eleven minutes, every cycle, for thirty years. Eight million people and nobody noticed. You noticed. That is why they stopped your heart, and that is why I started it again. When the sky burns, the machine is open. Aim at the light."</span>
-        </div>
+          <article class="intel-record is-active" data-record="minutes" data-tier="site" data-stamp="CLOSED">
+            <div class="intel-doc-kicker">Incident Log · Containment Authority · Tape 3 of 4</div>
+            <h3 class="intel-doc-title">The Eleven Minutes</h3>
+            <dl class="intel-meta">
+              <div><dt>Filed</dt><dd>Case ref 94-11</dd></div>
+              <div><dt>Duration</dt><dd>00:11:00 exact</dd></div>
+              <div><dt>Integrity</dt><dd>72% — tape stretch</dd></div>
+              <div><dt>Disposition</dt><dd>Closed, "equipment fault"</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Nine clocks on nine separate circuits stopped inside the same second and restarted inside the same second, eleven minutes later. No shared power source. No shared fault path. The report does not explain the eleven minutes. It does not attempt to.</p>
+              <p>Equipment fault has a form. This has been filed as equipment fault four times.</p>
+              <p>It repeats. Same eleven minutes, same clocks, every tenth cycle since. No second report has ever been filed.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Verbatim — dispatch channel 2</div>
+              <p><span class="tc">02:47:13</span> "Confirm you're dark."</p>
+              <p><span class="tc">02:47:16</span> "Dark. Everything's dark."</p>
+              <p><span class="tc">02:58:13</span> "…back. Eleven on the nose. Who logged eleven?"</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="room" data-tier="site" data-stamp="SEALED">
+            <div class="intel-doc-kicker">Works Record · Room Specification · Drawing set 6</div>
+            <h3 class="intel-doc-title">The Room</h3>
+            <dl class="intel-meta">
+              <div><dt>Built</dt><dd>Predates current seal</dd></div>
+              <div><dt>Stated use</dt><dd>Archive, dry storage</dd></div>
+              <div><dt>Access</dt><dd>One door. No lock listed.</dd></div>
+              <div><dt>Integrity</dt><dd>Drawings complete</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Walls exceed storage spec by a margin the drawings don't account for. No shelving in any revision. Door rated to three tonnes, hinged outward into the corridor — a swing that fails fire code and was approved anyway. No objection on file.</p>
+              <p>An outward swing keeps something in from being blocked on its way out. It does not keep anything out.</p>
+              <p>The seal has held on this door for every cycle on record but one.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Margin note, drawing 6.14 — unsigned</div>
+              <p>"Client insists on the outward swing. Told him it fails code. He said fire wasn't the concern."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="city" data-tier="site" data-stamp="RESTRICTED">
+            <div class="intel-doc-kicker">Field Note · Perimeter, two junctions out</div>
+            <h3 class="intel-doc-title">Beyond the Seal</h3>
+            <dl class="intel-meta">
+              <div><dt>Surveyed</dt><dd>Two nights, on foot</dd></div>
+              <div><dt>Contact made</dt><dd>None</dd></div>
+              <div><dt>Standing order</dt><dd>Do not walk it alone</dd></div>
+              <div><dt>Integrity</dt><dd>Notebook recovered intact</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Radios hold to the first junction and drop past it. Windows are lit on timers, not by anyone home — same cycle, every night, no variation. Cars are parked exactly as they were parked the first night. No rust. No movement.</p>
+              <p>Past the second junction the street repeats. Same corner, same three storefronts, however far you walk it.</p>
+              <p>The standing order exists because of night two, not night one. Nobody currently on this posting will discuss night two.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Last notebook page</div>
+              <p>"Walked two hours out. Ended back at the seal without turning around. Not filing this. Not going back out there alone."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="echo" data-tier="signal" data-stamp="ONGOING">
+            <div class="intel-doc-kicker">Signal Intercept · Dead band · Ongoing</div>
+            <h3 class="intel-doc-title">The Echo</h3>
+            <dl class="intel-meta">
+              <div><dt>Band</dt><dd>Decommissioned, pre-seal</dd></div>
+              <div><dt>Carrier</dt><dd>None detected</dd></div>
+              <div><dt>Reception</dt><dd>Confirmed, method unclear</dd></div>
+              <div><dt>Integrity</dt><dd>Transcribed twice, independently</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>No carrier signal, no waveform, nothing an instrument will register — and two operators on separate shifts logged the same phrases without comparing notes. That is the entire case file.</p>
+              <p>It restarted your heart during the last breach. There is no entry explaining the mechanism. There is an entry confirming it happened.</p>
+              <p>Standing theory, unconfirmed: it is not speaking to you. It is playing something back.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Fragments — order uncertain</div>
+              <p><span class="tc">—</span> "You're late."</p>
+              <p><span class="tc">—</span> "When the seal opens, so does the room."</p>
+              <p><span class="tc">—</span> "Aim at the light. Not at me."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="drones" data-tier="hostile" data-stamp="LOW RISK">
+            <div class="intel-doc-kicker">Asset Record · Salvage tag GA-114 · Re-tasked</div>
+            <h3 class="intel-doc-title">Siege Drones</h3>
+            <dl class="intel-meta">
+              <div><dt>Origin</dt><dd>Recovery-unit hardware</dd></div>
+              <div><dt>Built for</dt><dd>Asset retrieval, hazard sites</dd></div>
+              <div><dt>Armament</dt><dd>Arc discharge, contact range</dd></div>
+              <div><dt>Threat</dt><dd>Low alone. Never alone.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Serial plates still legible under the scorch. Built to enter a hazard site and carry something valuable back out. Tasking hasn't changed since re-purposing — only the definition of "asset."</p>
+              <p><strong>Engagement:</strong> keep them past contact range and they're a non-issue — the arc has no reach, and it has never missed inside it. They don't search. They path straight to a target through walls they can't see through. Something else is doing the tracking.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="ghosts" data-tier="hostile" data-stamp="HIGH RISK">
+            <div class="intel-doc-kicker">Observation Series · Trials 1–9 · Room floor</div>
+            <h3 class="intel-doc-title">Cloned Ghosts</h3>
+            <dl class="intel-meta">
+              <div><dt>Template</dt><dd>Operator, post-mortem</dd></div>
+              <div><dt>Print time</dt><dd>Under 40 seconds</dd></div>
+              <div><dt>Fidelity</dt><dd>Movement 1:1 · judgement degraded</dd></div>
+              <div><dt>Threat</dt><dd>High. Knows your habits.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Prints from a read taken while you were down on the floor, not from a live feed — it has been replaying that read since. Same angles you hold. Same corner you pre-fire. Same breaks for cover, half a second early, because it isn't deciding. It's repeating.</p>
+              <p>That's also the exploit. Nine trials, nine identical flanks: pressure it and it commits to the route you would have taken, which means you already know where it lands.</p>
+              <p>Trial 6 stopped in the doorway and didn't fire, for four seconds. Not repeated since. Not attempted since, either.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="returned" data-tier="hostile" data-stamp="NUMBERS">
+            <div class="intel-doc-kicker">Personnel · Prior-cycle roster</div>
+            <h3 class="intel-doc-title">The Returned</h3>
+            <dl class="intel-meta">
+              <div><dt>Names on file</dt><dd>31</dd></div>
+              <div><dt>Marked deceased</dt><dd>31</dd></div>
+              <div><dt>Marked buried</dt><dd>0</dd></div>
+              <div><dt>Threat</dt><dd>Close range. Numbers.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Every name on this file is marked deceased. None are marked buried. Prior-cycle personnel are re-tasked, not replaced, and after enough cycles there isn't much left to re-task.</p>
+              <p>They come in close, in numbers, and they announce themselves the whole way — which isn't a war cry. It's the sound of being made to walk.</p>
+              <p><strong>Engagement:</strong> the call plants them for a beat before they move. Take that beat or lose the spacing.</p>
+              <p>Standing order: efficient engagement. Some of them held this post before you.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="choir" data-tier="hostile" data-stamp="EXTREME">
+            <div class="intel-doc-kicker">Threat Assessment · Blackout cycle only · Confidence low</div>
+            <h3 class="intel-doc-title">The Choir</h3>
+            <dl class="intel-meta">
+              <div><dt>Seen</dt><dd>Every tenth cycle</dd></div>
+              <div><dt>Field name</dt><dd>"Angels" — from the light</dd></div>
+              <div><dt>Survivor accounts</dt><dd>Two. Neither has spoken since.</dd></div>
+              <div><dt>Threat</dt><dd>Extreme</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Arrive when the cycle blacks out. Leave when the seal closes. They are not defending the room. They are enforcing the interval.</p>
+              <div class="intel-subgrid">
+                <div class="intel-sub">
+                  <strong>Warden</strong>
+                  <span>Judges from range. Marks the ground you're about to stand on, then walks a barrage across the correction. The bulwark displaces, it doesn't kill — herding, not swinging.</span>
+                </div>
+                <div class="intel-sub">
+                  <strong>Seraph</strong>
+                  <span>Leaves before it strikes. Phases out, lands on your flank, leaves an afterimage where you last looked. Shoot the standing image and you've already lost the exchange.</span>
+                </div>
+                <div class="intel-sub">
+                  <strong>Cherub</strong>
+                  <span>Collapses safe ground inward until there's none left, drops a field that kills sprint and reload together. Never lands a hit itself. Arranges for the others to.</span>
+                </div>
+              </div>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Note appended by the Echo</div>
+              <p>"Same eleven minutes, every cycle. Nobody outside the seal has noticed. You did. That's why I restarted you."</p>
+            </blockquote>
+          </article>
+
+        </section>
       </div>
     </div>
 
@@ -2724,7 +2723,6 @@
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Session Control</div>
         <div class="ov-tag red">Confirm Quit</div>
-        <div class="ov-brief-line"></div>
       </div>
 
       <div class="ov-panel-title">Quit</div>
@@ -2744,140 +2742,11 @@
   </div>
 </div>
 
-
-<script>
-(() => {
-  const loading = document.getElementById('loading-screen');
-  const overlay = document.getElementById('overlay');
-  const startBtn = document.getElementById('startBtn');
-  const resumeBtn = document.getElementById('resumeBtn');
-  const restartBtn = document.getElementById('restartBtn');
-  const launchLoadoutBtn = document.getElementById('launchLoadoutBtn');
-
-  if (!loading || !overlay) return;
-
-  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let menuIntroPlayed = false;
-  let lastOverlayHidden = overlay.classList.contains('hidden');
-  let lastLoadingHidden = loading.classList.contains('hidden');
-
-  const playMenuIntro = () => {
-    if (menuIntroPlayed) return;
-    menuIntroPlayed = true;
-    overlay.classList.remove('hidden', 'menu-hide');
-    overlay.classList.add('menu-reveal', 'menu-intro');
-    loading.classList.add('screen-intro');
-    if (!reducedMotion) {
-      requestAnimationFrame(() => loading.classList.add('to-menu'));
-      window.setTimeout(() => loading.classList.add('hidden'), 920);
-    } else {
-      loading.classList.add('hidden');
-    }
-    window.setTimeout(() => {
-      overlay.classList.remove('menu-reveal', 'menu-intro');
-      loading.classList.remove('screen-intro', 'to-menu');
-    }, reducedMotion ? 20 : 1100);
-  };
-
-  const hideMenuAnimated = (action) => {
-    if (overlay.classList.contains('hidden') || overlay.classList.contains('menu-hide')) {
-      if (typeof action === 'function') action();
-      return;
-    }
-    if (reducedMotion) {
-      overlay.classList.add('hidden');
-      if (typeof action === 'function') action();
-      return;
-    }
-    overlay.classList.remove('menu-reveal');
-    overlay.classList.add('menu-hide');
-    window.setTimeout(() => {
-      overlay.classList.add('hidden');
-      overlay.classList.remove('menu-hide');
-      if (typeof action === 'function') action();
-    }, 520);
-  };
-
-  const interceptMenuLaunch = (event) => {
-    if (!event || event.__ruggedHandled) return;
-    event.__ruggedHandled = true;
-    if (reducedMotion) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    hideMenuAnimated(() => {
-      const clone = new event.constructor(event.type, event);
-      clone.__ruggedHandled = true;
-      event.target.dispatchEvent(clone);
-    });
-  };
-
-  [startBtn, resumeBtn, restartBtn, launchLoadoutBtn].filter(Boolean).forEach((button) => {
-    button.addEventListener('click', interceptMenuLaunch, true);
-  });
-
-  overlay.addEventListener('transitionend', () => {
-    overlay.classList.remove('menu-reveal', 'menu-intro', 'menu-hide');
-  });
-
-  const syncState = () => {
-    const overlayHidden = overlay.classList.contains('hidden');
-    const loadingHidden = loading.classList.contains('hidden');
-
-    if (lastLoadingHidden !== loadingHidden && loadingHidden && !menuIntroPlayed) {
-      playMenuIntro();
-    }
-
-    if (lastOverlayHidden !== overlayHidden) {
-      if (!overlayHidden) {
-        overlay.classList.remove('menu-hide');
-        overlay.classList.add('menu-reveal', 'menu-intro');
-        window.setTimeout(() => overlay.classList.remove('menu-reveal', 'menu-intro'), reducedMotion ? 20 : 700);
-      }
-    }
-
-    lastOverlayHidden = overlayHidden;
-    lastLoadingHidden = loadingHidden;
-  };
-
-  new MutationObserver(syncState).observe(loading, { attributes: true, attributeFilter: ['class'] });
-  new MutationObserver(syncState).observe(overlay, { attributes: true, attributeFilter: ['class'] });
-
-  window.addEventListener('load', () => {
-    syncState();
-  });
-
-  // Fallback reveal, in case the game never signals readiness. It must NOT fire while
-  // the world is still building: the Start button would go live mid-boot and the first
-  // wave would run against a half-built scene with every shader still linking — the
-  // game appears to freeze the moment you click New Mission. bootGame sets
-  // body[data-rb-ready] when it has finished, so poll for that and keep a hard cap so a
-  // genuinely broken boot still surfaces the menu.
-  const FALLBACK_FIRST_CHECK_MS = 5200;
-  const FALLBACK_POLL_MS = 250;
-  const FALLBACK_HARD_CAP_MS = 120000;
-  const fallbackStartedAt = Date.now();
-  const tryFallbackReveal = () => {
-    if (menuIntroPlayed || loading.classList.contains('hidden')) return;
-    const ready = document.body.dataset.rbReady === '1';
-    if (!ready && Date.now() - fallbackStartedAt < FALLBACK_HARD_CAP_MS) {
-      window.setTimeout(tryFallbackReveal, FALLBACK_POLL_MS);
-      return;
-    }
-    loading.dataset.ready = 'true';
-    playMenuIntro();
-  };
-  window.setTimeout(tryFallbackReveal, FALLBACK_FIRST_CHECK_MS);
-})();
-</script>
-
+<!-- ════════════════ MULTIPLAYER PANEL ════════════════ -->
 <div id="mp-panel">
-  <style>
-    /* local styles moved from inline attributes */
-    .hidden { display: none; }
-  </style>
   <div class="mp-card">
-    <h2>Multiplayer</h2>
-    <div class="mp-sub">// Co-op Waves &amp; PvP FFA · Peer-to-Peer //</div>
+    <div class="mp-title">Multiplayer</div>
+    <div class="mp-eyebrow">// Co-op Waves &amp; PvP FFA · Peer-to-Peer //</div>
 
     <div class="mp-row">
       <input id="mp-name-input" maxlength="5" placeholder="NAME" autocomplete="off" spellcheck="false" />
@@ -2911,14 +2780,57 @@
   </div>
 </div>
 
+<!-- ════════════════ MENU TRANSITION SCRIPT ════════════════ -->
+<script>
+(() => {
+  const loading = document.getElementById('loading-screen');
+  const overlay = document.getElementById('overlay');
+  if (!loading || !overlay) return;
 
-<!-- Classic global scripts kept outside Vite's module graph (absolute paths so
-     Vite serves/copies them verbatim instead of trying to bundle them). -->
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let introDone = false;
+
+  function revealMenu() {
+    if (introDone) return;
+    introDone = true;
+
+    loading.classList.add('hidden');
+    loading.dataset.ready = 'true';
+    overlay.classList.remove('hidden');
+  }
+
+  // Watch for the game engine's ready signal
+  const readyObserver = new MutationObserver(() => {
+    if (document.body.dataset.rbReady === '1') revealMenu();
+  });
+  readyObserver.observe(document.body, { attributes: true, attributeFilter: ['data-rb-ready'] });
+
+  // Soft fallback: if the engine signals ready quickly
+  setTimeout(() => {
+    if (document.body.dataset.rbReady === '1') revealMenu();
+  }, 1200);
+
+  // Hard fallback: don't leave the user stranded
+  setTimeout(() => {
+    if (!introDone) revealMenu();
+  }, 10000);
+
+  // If something else hides the loading screen, show the menu
+  const loadingObserver = new MutationObserver(() => {
+    if (loading.classList.contains('hidden') && !introDone) {
+      introDone = true;
+      overlay.classList.remove('hidden');
+    }
+  });
+  loadingObserver.observe(loading, { attributes: true, attributeFilter: ['class'] });
+})();
+</script>
+
+<!-- ════════════════ GAME SCRIPTS ════════════════ -->
 <script defer src="/environment.js"></script>
 <script defer src="/exterior_map.js"></script>
-<!-- SJM: zombie diagnostic overlay + config (F8 to toggle) -->
 <script defer src="/modules/sjm.js"></script>
-<!-- Module entry: Vite bundles this plus ./modules/* and three/peerjs. -->
 <script type="module" src="./three_fps_game.js"></script>
+
 </body>
 </html>

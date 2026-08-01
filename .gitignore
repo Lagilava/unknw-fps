@@ -39,3 +39,6 @@ JAVA/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# Scratch output from scripts/_grade_check.mjs (regenerated on demand)
+scripts/_grade_*.png

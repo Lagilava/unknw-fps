@@ -78,7 +78,12 @@ async function fireOnce(page) {
 }
 
 test.describe.serial("Room Breach FPS gameplay smoke", () => {
-  test.setTimeout(360000);
+  // Test 12 alone blocks for a fixed 180000ms (3min soak), which only leaves the
+  // remainder of this budget for boot (15-60s) + the other 11 steps — already a
+  // tight margin, and restartGame() (Test 10) now runs a deliberate ~2s terminal
+  // typing animation ("RESTART UNKNW") ahead of the intro cutscene. Bumped for
+  // headroom rather than trimming the soak or the animation.
+  test.setTimeout(420000);
 
   test("tests 1-12 gameplay smoke", async ({ page }) => {
     const events = installRuntimeMonitors(page);
@@ -99,10 +104,16 @@ test.describe.serial("Room Breach FPS gameplay smoke", () => {
     await test.step("Pause/menu/settings flow", async () => {
       await page.keyboard.press("Escape");
       await expect(page.locator("#overlay")).not.toHaveClass(/hidden/, { timeout: 5000 });
+      // Settings moved out of the briefing panel into its own Halo sub-screen.
+      await page.locator("#settingsBtn").click();
+      await expect(page.locator("#settingsPanel")).toHaveClass(/active/, { timeout: 5000 });
       await page.locator("#sens-slider").fill("1.4");
+      await page.locator("#sens-slider").dispatchEvent("input");
       await expect(page.locator("#sens-val")).toHaveText("1.4x");
-      await page.locator("#cinematic-toggle").click();
-      await page.keyboard.press("Escape");
+      await page.locator('#opt-cinematic button[data-value="off"]').click();
+      await page.keyboard.press("Escape"); // leave the sub-screen
+      await expect(page.locator("#overlay")).toHaveAttribute("data-panel", "root", { timeout: 5000 });
+      await page.keyboard.press("Escape"); // resume
       await expect(page.locator("#overlay")).toHaveClass(/hidden/, { timeout: 5000 });
       await page.waitForFunction(() => window.__rbTest.getState() === "playing", { timeout: 5000 });
     });

@@ -649,10 +649,14 @@
       // sun + sky fill, so every point light is gone — a large, safe perf win that
       // also delivers the bright daytime look. Sun shadows are intentionally off to
       // avoid a second real-time shadow map (perf-first, per the redesign brief).
-      // GOLDEN HOUR: matches the kloppenheim_06 HDR skybox — sun sits LOW toward +X
-      // (its glow is visible in the sky texture there), so shadows stretch long and
-      // the key light is warm gold. Keep elevation moderate so shadows stay readable.
-      const sunDir = new THREE.Vector3(0.86, 0.30, 0.18).normalize();
+      // GOLDEN HOUR: aimed at the ACTUAL sun in the kloppenheim_06 HDR skybox so the
+      // cast shadows point away from the visible sun. Azimuth measured from the HDR by
+      // scripts/find-sun.mjs (brightest-pixel centroid → the dome's equirect mapping,
+      // u = (PI - atan2(z,x))/2PI): azimuth -39.3deg. The old hand-guessed
+      // (0.86,0.30,0.18) put the light on the WRONG side (+Z), so shadows fell opposite
+      // the sky's sun. Elevation nudged up from the measured 7deg to 14deg so the
+      // golden-hour shadows stay long/dramatic but readable for gameplay.
+      const sunDir = new THREE.Vector3(0.751, 0.242, -0.615).normalize();
       // Shadows only on medium/high tier (low tier disables them for performance).
       const sunShadows = profile.tier !== "low";
       // No shadows → lean on fill for even light across the whole scene.

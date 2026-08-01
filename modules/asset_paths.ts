@@ -22,7 +22,7 @@ export const ANGEL_DRONE_TEXTURE_PATHS = {
 };
 export const EXTERIOR_CITY_MODEL_PATH = `${MODEL_ASSET_ROOT}/petstock_and_radio_rentals_building_low_poly.glb`;
 
-export const PLAYER_MODEL_PATH = `${PLAYER_MODEL_ASSET_ROOT}/black mask.fbx`;
+export const PLAYER_MODEL_PATH = `./assets/Pete.fbx`;
 export const PLAYER_ANIMATION_PATHS = {
   idle:         `${PLAYER_MODEL_ASSET_ROOT}/Rifle Aiming Idle.fbx`,
   walk:         `${PLAYER_MODEL_ASSET_ROOT}/Walking.fbx`,

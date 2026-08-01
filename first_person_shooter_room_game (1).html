@@ -19,6 +19,7 @@
     "@hmans/id": "/node_modules/@hmans/id/dist/hmans-id.esm.js",
     "@hmans/queue": "/node_modules/@hmans/queue/dist/hmans-queue.esm.js",
     "eventery": "/modules/vendor/eventery.esm.js",
+    "howler": "/modules/vendor/howler.esm.js",
     "@dimforge/rapier3d-compat": "/node_modules/@dimforge/rapier3d-compat/rapier.mjs"
   }
 }
@@ -215,6 +216,17 @@
     transition: opacity 0.05s;
   }
 
+  /* ── ADS focus vignette ── darkens the edges as aim comes up, deepening once
+     the sniper is fully scoped, so aiming reads as a focus pull, not just FOV. */
+  #ads-vignette {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 42%, rgba(2,4,8,0.82) 118%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 5;
+    will-change: opacity;
+  }
+
   /* ═══════════════════════════════════════════════════
      CENTER HUD — objective, wave, score, kill feed
   ═══════════════════════════════════════════════════ */
@@ -406,8 +418,8 @@
     opacity: 0.97;
     background: transparent;
     box-shadow:
-      0 0 0 1px rgba(0,0,0,0.55),
-      0 14px 32px rgba(0,0,0,0.50),
+      0 0 0 1px rgba(34,211,238,0.10),
+      0 12px 30px rgba(0,0,0,0.45),
       0 0 22px rgba(34,211,238,0.10);
   }
 
@@ -432,10 +444,10 @@
   .hud-block {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    min-width: 180px;
-    padding: 12px 16px 13px;
-    background: rgba(8,12,18,0.90);
+    gap: 6px;
+    min-width: 190px;
+    padding: 13px 18px 15px;
+    background: rgba(8,12,18,0.88);
     border: 1px solid var(--line-strong);
     border-top: 2px solid var(--accent);
     backdrop-filter: blur(8px);
@@ -456,20 +468,22 @@
   }
 
   .hud-label {
-    font-size: 9px;
-    letter-spacing: 0.26em;
+    font-size: 9.5px;
+    letter-spacing: 0.22em;
     color: var(--accent-dim);
     text-transform: uppercase;
+    font-weight: 600;
   }
 
   .hud-value {
     font-family: var(--font-display);
-    font-size: 32px;
+    font-size: 30px;
     font-weight: 800;
     color: var(--text-hi);
     line-height: 1;
-    text-shadow: 0 0 16px rgba(34,211,238,0.30), 0 2px 0 rgba(0,0,0,0.60);
+    text-shadow: 0 0 18px rgba(34,211,238,0.20), 0 1px 2px rgba(0,0,0,0.55);
     letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
   }
   #weapon-val {
     font-size: 14px;
@@ -480,7 +494,7 @@
     margin-bottom: 4px;
     max-width: 240px;
     text-align: right;
-    text-shadow: 0 0 12px rgba(34,211,238,0.35), 0 2px 0 rgba(0,0,0,0.6);
+    text-shadow: 0 0 12px rgba(34,211,238,0.22), 0 1px 2px rgba(0,0,0,0.55);
   }
   .hud-value.danger   { color: var(--danger); text-shadow: 0 0 18px rgba(255,77,94,0.85); animation: dangerPulse 0.45s infinite alternate; }
   .hud-value.low-ammo { color: var(--accent-hot); }
@@ -491,10 +505,10 @@
   }
 
   #hp-bar-wrap {
-    width: 152px; height: 4px;
+    width: 152px; height: 6px;
     background: rgba(255,255,255,0.06);
-    border-radius: 1px;
-    margin-top: 6px;
+    border-radius: 3px;
+    margin-top: 7px;
     overflow: hidden;
     position: relative;
   }
@@ -509,10 +523,10 @@
   #stamina-bar { display: none; }
 
   #reload-bar-wrap {
-    width: 116px; height: 3px;
+    width: 116px; height: 5px;
     background: rgba(255,255,255,0.06);
-    border-radius: 1px;
-    margin-top: 6px;
+    border-radius: 3px;
+    margin-top: 8px;
     opacity: 0;
     transition: opacity 0.1s;
     overflow: hidden;
@@ -2557,6 +2571,9 @@
   .mind-brain .n10 { animation-delay: -0.6s; }
   @keyframes mbPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
   </style>
+<!-- Halo-CE style menu + loading shell. Loaded LAST so it overrides the blocks
+     above; shared verbatim with index.html. -->
+<link rel="stylesheet" href="/menu_halo.css">
 </head>
 <body>
 
@@ -2650,6 +2667,7 @@
 </div>
 
 <div id="damage-vignette"></div>
+<div id="ads-vignette"></div>
 
 <!-- ════════════════ LOADING SCREEN ════════════════ -->
 <div id="loading-screen">
@@ -2710,7 +2728,7 @@
 </div>
 
 <!-- ════════════════ MAIN MENU ════════════════ -->
-<div id="overlay">
+<div id="overlay" data-panel="root">
   <div class="ov-bg-grid"></div>
   <div class="ov-bg-glow"></div>
 
@@ -2729,47 +2747,59 @@
     </div>
 
     <ul class="ov-nav">
-      <li class="ov-nav-item nav-primary active-nav" id="startBtn" role="button" tabindex="0" aria-label="Start new mission" title="Start new mission">
+      <li class="ov-nav-item nav-primary active-nav" id="startBtn" role="button" tabindex="0" aria-label="Start new mission" title="Start new mission" data-desc="Breach the room and hold it. Resets score, waves, weapons and upgrades.">
         <span class="ov-nav-num">01</span>
         <span class="ov-nav-text">New Mission</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item nav-primary hidden-menu" id="resumeBtn" role="button" tabindex="0" aria-label="Resume game" title="Resume game">
+      <li class="ov-nav-item nav-primary hidden-menu" id="resumeBtn" role="button" tabindex="0" aria-label="Resume game" title="Resume game" data-desc="Return to the run in progress.">
         <span class="ov-nav-num">01</span>
         <span class="ov-nav-text">Resume</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item hidden-menu" id="restartBtn" role="button" tabindex="0" aria-label="Restart mission" title="Restart mission">
+      <li class="ov-nav-item hidden-menu" id="restartBtn" role="button" tabindex="0" aria-label="Restart mission" title="Restart mission" data-desc="Stand the current run down and rebuild wave one.">
         <span class="ov-nav-num">02</span>
         <span class="ov-nav-text">Restart</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="loadoutBtn" role="button" tabindex="0" aria-label="Open loadout" title="Open loadout">
+      <li class="ov-nav-item nav-primary" id="multiplayerBtn" role="button" tabindex="0" aria-label="Open multiplayer" title="Open multiplayer" data-desc="Co-op waves or PvP free-for-all over a peer-to-peer link.">
         <span class="ov-nav-num">03</span>
-        <span class="ov-nav-text">Loadout</span>
-        <span class="ov-nav-arrow">▶</span>
-      </li>
-      <li class="ov-nav-item" id="intelBtn" role="button" tabindex="0" aria-label="Open intel records" title="Open intel records">
-        <span class="ov-nav-num">04</span>
-        <span class="ov-nav-text">Intel Records</span>
-        <span class="ov-nav-arrow">▶</span>
-      </li>
-      <li class="ov-nav-item nav-primary" id="multiplayerBtn" role="button" tabindex="0" aria-label="Open multiplayer" title="Open multiplayer">
-        <span class="ov-nav-num">05</span>
         <span class="ov-nav-text">Multiplayer</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="modelEditorBtn" role="button" tabindex="0" aria-label="Open model editor" title="Open model editor">
+      <li class="ov-nav-item" id="loadoutBtn" role="button" tabindex="0" aria-label="Open loadout" title="Open loadout" data-desc="Pick the weapon you carry through the breach.">
+        <span class="ov-nav-num">04</span>
+        <span class="ov-nav-text">Loadout</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="briefingBtn" role="button" tabindex="0" aria-label="Open mission briefing" title="Open mission briefing" data-desc="Breach plan, live room scan and the opening wave pattern.">
+        <span class="ov-nav-num">05</span>
+        <span class="ov-nav-text">Briefing</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="settingsBtn" role="button" tabindex="0" aria-label="Open settings" title="Open settings" data-desc="Video, audio and control options.">
         <span class="ov-nav-num">06</span>
+        <span class="ov-nav-text">Settings</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="intelBtn" role="button" tabindex="0" aria-label="Open intel records" title="Open intel records" data-desc="Recovered dossier: the blackouts, the Echo, and the Choir.">
+        <span class="ov-nav-num">07</span>
+        <span class="ov-nav-text">Intel Records</span>
+        <span class="ov-nav-arrow">▶</span>
+      </li>
+      <li class="ov-nav-item" id="modelEditorBtn" role="button" tabindex="0" aria-label="Open model editor" title="Open model editor" data-desc="Developer tool — inspect character rigs and animation clips.">
+        <span class="ov-nav-num">08</span>
         <span class="ov-nav-text">Model Editor</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
-      <li class="ov-nav-item" id="quitBtn" role="button" tabindex="0" aria-label="Open quit confirmation" title="Open quit confirmation">
-        <span class="ov-nav-num">07</span>
+      <li class="ov-nav-item" id="quitBtn" role="button" tabindex="0" aria-label="Open quit confirmation" title="Open quit confirmation" data-desc="Stand down and close the session.">
+        <span class="ov-nav-num">09</span>
         <span class="ov-nav-text">Quit</span>
         <span class="ov-nav-arrow">▶</span>
       </li>
     </ul>
+
+    <div class="halo-desc" id="halo-desc"></div>
 
     <div class="ov-footer">
       <span>© 2047 Breach Systems</span>
@@ -2783,7 +2813,7 @@
     <div class="ov-bracket btl"></div>
     <div class="ov-bracket bbr"></div>
 
-    <div class="ov-briefing ov-panel active" id="briefingPanel" data-menu-panel="briefing">
+    <div class="ov-briefing ov-panel" id="briefingPanel" data-menu-panel="briefing">
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Mission Board</div>
         <div class="ov-tag red">Room Seal: Compromised</div>
@@ -2823,42 +2853,165 @@
         </div>
       </div>
 
-      <!-- Settings -->
-      <div class="ov-settings">
-        <div class="ov-setting">
-          <span class="ov-set-label">Mouse Sens.</span>
-          <input type="range" id="sens-slider" min="0.3" max="3.0" step="0.1" value="1.0"
-            aria-label="Mouse sensitivity" title="Mouse sensitivity"
-            oninput="document.getElementById('sens-val').textContent = parseFloat(this.value).toFixed(1) + 'x'">
-          <span class="ov-set-val" id="sens-val">1.0x</span>
+    </div>
+
+    <!-- ── SETTINGS: video / audio / controls ───────────────────────────── -->
+    <div class="ov-panel" id="settingsPanel" data-menu-panel="settings">
+      <div class="ov-brief-header">
+        <div class="ov-tag cyan">Settings</div>
+        <div class="ov-tag red">Saved Locally</div>
+      </div>
+
+      <div class="ov-panel-title">Settings</div>
+      <div class="ov-panel-copy">Every option below applies immediately and is remembered on this machine. Only the renderer backend needs a reload, because it swaps the GPU pipeline the whole scene is compiled against.</div>
+
+      <div class="set-groups">
+        <!-- ── VIDEO ─────────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Video</div>
+
+          <div class="set-row">
+            <span class="set-label">Renderer
+              <span class="set-hint">Auto picks WebGL on desktop, WebGPU on mobile. Reloads the page.</span>
+            </span>
+            <span class="set-choice" id="opt-renderer">
+              <button type="button" data-value="auto">Auto</button>
+              <button type="button" data-value="webgl">WebGL</button>
+              <button type="button" data-value="webgpu">WebGPU</button>
+            </span>
+            <span class="set-val" id="opt-renderer-val"></span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Resolution
+              <span class="set-hint">Upper limit for the adaptive render scale.</span>
+            </span>
+            <input type="range" id="opt-resscale" min="50" max="100" step="5" value="100" aria-label="Resolution scale">
+            <span class="set-val" id="opt-resscale-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Brightness</span>
+            <input type="range" id="opt-brightness" min="60" max="160" step="5" value="100" aria-label="Brightness">
+            <span class="set-val" id="opt-brightness-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Field Of View
+              <span class="set-hint">Offset applied on top of the per-stance FOV.</span>
+            </span>
+            <input type="range" id="opt-fov" min="-10" max="20" step="1" value="0" aria-label="Field of view offset">
+            <span class="set-val" id="opt-fov-val">+0°</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Cinematic FX
+              <span class="set-hint">Film grade, grain and motion blur. Costs GPU fill.</span>
+            </span>
+            <span class="set-choice" id="opt-cinematic">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-cinematic-val"></span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Performance Overlay
+              <span class="set-hint">FPS, frame time and draw calls. Also toggled with F9.</span>
+            </span>
+            <span class="set-choice" id="opt-perf">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-perf-val"></span>
+          </div>
         </div>
-        <div class="ov-setting">
-          <span class="ov-set-label">Cinematic</span>
-          <input type="checkbox" id="cinematic-toggle" checked
-            aria-label="Cinematic" title="Cinematic"
-            onchange="document.getElementById('cinematic-val').textContent = this.checked ? 'ON' : 'OFF'">
-          <span class="ov-set-val" id="cinematic-val">ON</span>
+
+        <!-- ── AUDIO ─────────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Audio</div>
+
+          <div class="set-row">
+            <span class="set-label">Master</span>
+            <input type="range" id="opt-vol-master" min="0" max="100" step="1" value="100" aria-label="Master volume">
+            <span class="set-val" id="opt-vol-master-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Gunfire
+              <span class="set-hint">Your weapon and enemy fire.</span>
+            </span>
+            <input type="range" id="opt-vol-weapons" min="0" max="100" step="1" value="100" aria-label="Gunfire volume">
+            <span class="set-val" id="opt-vol-weapons-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Voices
+              <span class="set-hint">Enemy vocals and the Choir.</span>
+            </span>
+            <input type="range" id="opt-vol-voices" min="0" max="100" step="1" value="100" aria-label="Voice volume">
+            <span class="set-val" id="opt-vol-voices-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">World
+              <span class="set-hint">Impacts, interface, ambience and abilities.</span>
+            </span>
+            <input type="range" id="opt-vol-world" min="0" max="100" step="1" value="100" aria-label="World volume">
+            <span class="set-val" id="opt-vol-world-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Mute When Unfocused
+              <span class="set-hint">Silence the game when you switch tab or window.</span>
+            </span>
+            <span class="set-choice" id="opt-mute-blur">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-mute-blur-val"></span>
+          </div>
+        </div>
+
+        <!-- ── CONTROLS ──────────────────────────────────────────────── -->
+        <div class="set-group">
+          <div class="set-group-title">Controls</div>
+
+          <div class="set-row">
+            <span class="set-label">Mouse Sensitivity</span>
+            <input type="range" id="sens-slider" min="0.3" max="3.0" step="0.1" value="1.0"
+              aria-label="Mouse sensitivity" title="Mouse sensitivity">
+            <span class="set-val" id="sens-val">1.0x</span>
+          </div>
+
+          <div class="ov-ctrl-header">Keybindings</div>
+          <div class="ov-ctrl-grid">
+            <div class="ov-ctrl"><span class="ov-key">W A S D</span><span class="ov-ctrl-desc">Move</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Mouse</span><span class="ov-ctrl-desc">Look</span></div>
+            <div class="ov-ctrl"><span class="ov-key">LMB</span><span class="ov-ctrl-desc">Fire</span></div>
+            <div class="ov-ctrl"><span class="ov-key">RMB</span><span class="ov-ctrl-desc">Aim</span></div>
+            <div class="ov-ctrl"><span class="ov-key">R</span><span class="ov-ctrl-desc">Reload</span></div>
+            <div class="ov-ctrl"><span class="ov-key">V</span><span class="ov-ctrl-desc">Melee</span></div>
+            <div class="ov-ctrl"><span class="ov-key">E</span><span class="ov-ctrl-desc">Interact</span></div>
+            <div class="ov-ctrl"><span class="ov-key">1 2 3</span><span class="ov-ctrl-desc">Weapons</span></div>
+            <div class="ov-ctrl"><span class="ov-key">F</span><span class="ov-ctrl-desc">Light</span></div>
+            <div class="ov-ctrl"><span class="ov-key">C</span><span class="ov-ctrl-desc">Look Back</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Shift</span><span class="ov-ctrl-desc">Sprint</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Space</span><span class="ov-ctrl-desc">Jump</span></div>
+            <div class="ov-ctrl"><span class="ov-key">Esc</span><span class="ov-ctrl-desc">Pause</span></div>
+            <div class="ov-ctrl"><span class="ov-key">F9</span><span class="ov-ctrl-desc">Perf Overlay</span></div>
+          </div>
         </div>
       </div>
 
-      <!-- Controls -->
-      <div class="ov-ctrl-header">Keybindings</div>
-      <div class="ov-ctrl-grid">
-        <div class="ov-ctrl"><span class="ov-key">W A S D</span><span class="ov-ctrl-desc">Move</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Mouse</span><span class="ov-ctrl-desc">Look</span></div>
-        <div class="ov-ctrl"><span class="ov-key">LMB</span><span class="ov-ctrl-desc">Fire</span></div>
-        <div class="ov-ctrl"><span class="ov-key">RMB</span><span class="ov-ctrl-desc">Aim</span></div>
-        <div class="ov-ctrl"><span class="ov-key">R</span><span class="ov-ctrl-desc">Reload</span></div>
-        <div class="ov-ctrl"><span class="ov-key">V</span><span class="ov-ctrl-desc">Melee</span></div>
-        <div class="ov-ctrl"><span class="ov-key">E</span><span class="ov-ctrl-desc">Upgrade</span></div>
-        <div class="ov-ctrl"><span class="ov-key">1 2 3</span><span class="ov-ctrl-desc">Weapons</span></div>
-        <div class="ov-ctrl"><span class="ov-key">F</span><span class="ov-ctrl-desc">Light</span></div>
-        <div class="ov-ctrl"><span class="ov-key">C</span><span class="ov-ctrl-desc">Look Back</span></div>
-        <div class="ov-ctrl"><span class="ov-key">M</span><span class="ov-ctrl-desc">View Toggle</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Shift</span><span class="ov-ctrl-desc">Sprint</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Esc</span><span class="ov-ctrl-desc">Pause</span></div>
-        <div class="ov-ctrl"><span class="ov-key">Space</span><span class="ov-ctrl-desc">Replay</span></div>
+      <div class="set-foot">
+        <button class="ov-action-btn" id="settingsResetBtn" type="button">Reset To Defaults</button>
+        <span class="set-note" id="settings-note">Settings are stored in this browser only.</span>
       </div>
+
+      <!-- Legacy control the engine already binds to; the buttons above drive it. -->
+      <input type="checkbox" id="cinematic-toggle" checked class="hidden" aria-hidden="true" tabindex="-1">
+      <span id="cinematic-val" class="hidden">ON</span>
     </div>
 
     <div class="ov-panel" id="loadoutPanel" data-menu-panel="loadout">
@@ -2873,7 +3026,8 @@
 
       <div class="loadout-grid">
         <div class="loadout-card selected" data-loadout="pistol">
-          <div class="loadout-tag starter">STARTER</div>          <div class="loadout-name">Service Pistol</div>
+          <div class="loadout-tag starter">STARTER</div>
+          <div class="loadout-name">Service Pistol</div>
           <div class="loadout-role">Standard Issue Sidearm</div>
           <div class="loadout-stat"><span>Damage</span><span>52 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>12 rds</span></div>
@@ -2881,7 +3035,8 @@
           <div class="loadout-stat"><span>Profile</span><span>Fast Handling</span></div>
         </div>
         <div class="loadout-card" data-loadout="rifle">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Assault Rifle</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Assault Rifle</div>
           <div class="loadout-role">All-Range Control</div>
           <div class="loadout-stat"><span>Damage</span><span>35 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>24 rds</span></div>
@@ -2889,7 +3044,8 @@
           <div class="loadout-stat"><span>Profile</span><span>Versatile</span></div>
         </div>
         <div class="loadout-card" data-loadout="shotgun">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Combat Shotgun</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Combat Shotgun</div>
           <div class="loadout-role">Breach Dominance</div>
           <div class="loadout-stat"><span>Damage</span><span>195 / pellet</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>10 shells</span></div>
@@ -2897,7 +3053,8 @@
           <div class="loadout-stat"><span>Profile</span><span>Close-Range Dominance</span></div>
         </div>
         <div class="loadout-card" data-loadout="sniper">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Precision Rifle</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Precision Rifle</div>
           <div class="loadout-role">Priority Target Removal</div>
           <div class="loadout-stat"><span>Damage</span><span>206 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>6 rds</span></div>
@@ -2905,7 +3062,8 @@
           <div class="loadout-stat"><span>Profile</span><span>High Skill / Punish</span></div>
         </div>
         <div class="loadout-card" data-loadout="smg">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Hornet SMG</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Hornet SMG</div>
           <div class="loadout-role">Close-Range Saturation</div>
           <div class="loadout-stat"><span>Damage</span><span>21 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>32 rds</span></div>
@@ -2913,7 +3071,8 @@
           <div class="loadout-stat"><span>Profile</span><span>High ROF / High Spread</span></div>
         </div>
         <div class="loadout-card" data-loadout="lmg">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Bastion LMG</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Bastion LMG</div>
           <div class="loadout-role">Sustained Suppression</div>
           <div class="loadout-stat"><span>Damage</span><span>31 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>75 rds</span></div>
@@ -2921,7 +3080,8 @@
           <div class="loadout-stat"><span>Profile</span><span>Big Mag / Heavy</span></div>
         </div>
         <div class="loadout-card" data-loadout="dmr">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Verdict DMR</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Verdict DMR</div>
           <div class="loadout-role">Mid-Range Precision</div>
           <div class="loadout-stat"><span>Damage</span><span>118 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>10 rds</span></div>
@@ -2929,23 +3089,18 @@
           <div class="loadout-stat"><span>Profile</span><span>Deliberate / Punchy</span></div>
         </div>
         <div class="loadout-card" data-loadout="akimbo">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Gemini Machine Pistol</div>
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Gemini Machine Pistol</div>
           <div class="loadout-role">Mobile Skirmisher</div>
           <div class="loadout-stat"><span>Damage</span><span>26 / shot</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>26 rds</span></div>
           <div class="loadout-stat"><span>Cadence</span><span>Auto / Fast</span></div>
           <div class="loadout-stat"><span>Profile</span><span>Run &amp; Gun</span></div>
         </div>
-        <div class="loadout-card" data-loadout="railgun">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Lancer Railgun</div>
-          <div class="loadout-role">Heavy Target Deletion</div>
-          <div class="loadout-stat"><span>Damage</span><span>430 / shot</span></div>
-          <div class="loadout-stat"><span>Magazine</span><span>3 cells</span></div>
-          <div class="loadout-stat"><span>Optics</span><span>24° FOV Zoom</span></div>
-          <div class="loadout-stat"><span>Profile</span><span>Slow / Devastating</span></div>
-        </div>
-        <div class="loadout-card" data-loadout="flak">
-          <div class="loadout-tag box">MYSTERY BOX</div>          <div class="loadout-name">Mauler Auto-Shotgun</div>
+        
+          <div class="loadout-card" data-loadout="flak">
+          <div class="loadout-tag box">MYSTERY BOX</div>
+          <div class="loadout-name">Mauler Auto-Shotgun</div>
           <div class="loadout-role">Crowd Erasure</div>
           <div class="loadout-stat"><span>Damage</span><span>150 / burst</span></div>
           <div class="loadout-stat"><span>Magazine</span><span>8 shells</span></div>
@@ -2968,91 +3123,220 @@
       </div>
     </div>
 
+    <!-- ── INTEL RECORDS: recovered-document terminal ───────────────────── -->
     <div class="ov-panel" id="intelPanel" data-menu-panel="intel">
       <div class="ov-brief-header">
         <div class="ov-tag cyan">Intel Records</div>
         <div class="ov-tag red">Recovered Data</div>
-        <div class="ov-brief-line"></div>
       </div>
 
-      <div class="ov-panel-title">Breach Dossier</div>
-      <div class="ov-panel-copy">In 1994 the city went dark for eleven minutes. Every light, every clock, every heart monitor. The official record calls it a grid failure. The record is wrong. Something was rewiring the block — and it has been rewiring it every tenth wave since. You died finding that out. The Echo restarted you to finish the report.</div>
+      <div class="intel-shell">
+        <!-- Record index -->
+        <aside class="intel-rail">
+          <div class="intel-rail-head">
+            <span class="intel-case">CASE UNK-94-11</span>
+            <span class="intel-class">RESTRICTED</span>
+          </div>
 
-      <div class="op-strip">
-        <div class="op-pill"><b>01</b>Operator Status: Revived</div>
-        <div class="op-pill"><b>02</b>Grid: Compromised</div>
-        <div class="op-pill"><b>03</b>Blackout Cycle: Every 10th Wave</div>
-        <div class="op-pill"><b>04</b>The Choir: Active</div>
-      </div>
+          <div class="intel-group">Site</div>
+          <button type="button" class="intel-entry is-active" data-record="minutes" data-tier="site">
+            <span class="intel-code">UNK-01</span><span class="intel-name">The Eleven Minutes</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="room" data-tier="site">
+            <span class="intel-code">UNK-02</span><span class="intel-name">Room Spec</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="city" data-tier="site">
+            <span class="intel-code">UNK-03</span><span class="intel-name">Perimeter</span>
+          </button>
 
-      <div class="ov-section-title">Echo — Neural Reconstruction</div>
-      <div class="mind-map">
-        <div class="mind-branch left">
-          <div class="mind-node">
-            <strong>The Blackouts</strong>
-            <span>Every tenth wave the power dies and the sky catches fire. Instruments log it as a solar event happening below the roofline, which is impossible, which is the point. It is not weather. It is maintenance. The city is a machine that must be stopped to be adjusted — and the things that adjust it do not leave witnesses. They hunt faster in the dark. They hit harder. And the Echo pays double for every one you drop while the grid is open. It believes they are exposed mid-shift. Prove it.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Echo</strong>
-            <span>It lives between stations, on a frequency the war decommissioned. It does not speak in sentences — it speaks in urgency, straight into the wet parts of your skull. It restarted your heart for a reason it has not fully disclosed: the dead carry a clean copy of the signal that killed them, and you are the only copy left that can still hold a rifle.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The City</strong>
-            <span>Walk to the barricades and look past them. The district runs for miles and nobody lives there. Windows lit on timers. Cars that never rust. Rain that never lands. It is a set — an antenna dressed as a skyline. The block you can walk is the only part of the machine that is real. Or the only part they let render. The Echo will not say which possibility scares it more.</span>
-          </div>
-        </div>
+          <div class="intel-group">Signal</div>
+          <button type="button" class="intel-entry" data-record="echo" data-tier="signal">
+            <span class="intel-code">UNK-04</span><span class="intel-name">The Echo</span>
+          </button>
 
-        <div class="mind-core">
-          <div class="mind-brain" aria-hidden="true">
-            <svg viewBox="0 0 220 150" width="100%" height="132" fill="none">
-              <path class="mb-outline" d="M32 84 C24 58 44 32 72 28 C84 12 122 10 136 24 C168 16 196 34 198 60 C214 74 208 100 192 108 C188 124 166 136 146 131 C130 145 96 146 82 134 C56 140 32 126 30 106 C20 100 18 92 32 84 Z"/>
-              <path class="mb-stem" d="M112 138 L112 150 M104 144 L120 144"/>
-              <path class="mb-syn s1" d="M50 80 C70 60 92 66 108 52"/>
-              <path class="mb-syn s2" d="M108 52 C132 44 152 58 172 66"/>
-              <path class="mb-syn s3" d="M60 104 C86 96 112 104 138 92"/>
-              <path class="mb-syn s4" d="M138 92 C156 86 170 94 182 88"/>
-              <path class="mb-syn s5" d="M76 44 C82 66 74 88 88 112"/>
-              <path class="mb-syn s6" d="M148 40 C142 62 152 84 142 110"/>
-              <circle class="mb-node n1" cx="50" cy="80" r="3"/>
-              <circle class="mb-node n2" cx="108" cy="52" r="4"/>
-              <circle class="mb-node n3" cx="172" cy="66" r="3"/>
-              <circle class="mb-node n4" cx="60" cy="104" r="3"/>
-              <circle class="mb-node n5" cx="138" cy="92" r="4"/>
-              <circle class="mb-node n6" cx="182" cy="88" r="2.5"/>
-              <circle class="mb-node n7" cx="76" cy="44" r="2.5"/>
-              <circle class="mb-node n8" cx="148" cy="40" r="3"/>
-              <circle class="mb-node n9" cx="88" cy="112" r="3"/>
-              <circle class="mb-node n10" cx="142" cy="110" r="2.5"/>
-            </svg>
-          </div>
-          <div class="mind-core-tag">Primary Objective</div>
-          <strong>The Room</strong>
-          <span>A sealed chamber under the plaza, built to hold information, not prisoners. Thirty years ago it broadcast a single word on the dead frequency, and the first wave answered. The door was not broken open. It was invited open. Clear the waves, keep the block, and find out who sent the invitation — because the Echo is certain of exactly one thing: it was not us.</span>
-        </div>
+          <div class="intel-group">Hostiles</div>
+          <button type="button" class="intel-entry" data-record="drones" data-tier="hostile">
+            <span class="intel-code">UNK-05</span><span class="intel-name">Siege Drones</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="ghosts" data-tier="hostile">
+            <span class="intel-code">UNK-06</span><span class="intel-name">Cloned Ghosts</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="returned" data-tier="hostile">
+            <span class="intel-code">UNK-07</span><span class="intel-name">The Returned</span>
+          </button>
+          <button type="button" class="intel-entry" data-record="choir" data-tier="hostile">
+            <span class="intel-code">UNK-08</span><span class="intel-name">The Choir</span>
+          </button>
+        </aside>
 
-        <div class="mind-branch right">
-          <div class="mind-node">
-            <strong>Siege Drones</strong>
-            <span>Recovery units from the original grid crews, re-tasked by whatever runs the schedule now. They were built to retrieve assets from hostile environments. Tonight the hostile environment is you. Engage at range — their arc weaponry does not miss at contact distance, and they always know where you are standing. The room tells them.</span>
-          </div>
-          <div class="mind-node">
-            <strong>Cloned Ghosts</strong>
-            <span>The chamber read your biometrics while you were dead on its floor, and it printed copies. They move like you. They shoot like a version of you that died afraid. They know every angle of the block because they were compiled from your memory of it. Pressure them — copies break under pressure. Try not to think about what that implies.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Returned</strong>
-            <span>The crews that worked the grid before your team. The city does not bury its dead — it re-tasks them, and after thirty years of blackout shifts there is not much left to re-task. They come in close, they come in numbers, and they scream on the way. The Echo asks that you be efficient. Some of them were colleagues.</span>
-          </div>
-          <div class="mind-node">
-            <strong>The Choir</strong>
-            <span>Warden. Seraph. Cherub. They arrive when the sky burns — the shift supervisors of the blackout. The field teams called them angels because of the light. The survivors called them nothing at all, because survivors of the Choir do not talk. The Warden judges from range. The Seraph flanks through folded space. The Cherub collapses the safe ground under your feet. They are not defending the city. They are defending the schedule.</span>
-          </div>
-        </div>
+        <!-- Selected record -->
+        <section class="intel-doc" id="intel-doc">
 
-        <div class="mind-foot">
-          <strong>Last Transmission — Echo, timestamp unknown</strong>
-          <span>"Eleven minutes, every cycle, for thirty years. Eight million people and nobody noticed. You noticed. That is why they stopped your heart, and that is why I started it again. When the sky burns, the machine is open. Aim at the light."</span>
-        </div>
+          <article class="intel-record is-active" data-record="minutes" data-tier="site" data-stamp="CLOSED">
+            <div class="intel-doc-kicker">Incident Log · Containment Authority · Tape 3 of 4</div>
+            <h3 class="intel-doc-title">The Eleven Minutes</h3>
+            <dl class="intel-meta">
+              <div><dt>Filed</dt><dd>Case ref 94-11</dd></div>
+              <div><dt>Duration</dt><dd>00:11:00 exact</dd></div>
+              <div><dt>Integrity</dt><dd>72% — tape stretch</dd></div>
+              <div><dt>Disposition</dt><dd>Closed, "equipment fault"</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Nine clocks on nine separate circuits stopped inside the same second and restarted inside the same second, eleven minutes later. No shared power source. No shared fault path. The report does not explain the eleven minutes. It does not attempt to.</p>
+              <p>Equipment fault has a form. This has been filed as equipment fault four times.</p>
+              <p>It repeats. Same eleven minutes, same clocks, every tenth cycle since. No second report has ever been filed.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Verbatim — dispatch channel 2</div>
+              <p><span class="tc">02:47:13</span> "Confirm you're dark."</p>
+              <p><span class="tc">02:47:16</span> "Dark. Everything's dark."</p>
+              <p><span class="tc">02:58:13</span> "…back. Eleven on the nose. Who logged eleven?"</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="room" data-tier="site" data-stamp="SEALED">
+            <div class="intel-doc-kicker">Works Record · Room Specification · Drawing set 6</div>
+            <h3 class="intel-doc-title">The Room</h3>
+            <dl class="intel-meta">
+              <div><dt>Built</dt><dd>Predates current seal</dd></div>
+              <div><dt>Stated use</dt><dd>Archive, dry storage</dd></div>
+              <div><dt>Access</dt><dd>One door. No lock listed.</dd></div>
+              <div><dt>Integrity</dt><dd>Drawings complete</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Walls exceed storage spec by a margin the drawings don't account for. No shelving in any revision. Door rated to three tonnes, hinged outward into the corridor — a swing that fails fire code and was approved anyway. No objection on file.</p>
+              <p>An outward swing keeps something in from being blocked on its way out. It does not keep anything out.</p>
+              <p>The seal has held on this door for every cycle on record but one.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Margin note, drawing 6.14 — unsigned</div>
+              <p>"Client insists on the outward swing. Told him it fails code. He said fire wasn't the concern."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="city" data-tier="site" data-stamp="RESTRICTED">
+            <div class="intel-doc-kicker">Field Note · Perimeter, two junctions out</div>
+            <h3 class="intel-doc-title">Beyond the Seal</h3>
+            <dl class="intel-meta">
+              <div><dt>Surveyed</dt><dd>Two nights, on foot</dd></div>
+              <div><dt>Contact made</dt><dd>None</dd></div>
+              <div><dt>Standing order</dt><dd>Do not walk it alone</dd></div>
+              <div><dt>Integrity</dt><dd>Notebook recovered intact</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Radios hold to the first junction and drop past it. Windows are lit on timers, not by anyone home — same cycle, every night, no variation. Cars are parked exactly as they were parked the first night. No rust. No movement.</p>
+              <p>Past the second junction the street repeats. Same corner, same three storefronts, however far you walk it.</p>
+              <p>The standing order exists because of night two, not night one. Nobody currently on this posting will discuss night two.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Last notebook page</div>
+              <p>"Walked two hours out. Ended back at the seal without turning around. Not filing this. Not going back out there alone."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="echo" data-tier="signal" data-stamp="ONGOING">
+            <div class="intel-doc-kicker">Signal Intercept · Dead band · Ongoing</div>
+            <h3 class="intel-doc-title">The Echo</h3>
+            <dl class="intel-meta">
+              <div><dt>Band</dt><dd>Decommissioned, pre-seal</dd></div>
+              <div><dt>Carrier</dt><dd>None detected</dd></div>
+              <div><dt>Reception</dt><dd>Confirmed, method unclear</dd></div>
+              <div><dt>Integrity</dt><dd>Transcribed twice, independently</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>No carrier signal, no waveform, nothing an instrument will register — and two operators on separate shifts logged the same phrases without comparing notes. That is the entire case file.</p>
+              <p>It restarted your heart during the last breach. There is no entry explaining the mechanism. There is an entry confirming it happened.</p>
+              <p>Standing theory, unconfirmed: it is not speaking to you. It is playing something back.</p>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Fragments — order uncertain</div>
+              <p><span class="tc">—</span> "You're late."</p>
+              <p><span class="tc">—</span> "When the seal opens, so does the room."</p>
+              <p><span class="tc">—</span> "Aim at the light. Not at me."</p>
+            </blockquote>
+          </article>
+
+          <article class="intel-record" data-record="drones" data-tier="hostile" data-stamp="LOW RISK">
+            <div class="intel-doc-kicker">Asset Record · Salvage tag GA-114 · Re-tasked</div>
+            <h3 class="intel-doc-title">Siege Drones</h3>
+            <dl class="intel-meta">
+              <div><dt>Origin</dt><dd>Recovery-unit hardware</dd></div>
+              <div><dt>Built for</dt><dd>Asset retrieval, hazard sites</dd></div>
+              <div><dt>Armament</dt><dd>Arc discharge, contact range</dd></div>
+              <div><dt>Threat</dt><dd>Low alone. Never alone.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Serial plates still legible under the scorch. Built to enter a hazard site and carry something valuable back out. Tasking hasn't changed since re-purposing — only the definition of "asset."</p>
+              <p><strong>Engagement:</strong> keep them past contact range and they're a non-issue — the arc has no reach, and it has never missed inside it. They don't search. They path straight to a target through walls they can't see through. Something else is doing the tracking.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="ghosts" data-tier="hostile" data-stamp="HIGH RISK">
+            <div class="intel-doc-kicker">Observation Series · Trials 1–9 · Room floor</div>
+            <h3 class="intel-doc-title">Cloned Ghosts</h3>
+            <dl class="intel-meta">
+              <div><dt>Template</dt><dd>Operator, post-mortem</dd></div>
+              <div><dt>Print time</dt><dd>Under 40 seconds</dd></div>
+              <div><dt>Fidelity</dt><dd>Movement 1:1 · judgement degraded</dd></div>
+              <div><dt>Threat</dt><dd>High. Knows your habits.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Prints from a read taken while you were down on the floor, not from a live feed — it has been replaying that read since. Same angles you hold. Same corner you pre-fire. Same breaks for cover, half a second early, because it isn't deciding. It's repeating.</p>
+              <p>That's also the exploit. Nine trials, nine identical flanks: pressure it and it commits to the route you would have taken, which means you already know where it lands.</p>
+              <p>Trial 6 stopped in the doorway and didn't fire, for four seconds. Not repeated since. Not attempted since, either.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="returned" data-tier="hostile" data-stamp="NUMBERS">
+            <div class="intel-doc-kicker">Personnel · Prior-cycle roster</div>
+            <h3 class="intel-doc-title">The Returned</h3>
+            <dl class="intel-meta">
+              <div><dt>Names on file</dt><dd>31</dd></div>
+              <div><dt>Marked deceased</dt><dd>31</dd></div>
+              <div><dt>Marked buried</dt><dd>0</dd></div>
+              <div><dt>Threat</dt><dd>Close range. Numbers.</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Every name on this file is marked deceased. None are marked buried. Prior-cycle personnel are re-tasked, not replaced, and after enough cycles there isn't much left to re-task.</p>
+              <p>They come in close, in numbers, and they announce themselves the whole way — which isn't a war cry. It's the sound of being made to walk.</p>
+              <p><strong>Engagement:</strong> the call plants them for a beat before they move. Take that beat or lose the spacing.</p>
+              <p>Standing order: efficient engagement. Some of them held this post before you.</p>
+            </div>
+          </article>
+
+          <article class="intel-record" data-record="choir" data-tier="hostile" data-stamp="EXTREME">
+            <div class="intel-doc-kicker">Threat Assessment · Blackout cycle only · Confidence low</div>
+            <h3 class="intel-doc-title">The Choir</h3>
+            <dl class="intel-meta">
+              <div><dt>Seen</dt><dd>Every tenth cycle</dd></div>
+              <div><dt>Field name</dt><dd>"Angels" — from the light</dd></div>
+              <div><dt>Survivor accounts</dt><dd>Two. Neither has spoken since.</dd></div>
+              <div><dt>Threat</dt><dd>Extreme</dd></div>
+            </dl>
+            <div class="intel-body">
+              <p>Arrive when the cycle blacks out. Leave when the seal closes. They are not defending the room. They are enforcing the interval.</p>
+              <div class="intel-subgrid">
+                <div class="intel-sub">
+                  <strong>Warden</strong>
+                  <span>Judges from range. Marks the ground you're about to stand on, then walks a barrage across the correction. The bulwark displaces, it doesn't kill — herding, not swinging.</span>
+                </div>
+                <div class="intel-sub">
+                  <strong>Seraph</strong>
+                  <span>Leaves before it strikes. Phases out, lands on your flank, leaves an afterimage where you last looked. Shoot the standing image and you've already lost the exchange.</span>
+                </div>
+                <div class="intel-sub">
+                  <strong>Cherub</strong>
+                  <span>Collapses safe ground inward until there's none left, drops a field that kills sprint and reload together. Never lands a hit itself. Arranges for the others to.</span>
+                </div>
+              </div>
+            </div>
+            <blockquote class="intel-excerpt">
+              <div class="intel-excerpt-tag">Note appended by the Echo</div>
+              <p>"Same eleven minutes, every cycle. Nobody outside the seal has noticed. You did. That's why I restarted you."</p>
+            </blockquote>
+          </article>
+
+        </section>
       </div>
     </div>
 

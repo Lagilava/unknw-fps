@@ -41,6 +41,7 @@ export const CATEGORIES = [
   "quality",
   "debug",
   "cutscenes",
+  "cinematic",
 ];
 
 export const CATEGORY_LABELS = {
@@ -55,6 +56,7 @@ export const CATEGORY_LABELS = {
   quality: "Performance",
   debug: "Debug / Preview",
   cutscenes: "Cutscenes",
+  cinematic: "Cinematic Grade",
 };
 
 // Categories that require a full geometry/lighting/collision rebuild to take
@@ -220,15 +222,6 @@ export const DEFAULTS = {
       equipTime: 0.24, muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
       recoilKick: 36, recoilYaw: 84, recoilRoll: 66,
     },
-    railgun: {
-      magazine: 3, ammo: 18, fireRate: 1.45, reloadTime: 1.9,
-      adsFov: 24, adsInSpeed: 7.6, adsOutSpeed: 6.6, adsMovePenalty: 0.24,
-      damage: 430, pellets: 1, spread: 0.001,
-      moveSpeedMul: 0.82, swayMul: 1.6, shakeMul: 1.5, driftMul: 0.6,
-      bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
-      equipTime: 0.55, muzzleFlashScale: 1.2, muzzleFlashTime: 0.14,
-      recoilKick: 78, recoilYaw: 150, recoilRoll: 96,
-    },
     flak: {
       magazine: 8, ammo: 64, fireRate: 0.52, reloadTime: 1.7,
       adsFov: 74, adsInSpeed: 9.8, adsOutSpeed: 7.4, adsMovePenalty: 0.14,
@@ -325,6 +318,32 @@ export const DEFAULTS = {
     blackoutDurB: 6.0,        // hero arc + the pack advancing
     blackoutHandoffDur: 0.45, // cut-on-action settle into gameplay
     blackoutSunTiltFov: 83,   // sun-reveal shot FOV
+  },
+
+  // Cinematic post-processing grade (the opt-in "Cinematic" toggle). Mirrors the
+  // Snyder-style values hand-tuned in three_fps_game.ts so a developer can retune
+  // the whole look — grade, bloom, chroma, motion blur, exposure — live. Only
+  // affects the CINEMATIC path; the always-on default grade is never touched.
+  cinematic: {
+    exposureMul: 0.66,      // scene exposure multiplier while cinematic is on
+    contrast: 1.05,         // S-curve strength (higher = punchier)
+    desaturate: 0.35,       // pull toward grey (bleach-bypass); 0 = full colour
+    darken: 0.86,           // overall multiply (lower = broodier)
+    blackCrush: 0.045,      // deepen shadows toward zero (no lift)
+    gloss: 1,               // in-shader highlight glow amount
+    vignette: 0.34,         // edge darkening strength
+    grain: 0.01,            // film grain amount
+    shadowR: -0.068, shadowG: 0.02, shadowB: -0.02,   // shadow tint
+    highR: 0.2,    highG: 0.018,  highB: 0.106,       // highlight tint
+    bloomStrength: 0.22,    // UnrealBloom strength
+    bloomThreshold: 0.9,    // only pixels brighter than this bloom
+    bloomRadius: 1,         // bloom spread
+    chromaIntensity: 0.1,   // chromatic aberration amount (edge fringe)
+    chromaOffset: 0.0016,   // chromatic aberration RGB split distance
+    motionBlurMax: 0.6,     // max motion-blur trail (afterimage damp cap)
+    motionBlurTurn: 1.1,    // how much camera TURNING drives blur
+    motionBlurMove: 1,      // how much camera MOVEMENT drives blur
+    cssContrast: 1.2, cssSaturate: 1.14, cssBrightness: 0.74, // WebGL CSS companion
   },
 };
 
@@ -526,6 +545,32 @@ export function sanitizeCategory(category, raw) {
         blackoutDurB: Math.max(0.5, num(src.blackoutDurB, def.blackoutDurB)),
         blackoutHandoffDur: Math.max(0.1, num(src.blackoutHandoffDur, def.blackoutHandoffDur)),
         blackoutSunTiltFov: Math.max(10, Math.min(120, num(src.blackoutSunTiltFov, def.blackoutSunTiltFov))),
+      };
+    }
+    case "cinematic": {
+      const t = (v, d) => Math.max(-0.2, Math.min(0.2, num(v, d))); // split-tone tint clamp
+      return {
+        exposureMul: Math.max(0.3, Math.min(2.0, num(src.exposureMul, def.exposureMul))),
+        contrast: Math.max(0.5, Math.min(2.5, num(src.contrast, def.contrast))),
+        desaturate: Math.max(0, Math.min(1, num(src.desaturate, def.desaturate))),
+        darken: Math.max(0.3, Math.min(1.3, num(src.darken, def.darken))),
+        blackCrush: Math.max(0, Math.min(0.15, num(src.blackCrush, def.blackCrush))),
+        gloss: Math.max(0, Math.min(2, num(src.gloss, def.gloss))),
+        vignette: Math.max(0, Math.min(1, num(src.vignette, def.vignette))),
+        grain: Math.max(0, Math.min(0.12, num(src.grain, def.grain))),
+        shadowR: t(src.shadowR, def.shadowR), shadowG: t(src.shadowG, def.shadowG), shadowB: t(src.shadowB, def.shadowB),
+        highR: t(src.highR, def.highR), highG: t(src.highG, def.highG), highB: t(src.highB, def.highB),
+        bloomStrength: Math.max(0, Math.min(2, num(src.bloomStrength, def.bloomStrength))),
+        bloomThreshold: Math.max(0, Math.min(1, num(src.bloomThreshold, def.bloomThreshold))),
+        bloomRadius: Math.max(0, Math.min(1.5, num(src.bloomRadius, def.bloomRadius))),
+        chromaIntensity: Math.max(0, Math.min(1, num(src.chromaIntensity, def.chromaIntensity))),
+        chromaOffset: Math.max(0, Math.min(0.03, num(src.chromaOffset, def.chromaOffset))),
+        motionBlurMax: Math.max(0, Math.min(0.9, num(src.motionBlurMax, def.motionBlurMax))),
+        motionBlurTurn: Math.max(0, Math.min(20, num(src.motionBlurTurn, def.motionBlurTurn))),
+        motionBlurMove: Math.max(0, Math.min(20, num(src.motionBlurMove, def.motionBlurMove))),
+        cssContrast: Math.max(0.5, Math.min(2, num(src.cssContrast, def.cssContrast))),
+        cssSaturate: Math.max(0, Math.min(2, num(src.cssSaturate, def.cssSaturate))),
+        cssBrightness: Math.max(0.3, Math.min(1.5, num(src.cssBrightness, def.cssBrightness))),
       };
     }
     default:

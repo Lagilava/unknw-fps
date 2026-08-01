@@ -86,6 +86,58 @@ Three.js is imported as an ES module inside `three_fps_game.js` (Vite bare impor
 - **Rebrand**: user-facing name is UNKNW; `window.RoomBreachEnvironment` and internal
   names deliberately unchanged (API contract across classic scripts).
 
+## Menu shell (Halo CE style) — `menu_halo.css`
+
+The main menu and loading screen are a **Halo: Combat Evolved** homage built on the
+game's own assets. One shared stylesheet, `menu_halo.css`, is linked **last** in both
+HTML entry points and overrides the older two-column menu; panel *internals*
+(`.ov-panel-title`, `.flow-card`, `.loadout-card`, `#mp-panel`) are untouched.
+
+- **Loading screen**: pure black, "UNKNW" glowing blue, status + percent + a hairline
+  bar under it. All the legacy chrome (grid, rings, brackets, segment strip,
+  platform/build footer, the card behind the wordmark) is hidden. The legacy sheet
+  sets `.ls-title-breach` colour with `!important`, so the override needs it too.
+- **Main menu**: `#overlay` is transparent and the **live game scene renders behind
+  it** — `menuCam` (a second camera, so the player rig is never touched) slowly orbits
+  the plaza statue, framed by measuring the real model (`frameMenuSubject()` off
+  `perkMachineState.station`) and aimed off-centre so the list sits on open sky.
+  Diagnose with `window.__rbMenuCam()`.
+- `menuBackdropActive()` requires `bootComplete`, the overlay visible, and
+  `overlay.dataset.mode !== "pause"` — **pausing keeps the frozen gameplay view.**
+  It renders through the composer (camera swap only, never a pipeline swap) so post
+  passes stay compiled; the first `MENU_WARM_FRAMES` frames render the player camera.
+- **Panel state lives on `overlay.dataset.panel`.** `"root"` = the Halo landing state
+  (list only, no sub-screen); CSS keys off `#overlay[data-panel="root"]`. Nav order:
+  New Mission / Multiplayer / Loadout / Briefing / Settings / Intel Records /
+  Model Editor / Quit. ↑/↓/Enter drive the list, Esc backs out of a sub-screen —
+  that listener is **capture-phase and calls `stopPropagation()`**, or the same Esc
+  press would also hit the game's pause/resume handler.
+- The HUD is hidden whenever `<body>` lacks `gameplay-view` (it used to be covered by
+  the opaque menu).
+
+### Settings screen (`#settingsPanel`)
+
+Video / Audio / Controls, all applied live and persisted via `saveSettings`:
+- **Video** — renderer backend (`localStorage.rb_renderer`, reloads), resolution cap
+  (`quality.maxScale`), brightness (`userBrightness` → `baseToneMappingExposure`),
+  FOV offset (`userFovOffset`, cancelled out as ADS blends in), cinematic FX (drives
+  the legacy hidden `#cinematic-toggle` so the PvP lock stays authoritative), perf overlay.
+- **Audio** — master plus three **real Web Audio sub-buses** (`weapons` / `voices` /
+  `world`) feeding the compressor. Synth voices pick a bus through `connectWithPan`,
+  which reads an ambient `sfxCategory` set by `inSfxCategory(...)` at the few call
+  sites that own a category; the Howler sample layer has no graph to splice, so the
+  same numbers are folded into per-play volumes (`audioEngine.fire(gun, mul)`).
+  Plus mute-when-unfocused.
+
+### Intel Records (`#intelPanel`)
+
+A recovered-document terminal: an index rail of file codes on the left, the selected
+record on the right. Each of the eight records is a **different kind of document**
+(incident log, works drawing, field survey, signal intercept, asset tag, observation
+series, personnel roster, threat assessment) with its own metadata fields and voice —
+that variety is the point, an earlier version read as eight identical prose boxes.
+Selection is wired by `installIntelRecords()`.
+
 ## Developer Engine & Preset System
 
 A centralized, versioned config layer lets developers tune the game from a
@@ -245,6 +297,44 @@ the over-shoulder camera always on. It makes `setThirdPersonEnabled` ignore
 `false` (ADS stays in TP), and `thirdPerson.enabled` default `true`. The FP
 viewmodel/body is never shown (also saves its per-frame work). Set the flag
 `false` to restore switchable FP/TP. Diagnose with `window.__rbView()`.
+
+## Particle FX (`modules/particle_fx.ts`)
+
+All particle effects run through **one pooled GPU system costing exactly two draw
+calls**, replacing the old pool that allocated a `THREE.Mesh` per particle and so
+capped the whole game at 36 particles (36 draws).
+
+- **Two permanent `THREE.Points` layers** added to the scene at boot and never
+  toggled: `particleFX:add` (additive — sparks, embers, energy, flash) and
+  `particleFX:alpha` (smoke, dust, blood, debris). Particles live in flat SoA
+  typed arrays that *are* the GPU attribute buffers; dead slots are parked
+  off-screen so the draw range — and the compiled program — never changes.
+- **Vocabulary:** `PRESETS` (spark, flash, ember, dust, smoke, debris, bloodMist,
+  blood, energy, energyCore) compose into `EFFECTS` (`bulletWall`, `bulletFlesh`,
+  `bulletMetal`, `headshot`, `enemyDeath`, `energyImpact`, `explosion`).
+  Each preset animates size, colour, alpha and falloff hardness over life, with
+  gravity, drag and floor bounce.
+- **Call sites:** `spawnImpactParticles(pos, normal, strength, kind)` — the old
+  signature still works; the third argument is now a *strength* multiplier (call
+  sites always passed fractional values anyway) and the fourth picks the effect.
+- **No lights, ever.** Bursts fake their flash with a bright additive `flash`
+  particle. See the light-count invariant below — that is why enemy/impact
+  lights do not exist.
+- **Backend split:** WebGL gets the GLSL point-sprite `ShaderMaterial`; WebGPU
+  (mobile default) gets a `PointsMaterial` fallback, because three r166's WebGPU
+  backend cannot compile a ShaderMaterial (`sanitizeWebGPUMaterials` strips
+  them). Do NOT add `<tonemapping_pars_fragment>` / `<colorspace_pars_fragment>`
+  to the shader — three already injects both into every ShaderMaterial prefix and
+  re-including them is a "function already has a body" link error.
+- **Ageing uses real `dt`; only motion integration uses a clamped step.** Ageing
+  on the clamped step made a slow frame hold particles alive proportionally
+  longer, so heavy overdraw sustained itself instead of draining.
+- **Diagnostics:** `window.__rbParticles()` (live/capacity + per-layer state) and
+  `window.__rbFx(kind, distance)` to fire an effect in front of the camera for
+  tuning. Test: `.tools/particles.spec.cjs`.
+- **Testing note:** particles age in *game* time and headless Chrome runs this
+  scene at ~2.5 fps, so never assert "drained" after a fixed `waitForTimeout` —
+  poll with `waitForFunction`.
 
 ## Performance notes (perf-critical)
 

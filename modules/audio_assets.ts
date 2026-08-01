@@ -57,6 +57,39 @@ export const SFX_MANIFEST = {
   lightning:    "./assets/audio/sfx/lightning.ogg",
 };
 
+// ── Howler sample layer (real recorded SFX) ────────────────────────────────
+// High-quality recorded one-shots/loops played through modules/audio_engine.ts
+// (Howler.js). These take priority over the synth voices; if Howler fails to
+// load or a file is missing, the game silently falls back to its synth SFX.
+//
+//  • fire_loop  — a SEAMLESS full-auto loop, re-pitched per automatic weapon
+//    (rifle/smg/lmg/akimbo) so sustained fire is continuous, not retriggered.
+//  • fire_*     — semi-auto one-shots (pistol/shotgun/sniper/dmr).
+//  • reload     — one recorded reload, TIME-FIT to each gun's reloadTime at play.
+//  • spell_magic / spell_electric — elemental ability casts (Warden/Seraph/Cherub
+//    magic + generic lightning), re-pitched per ability in playSpell().
+export const HOWLER_MANIFEST: Record<string, { src: string; loop?: boolean; volume?: number }> = {
+  fire_loop:     { src: "./assets/sfx/moniker_subriquet-gunshot_smg_loop-203469.mp3", loop: true, volume: 0.8 },
+  fire_pistol:   { src: "./assets/sfx/mrfriends-pistol-shot-233473.mp3", volume: 0.9 },
+  fire_shotgun:  { src: "./assets/sfx/freesound_community-080902_shotgun-39753.mp3", volume: 0.95 },
+  fire_sniper:   { src: "./assets/sfx/freesound_community-sniper-rifle-5989.mp3", volume: 1.0 },
+  fire_dmr:      { src: "./assets/sfx/sovetsky_rastov72-fn-p90-sound-effect-265718.mp3", volume: 0.9 },
+  reload:        { src: "./assets/sfx/dragon-studio-gun-reload-2-511308.mp3", volume: 0.85 },
+  // Spell samples are pre-reverbed and long-tailed → kept deliberately quiet so
+  // repeated casts don't dominate the mix (playSpell attenuates further).
+  spell_magic:   { src: "./assets/sfx/rescopicsound-elemental-magic-spell-impact-outgoing-228342.mp3", volume: 0.5 },
+  spell_electric:{ src: "./assets/sfx/freesound_community-075681_electric-shock-33018.mp3", volume: 0.45 },
+  // A crisp sci-fi whoosh for teleport-flavoured casts (Blink Strike / Afterimage)
+  // — replaces the reverbed magic there so blinking reads sharp, not boomy.
+  whoosh:        { src: "./assets/sfx/floraphonic-scifi-anime-whoosh-91-207103.mp3", volume: 0.6 },
+  // Deep cyberpunk bass hit for grenade/heavy detonations.
+  explosion:     { src: "./assets/sfx/black_kumizhi-cyberpunk-bass-impact-effect-479138.mp3", volume: 0.9 },
+  // Zombie vocalisations (two variants, chosen at random), played non-overlapping
+  // via audioEngine.playSingle so long groans never stack on themselves.
+  zombie_voice_a:{ src: "./assets/sfx/dragon-studio-zombie-sound-357975.mp3", volume: 0.55 },
+  zombie_voice_b:{ src: "./assets/sfx/dragon-studio-zombie-sound-2-357976.mp3", volume: 0.55 },
+};
+
 // Announcer voice-over (played via announce(), min-gap so lines don't stack). Prefixed
 // "vo_" so VO names never collide with the SFX names above.
 export const VO_MANIFEST = {

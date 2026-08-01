@@ -23,11 +23,13 @@ import { registerEnemy, unregisterEnemy, setEnemyAlive, enemies as ecsEnemies, l
 import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsBlocksAt,
          initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE,
          initGrenadePool, throwGrenade, grenadeTranslation, grenadeRotation, despawnGrenade, GRENADE_POOL_SIZE } from "./modules/physics";
+import { createParticleFX, type ParticleFX } from "./modules/particle_fx";
 import { createStormWarden } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
 import { LANDMARKS } from "./modules/landmarks.js";
-import { SFX_MANIFEST, VO_MANIFEST } from "./modules/audio_assets.js";
+import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
+import { audioEngine } from "./modules/audio_engine.js";
 import { loadSettings, saveSettings } from "./modules/settings.js";
 import { createGLTFLoader as createConfiguredGLTFLoader } from "./modules/three_loaders.js";
 import {
@@ -98,6 +100,8 @@ declare module "three" {
   const { RenderPass } = await import("three/examples/jsm/postprocessing/RenderPass.js");
   const { ShaderPass } = await import("three/examples/jsm/postprocessing/ShaderPass.js");
   const { OutputPass } = await import("three/examples/jsm/postprocessing/OutputPass.js");
+  const { AfterimagePass } = await import("three/examples/jsm/postprocessing/AfterimagePass.js");
+  const { UnrealBloomPass } = await import("three/examples/jsm/postprocessing/UnrealBloomPass.js");
   THREE.Cache.enabled = true;
   RectAreaLightUniformsLib.init();
 
@@ -197,7 +201,7 @@ declare module "three" {
   const DEV_WEAPON_NUM_FIELDS = ["magazine", "ammo", "fireRate", "reloadTime", "adsFov",
     "adsInSpeed", "adsOutSpeed", "adsMovePenalty", "damage", "pellets", "spread",
     "moveSpeedMul", "swayMul", "shakeMul", "driftMul", "bloomGrow", "bloomMax", "bloomDecay",
-    "equipTime", "muzzleFlashScale", "muzzleFlashTime"];
+    "equipTime", "inspectTime", "muzzleFlashScale", "muzzleFlashTime"];
   function applyDevWeapons() {
     for (const gun of Object.keys(GUN_SPECS)) {
       const base = GUN_SPECS_BASE[gun];
@@ -271,6 +275,7 @@ declare module "three" {
     refreshDevCameraConsts();
     applyDevLightingLive();
     applyDevQualityLive();
+    applyDevCinematic();
     updateDevBanner();
     flashDevApplied();
   }
@@ -377,6 +382,8 @@ declare module "three" {
     restartBtn,
     loadoutBtn,
     loadoutPanel,
+    briefingBtn,
+    settingsBtn,
     intelBtn,
     multiplayerBtn,
     modelEditorBtn,
@@ -399,7 +406,15 @@ declare module "three" {
   } = createLoadingController(document);
 
   let renderer;
-  const baseToneMappingExposure = 1.16;
+  const BASE_TONE_MAPPING_EXPOSURE = 1.16;
+  // Player brightness (Settings → Video) multiplies the scene exposure. Every
+  // read goes through baseToneMappingExposure, so the whole exposure chain
+  // (cinematic mul, blackout lift, the per-frame ease) inherits it. Resolved
+  // from saved settings further down, once localStorage has been read.
+  let userBrightness = 1;
+  let baseToneMappingExposure = BASE_TONE_MAPPING_EXPOSURE;
+  // Player FOV offset (Settings → Video), added on top of the per-stance FOV.
+  let userFovOffset = 0;
 
   // ── Renderer backend selection ─────────────────────────────────────────────
   // Measured reality: three r166's experimental WebGPU path issues ~100× the
@@ -1017,12 +1032,14 @@ declare module "three" {
   // Phase 3 showcase: physics-driven debris burst on enemy death (Rapier dynamic
   // bodies rendered by one InstancedMesh — 1 draw call, no lights). Set false off.
   const PHYSICS_DEBRIS = true;
-  // Per-weapon shell-casing size (scale on the 0.16 debris cube). Smaller = tighter
-  // brass; shotgun/sniper eject visibly bigger shells than pistol/SMG.
+  // Per-weapon shell-casing size (scale on the small brass CylinderGeometry).
+  // Smaller = tighter brass; shotgun/sniper eject visibly bigger shells than
+  // pistol/SMG. Shrunk further from the original box-debris scales now that the
+  // base geometry itself already reads as a casing shape.
   const CASING_SCALES = {
-    [GUNS.PISTOL]: 0.13, [GUNS.SMG]: 0.12, [GUNS.AKIMBO]: 0.12,
-    [GUNS.RIFLE]: 0.16, [GUNS.DMR]: 0.19, [GUNS.SNIPER]: 0.24,
-    [GUNS.SHOTGUN]: 0.26, [GUNS.FLAK]: 0.24, [GUNS.LMG]: 0.20, [GUNS.RAILGUN]: 0.22,
+    [GUNS.PISTOL]: 0.34, [GUNS.SMG]: 0.32, [GUNS.AKIMBO]: 0.34,
+    [GUNS.RIFLE]: 0.72, [GUNS.DMR]: 0.8, [GUNS.SNIPER]: 0.88,
+    [GUNS.SHOTGUN]: 1.05, [GUNS.FLAK]: 0.95, [GUNS.LMG]: 0.78,
   };
   // Scale applied to the head bone to hide it in unified FP (the eye camera sits
   // inside the head). Skinned meshes ignore bone .visible, so we collapse the head
@@ -1121,6 +1138,14 @@ declare module "three" {
   // visible (a shorter far plane would clip the dome and blacken the sky).
   const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, devVal("camera", "near", 0.05), devVal("camera", "far", 480));
   camera.layers.enable(1);
+  // ── DEV/TEST-ONLY debug orbit camera (never used in gameplay) ────────────────
+  // When active, renderScene() renders from this camera orbiting the player torso
+  // instead of the gameplay camera, so verification screenshots can frame the body
+  // from the side/front at steep aim (where the over-shoulder cam looks at the sky
+  // and hides the hands). It does NOT touch yaw/pitch — the player's aim is unchanged.
+  const debugOrbitCam = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.05, 480);
+  debugOrbitCam.layers.enable(1);
+  const debugOrbit = { active: false, azimuth: 0, elevation: 0.15, dist: 4 };
   const yaw = new THREE.Object3D();
   const pitch = new THREE.Object3D();
   yaw.position.set(0, PLAYER_H, 0);
@@ -1171,10 +1196,12 @@ declare module "three" {
   const megaBlastEndTmp = new THREE.Vector3();
   const megaBlastMidTmp = new THREE.Vector3();
   const playerHitCenterTmp = new THREE.Vector3();
+  const playerTrueCenterTmp = new THREE.Vector3();
   const weaponClipDirTmp = new THREE.Vector3();
   const shotEnemyOffsetTmp = new THREE.Vector3();
   const thirdPersonForwardTmp = new THREE.Vector3();
   const thirdPersonRightTmp = new THREE.Vector3();
+  const _gunPitchAxisTmp = new THREE.Vector3();
   const thirdPersonHandTmp = new THREE.Vector3();
   // Unified-FP camera-relative weapon placement temps.
   const fpGunCamPos = new THREE.Vector3();
@@ -1287,7 +1314,6 @@ declare module "three" {
   const enemies = [];
   const pendingEnemyDeaths = [];
   const enemyRemovalQueue = [];
-  const particles = [];
   const tracers = [];
   const damageNumbers = [];
   const lightningEffects = [];
@@ -1418,7 +1444,8 @@ declare module "three" {
     viewBlend: 0,
     switchPulse: 0,
     lastMove: { f: 0, s: 0, sprinting: false, jumping: false },
-    aimBones: null,       // { rightUpperArm, leftUpperArm, rightForeArm, leftForeArm, spine }
+    aimBones: null,       // { rightUpperArm, leftUpperArm, rightForeArm, leftForeArm, spine, legs… }
+    footIK: { left: { locked: false, wx: 0, wz: 0, weight: 0 }, right: { locked: false, wx: 0, wz: 0, weight: 0 } },
     aimBlend: 0,          // 0 = animation-controlled carry, 1 = camera-tracked raised pose
     aimOffsets: [],       // procedural quaternions applied last frame, removed before mixer writes
     firePunch: 0,         // spring displacement for upward arm kick on fire
@@ -1428,6 +1455,9 @@ declare module "three" {
     gunLag: 0,            // rotational muzzle-lag spring (heavy guns trail turns)
     gunLagVel: 0,
     prevYawAngle: null,   // last-frame yaw, for the muzzle-lag spring input
+    inspecting: false,    // true while the inspect flourish is playing
+    inspectT: 0,          // 0 → 1 progress through the current inspect
+    inspectDuration: 1.4, // per-gun spec.inspectTime, set when inspect starts
   };
 
   // Starting loadout is the PISTOL — better guns come from the exterior mystery box.
@@ -1525,6 +1555,15 @@ declare module "three" {
   };
 
   const savedSettings = loadSettings();
+  // Resolve the video settings declared up by the renderer (they had to be
+  // hoisted there for the initial exposure write, before localStorage was read).
+  if (typeof savedSettings?.brightness === "number") {
+    userBrightness = Math.max(0.6, Math.min(1.6, savedSettings.brightness));
+    baseToneMappingExposure = BASE_TONE_MAPPING_EXPOSURE * userBrightness;
+  }
+  if (typeof savedSettings?.fovOffset === "number") {
+    userFovOffset = Math.max(-10, Math.min(20, savedSettings.fovOffset));
+  }
   const validLoadouts = new Set(Object.values(GUNS));
   // Progression: the loadout is always the starter pistol — every other gun is
   // acquired in-run from the mystery box, so it can no longer be picked here.
@@ -1543,6 +1582,22 @@ declare module "three" {
       time: { value: 0 },
       resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
       intensity: { value: 1 },
+      // Dev-tunable grade params (see the "cinematic" dev-console category).
+      uContrast:   { value: 1.05 },
+      uDesat:      { value: 0.35 },
+      uDarken:     { value: 0.86 },
+      uBlackCrush: { value: 0.045 },
+      uGloss:      { value: 1 },
+      uVignette:   { value: 0.34 },
+      uGrain:      { value: 0.01 },
+      uShadowTint: { value: new THREE.Vector3(-0.068, 0.02, -0.02) },
+      uHighTint:   { value: new THREE.Vector3(0.2, 0.018, 0.106) },
+      // Chromatic aberration, folded in from the old standalone ChromaticAberrationShader
+      // pass — same math, but one fewer full-screen shader pass (a real GPU-fill win;
+      // beta feedback was that cinematic shouldn't cost resolution, so it should at
+      // least not cost more passes than it needs to either).
+      uChromaOffset:    { value: 0.0016 },
+      uChromaIntensity: { value: 0 },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -1555,11 +1610,28 @@ declare module "three" {
       uniform sampler2D tDiffuse;
       uniform float time;
       uniform vec2 resolution;
+      uniform float uContrast, uDesat, uDarken, uBlackCrush, uGloss, uVignette, uGrain;
+      uniform vec3 uShadowTint, uHighTint;
       uniform float intensity;
+      uniform float uChromaOffset, uChromaIntensity;
       varying vec2 vUv;
 
       float hash(vec2 p) {
         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+
+      // Radial RGB-channel split (was its own ShaderPass). Early-outs to a single
+      // texture2D fetch when the effect is off, same as the pass being disabled.
+      vec3 chromaSample(sampler2D tex, vec2 uv, vec2 res, float offset, float amt) {
+        vec3 orig = texture2D(tex, uv).rgb;
+        if (amt <= 0.0001) return orig;
+        vec2 dir = uv - 0.5;
+        dir.x *= res.x / max(1.0, res.y);
+        float dist = length(dir);
+        vec2 n = dist > 0.0 ? dir / dist : vec2(0.0);
+        float o = offset * (0.5 + dist) * amt;
+        vec3 aberr = vec3(texture2D(tex, uv + n * o).r, orig.g, texture2D(tex, uv - n * o * 0.6).b);
+        return mix(orig, aberr, amt);
       }
 
       // Horizontal halation bloom — a single wide 5-tap box blur. The unequal tap
@@ -1577,115 +1649,68 @@ declare module "three" {
       }
 
       void main() {
-        // VHS tape wow/flutter: slight per-scanline horizontal jitter
-        float scanRow = floor(vUv.y * resolution.y);
-        float tapeWobble = (hash(vec2(scanRow, floor(time * 8.0))) - 0.5) * 0.0012
-                         + (hash(vec2(scanRow * 0.3, floor(time * 2.0))) - 0.5) * 0.0006;
-        vec2 uv = vec2(vUv.x + tapeWobble, vUv.y);
-        uv = clamp(uv, 0.001, 0.999);
+        // CINEMATIC GRADE (Snyder-style bleach-bypass by default). Every strength is a
+        // uniform driven by the "cinematic" dev-console category, so devs retune the
+        // whole look live. Only the CINEMATIC path uses this; the default grade is
+        // a separate CSS filter and is never touched here.
+        vec2 uv = clamp(vUv, 0.001, 0.999);
+        vec3 color = chromaSample(tDiffuse, uv, resolution, uChromaOffset, uChromaIntensity);
 
-        vec3 color = texture2D(tDiffuse, uv).rgb;
-        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        // --- Highlight glow (in-shader horizontal halation) ---
+        vec3 bloom = bloomX(tDiffuse, uv, 7.0);
+        float lumaB = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float bloomMask = smoothstep(0.55, 1.0, lumaB);
+        color += bloom * bloomMask * uGloss * intensity;
 
-        // --- Large-radius halation bloom (80s camera soft focus) ---
-        // Single wide blur; only bright pixels feed the halo.
-        vec3 bloom = bloomX(tDiffuse, uv, 9.0);
-        float bloomMask = smoothstep(0.30, 0.90, luma);
-        // Warm the bloom: push reds and strip blues (vintage tube camera look)
-        vec3 warmBloom = bloom * bloomMask;
-        warmBloom = vec3(warmBloom.r * 1.4, warmBloom.g * 0.95, warmBloom.b * 0.55);
-        color += warmBloom * 0.80 * intensity;
+        // --- Crush blacks (no lift), hard S-curve contrast ---
+        color = max(color - uBlackCrush * intensity, 0.0);
+        color = mix(color, clamp((color - 0.5) * uContrast + 0.5, 0.0, 1.0), intensity);
 
-        // --- Lift blacks: faded tape with milky shadow floor ---
-        // Adds a +0.08 floor so blacks never crush to pure zero (VHS head-clog look)
-        color = color * 0.88 + 0.07;
-
-        // --- Colour grade: warm peachy-magenta cast of 80s consumer cameras ---
+        // --- Bleach-bypass desaturation ---
         float luma2 = dot(color, vec3(0.2126, 0.7152, 0.0722));
-        // Partial desaturation — VHS chroma bandwidth was limited
-        color = mix(vec3(luma2), color, 0.72);
-        // Shadow: warm amber, not teal
-        float shadow    = 1.0 - smoothstep(0.07, 0.50, luma2);
-        float highlight = smoothstep(0.50, 1.00, luma2);
-        float midtone   = max(0.0, 1.0 - shadow - highlight);
-        color += shadow    * vec3(0.032, 0.014, -0.008);  // amber-brown shadows
-        color += highlight * vec3(0.055, 0.022, -0.038);  // warm peachy highlights
-        color += midtone   * vec3(0.024, 0.008, -0.014);  // peachy mids
+        color = mix(color, vec3(luma2), uDesat * intensity);
 
-        // --- Scanlines: alternating rows dim by ~12% ---
-        float scanline = mod(scanRow, 2.0) < 1.0 ? 0.89 : 1.0;
-        color *= mix(1.0, scanline, 0.55 * intensity);
+        // --- Split-tone: shadow + highlight tints, then overall darken ---
+        float shadow    = 1.0 - smoothstep(0.0, 0.5, luma2);
+        float highlight = smoothstep(0.5, 1.0, luma2);
+        color += shadow    * uShadowTint * intensity;
+        color += highlight * uHighTint   * intensity;
+        color *= mix(1.0, uDarken, intensity);
 
-        // --- Analogue noise: chunky VHS noise, coarser than film grain ---
-        float noiseT = floor(time * 18.0); // quantise time → chunky noise blocks
-        float noise1 = hash(vec2(floor(uv.x * resolution.x / 2.0), floor(uv.y * resolution.y / 2.0)) + noiseT) - 0.5;
-        float noise2 = hash(vec2(floor(uv.x * resolution.x / 4.0), floor(uv.y * resolution.y / 4.0)) + noiseT * 0.3) - 0.5;
-        color += (noise1 * 0.65 + noise2 * 0.35) * 0.085 * intensity;
+        // --- Fine film grain (per-pixel) ---
+        float g = hash(floor(uv * resolution) + floor(time * 24.0)) - 0.5;
+        color += g * uGrain * intensity;
 
-        // --- Oval vignette with warm brown tint at edges ---
+        // --- Vignette ---
         vec2 cUv = vUv - 0.5;
         cUv.x *= resolution.x / max(1.0, resolution.y);
-        float vigDist = dot(cUv * vec2(1.0, 0.78), cUv * vec2(1.0, 0.78)); // oval
-        float vignette = 1.0 - smoothstep(0.10, 0.82, vigDist);
-        // At edge, tint brown (VHS lens curvature absorbs blues)
-        float edgeTint = 1.0 - vignette;
-        color = mix(color * vignette, color * vec3(0.82, 0.72, 0.55) * vignette, edgeTint * 0.55 * intensity);
+        float vigDist = dot(cUv, cUv);
+        float vignette = 1.0 - smoothstep(0.14, 1.0, vigDist) * uVignette * intensity;
+        color *= vignette;
 
         gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
       }
     `,
   };
-  const ChromaticAberrationShader = {
-    uniforms: {
-      tDiffuse: { value: null },
-      resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-      offset: { value: 0.0025 },
-      intensity: { value: 0.72 },
-    },
-    vertexShader: `
-      varying vec2 vUv;
-
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform sampler2D tDiffuse;
-      uniform vec2 resolution;
-      uniform float offset;
-      uniform float intensity;
-      varying vec2 vUv;
-
-      void main() {
-        vec2 uv = vUv;
-        vec2 center = vec2(0.5, 0.5);
-        vec2 dir = uv - center;
-        dir.x *= resolution.x / max(1.0, resolution.y);
-        float dist = length(dir);
-        vec2 n = dist > 0.0 ? dir / dist : vec2(0.0);
-        float o = offset * (0.5 + dist) * intensity;
-        vec2 offR = n * o;
-        vec2 offB = -n * o * 0.6;
-
-        vec4 colR = texture2D(tDiffuse, uv + offR);
-        vec4 colG = texture2D(tDiffuse, uv);
-        vec4 colB = texture2D(tDiffuse, uv + offB);
-
-        vec3 aberr = vec3(colR.r, colG.g, colB.b);
-        vec3 orig = texture2D(tDiffuse, uv).rgb;
-        vec3 outCol = mix(orig, aberr, intensity);
-
-        gl_FragColor = vec4(outCol, 1.0);
-      }
-    `,
-  };
   const cinematicState: any = {
-    // Default OFF for performance: the cinematic grade runs 3–4 full-screen shader
-    // passes (RenderPass + grade + chroma + output) every frame — a big fill cost
-    // on weaker GPUs. Now opt-in: only on if the player explicitly enabled it
-    // (the pause-menu toggle persists savedSettings.cinematic = true).
-    enabled: savedSettings?.cinematic === true,
+    // Default ON (user request): the retro/VHS grade + motion blur is part of the
+    // intended look now. It runs several full-screen shader passes (grade+chroma
+    // combined into one pass, plus afterimage + bloom + output), a real fill cost
+    // on weak GPUs, so a player can still turn it OFF from the menu toggle
+    // (persisted as savedSettings.cinematic = false) and that choice is respected
+    // on the next load. See applyRenderScale / updateAdaptiveQuality: cinematic no
+    // longer forces a resolution cut — its GPU cost is paid in framerate instead.
+    enabled: savedSettings?.cinematic !== false,
+  };
+  // Resolved cinematic tuning (the non-shader bits: exposure, chroma, bloom, motion
+  // blur, CSS companion). Defaults mirror the built-in grade; applyDevCinematic()
+  // overlays the "cinematic" dev-console category on top. Referenced by
+  // getBaseExposure / applyCinematicSettings / updateMotionBlurDamp.
+  const cinematicCfg: any = {
+    exposureMul: 0.66, chromaIntensity: 0.1, chromaOffset: 0.0016,
+    bloomStrength: 0.22, bloomThreshold: 0.9, bloomRadius: 1,
+    motionBlurMax: 0.6, motionBlurTurn: 1.1, motionBlurMove: 1,
+    cssContrast: 1.2, cssSaturate: 1.14, cssBrightness: 0.74,
   };
   const cinematicControls = {
     toggles: Array.from(document.querySelectorAll("#cinematic-toggle")),
@@ -1985,30 +2010,77 @@ declare module "three" {
 
   // EffectComposer is WebGL-only in this renderer stack; WebGPU runs the main scene directly.
   let composer = null;
+  let cinematicRenderPass = null;
   let cinematicPass = null;
-  let chromaPass = null;
+  let afterimagePass = null;
+  let bloomPass = null;
   let darkWaveActive = false;
+  // Bloom is inherently a blurred, additive glow composited over the sharp base
+  // image — running its internal downsample/blur chain at a lower resolution
+  // than the main render is imperceptible (it's already heavily blurred) but
+  // cuts real GPU fill, unlike scaling the whole frame. EffectComposer.setSize
+  // always resizes every pass to the FULL composer size, so bloom's own size has
+  // to be reasserted after every setSize call — see the two call sites below.
+  const BLOOM_RES_SCALE = 0.5;
+  function applyBloomResolution() {
+    if (!bloomPass) return;
+    // Match the composer's own effective (pixel-ratio-scaled) size, just halved —
+    // composer.setSize() drives every pass at width*pixelRatio, so matching that
+    // basis keeps the bloom/main-render ratio constant across DPI and render scale.
+    const effRatio = basePixelRatio * quality.scale;
+    bloomPass.setSize(
+      Math.max(1, Math.round(window.innerWidth * effRatio * BLOOM_RES_SCALE)),
+      Math.max(1, Math.round(window.innerHeight * effRatio * BLOOM_RES_SCALE))
+    );
+  }
   function ensureCinematicComposer() {
     if (rendererBackend !== "webgl" || composer || !cinematicState.enabled) return;
     try {
       composer = new EffectComposer(renderer);
       const renderPass = new RenderPass(scene, camera);
+      // Kept so the menu backdrop can borrow the composer with its own camera —
+      // see renderScene. Rendering the menu OUTSIDE the composer left every post
+      // pass uncompiled until the first gameplay frame, which reintroduced the
+      // "New Mission" shader-link stall (.tools/shader-stability.spec.cjs).
+      cinematicRenderPass = renderPass;
+      // Motion blur (cheap frame-feedback afterimage) BEFORE the grade so the trails
+      // pick up the retro scanlines/grain/vignette on their way out. damp = how much
+      // of the previous frame persists; 0.78 is a visible smear on fast motion without
+      // ghosting the whole screen.
+      afterimagePass = new AfterimagePass(0.6);
+      // Glossy highlight bloom (the defining early-2000s music-video glow). Only bright
+      // pixels bloom (threshold 0.82) so it lifts practical/emissive highlights and the
+      // sun into a dreamy halo without washing the whole frame. Sits before the grade
+      // so the cross-process tinting colours the glow too. Runs at BLOOM_RES_SCALE — its
+      // 5-mip chain is inherently blurred already, so a lower base resolution costs no
+      // visible sharpness. (NOTE: UnrealBloomPass bakes NUM_MIPS into its composite
+      // shader's #define at construction time, so nMips can't be safely reduced after
+      // the fact without leaving stale mip textures in the composite — resolution is
+      // the only lever here.)
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth * BLOOM_RES_SCALE, window.innerHeight * BLOOM_RES_SCALE),
+        0.22, 0.5, 0.9
+      );
+      // Grade + chromatic aberration are one ShaderPass now (see CinematicGradeShader's
+      // uChromaOffset/uChromaIntensity) — used to be two full-screen passes.
       cinematicPass = new ShaderPass(CinematicGradeShader);
-      chromaPass = new ShaderPass(ChromaticAberrationShader);
       const outputPass = new OutputPass();
       composer.addPass(renderPass);
+      composer.addPass(afterimagePass);
+      composer.addPass(bloomPass);
       composer.addPass(cinematicPass);
-      composer.addPass(chromaPass);
       composer.addPass(outputPass);
       composer.setPixelRatio(basePixelRatio * quality.scale);
       composer.setSize(window.innerWidth, window.innerHeight);
+      applyBloomResolution();
       cinematicPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
-      if (chromaPass && chromaPass.uniforms && chromaPass.uniforms.resolution) chromaPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+      applyDevCinematic(); // seed grade/bloom/chroma uniforms from the dev-console category
     } catch (e) {
       console.warn('Failed to initialize cinematic postprocessing composer:', e);
       composer = null;
       cinematicPass = null;
-      chromaPass = null;
+      afterimagePass = null;
+      bloomPass = null;
       cinematicState.enabled = false;
     }
   }
@@ -2020,32 +2092,193 @@ declare module "three" {
       cinematicPass.enabled = cinematicState.enabled;
       cinematicPass.uniforms.intensity.value = cinematicState.enabled ? 1 : 0;
       cinematicPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+      // Whisper-only edge fringe by default (dev-tunable via cinematicCfg).
+      cinematicPass.uniforms.uChromaIntensity.value = cinematicState.enabled ? cinematicCfg.chromaIntensity : 0.0;
+      cinematicPass.uniforms.uChromaOffset.value = cinematicState.enabled ? cinematicCfg.chromaOffset : 0.0016;
     }
-    if (chromaPass) {
-      chromaPass.enabled = cinematicState.enabled;
-      chromaPass.uniforms.intensity.value = cinematicState.enabled ? 0.95 : 0.0;
-      if (chromaPass.uniforms.offset) chromaPass.uniforms.offset.value = cinematicState.enabled ? 0.0078 : 0.0025;
-      chromaPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+    if (afterimagePass) {
+      afterimagePass.enabled = cinematicState.enabled;
+      // damp=0 fully passes the current frame through (no trail) when disabled.
+      if (afterimagePass.uniforms?.damp) afterimagePass.uniforms.damp.value = cinematicState.enabled ? 0.6 : 0.0;
+    }
+    if (bloomPass) {
+      bloomPass.enabled = cinematicState.enabled;
+      bloomPass.strength = cinematicState.enabled ? cinematicCfg.bloomStrength : 0.0;
+      bloomPass.threshold = cinematicCfg.bloomThreshold;
+      bloomPass.radius = cinematicCfg.bloomRadius;
     }
     renderer.toneMappingExposure = getBaseExposure();
     // WebGPU path (no cinematicPass): faded, warm, dreamy 80s-VHS grade via cheap
     // GPU-composited CSS filter — lifted blacks (low contrast), reduced chroma,
     // warm sepia cast and a gentle brightness lift for the soft-focus dream feel.
     canvas.style.filter = cinematicState.enabled
-      // Cinematic = dark, moody, desaturated with a cool cast (much darker than default).
-      ? (cinematicPass ? "contrast(1.3) saturate(0.66) brightness(0.66)" : "contrast(1.34) saturate(0.58) brightness(0.58) hue-rotate(6deg)")
+      // Cinematic = glossy early-2000s music video: punchy contrast, saturated, a touch
+      // bright. On WebGL the shader owns the cross-process grade so CSS is a light
+      // companion; on WebGPU (no shader) CSS emulates the whole look on its own.
+      ? (cinematicPass
+          ? ("contrast(" + cinematicCfg.cssContrast + ") saturate(" + cinematicCfg.cssSaturate + ") brightness(" + cinematicCfg.cssBrightness + ")")
+          : ("contrast(" + (cinematicCfg.cssContrast * 1.07).toFixed(3) + ") saturate(" + (cinematicCfg.cssSaturate * 0.88).toFixed(3) + ") brightness(" + (cinematicCfg.cssBrightness * 0.98).toFixed(3) + ") hue-rotate(4deg)"))
       // Signature default grade (always on, not player-adjustable): deepened blacks,
       // tamed highlights, restrained saturation with a teal-orange lean — replaces the
       // old washed-out bright look. Pairs with the #grade-overlay vignette above.
-      : "contrast(1.35) saturate(1.35) brightness(0.85) sepia(0.19) hue-rotate(-19deg)";
+      // NOTE: the previous values here (saturate 1.35, sepia 0.19, hue-rotate -19deg)
+      // compounded into an oversaturated red/maroon wash rather than the intended
+      // teal-orange — a big negative hue-rotate on top of sepia's brown pushes hue
+      // toward red, and stacking that with +35% saturation exaggerated it further.
+      // Pulled back to a much lighter touch that still reads as "graded" without
+      // dominating the frame.
+      : "contrast(1.05) saturate(2.25) brightness(0.80) sepia(0.38) hue-rotate(-7deg)";
     cinematicOverlay.style.opacity = cinematicState.enabled ? "1" : "0";
     for (const toggle of cinematicControls.toggles) toggle.checked = cinematicState.enabled;
     for (const value of cinematicControls.values) value.textContent = cinematicState.enabled ? "ON" : "OFF";
   }
 
+  // Read the "cinematic" dev-console category into cinematicCfg + the grade shader
+  // uniforms, then re-apply. Called when the composer is built and on every live
+  // dev-console change (devReapply). Safe before the passes exist (guards nulls).
+  function applyDevCinematic() {
+    const cv = (k, d) => devVal("cinematic", k, d);
+    cinematicCfg.exposureMul    = cv("exposureMul", 0.66);
+    cinematicCfg.chromaIntensity= cv("chromaIntensity", 0.1);
+    cinematicCfg.chromaOffset   = cv("chromaOffset", 0.0016);
+    cinematicCfg.bloomStrength  = cv("bloomStrength", 0.22);
+    cinematicCfg.bloomThreshold = cv("bloomThreshold", 0.9);
+    cinematicCfg.bloomRadius    = cv("bloomRadius", 1);
+    cinematicCfg.motionBlurMax  = cv("motionBlurMax", 0.6);
+    cinematicCfg.motionBlurTurn = cv("motionBlurTurn", 1.1);
+    cinematicCfg.motionBlurMove = cv("motionBlurMove", 1);
+    cinematicCfg.cssContrast    = cv("cssContrast", 1.2);
+    cinematicCfg.cssSaturate    = cv("cssSaturate", 1.14);
+    cinematicCfg.cssBrightness  = cv("cssBrightness", 0.74);
+    if (cinematicPass) {
+      const u = cinematicPass.uniforms;
+      u.uContrast.value   = cv("contrast", 1.05);
+      u.uDesat.value      = cv("desaturate", 0.35);
+      u.uDarken.value     = cv("darken", 0.86);
+      u.uBlackCrush.value = cv("blackCrush", 0.045);
+      u.uGloss.value      = cv("gloss", 1);
+      u.uVignette.value   = cv("vignette", 0.34);
+      u.uGrain.value      = cv("grain", 0.01);
+      u.uShadowTint.value.set(cv("shadowR", -0.068), cv("shadowG", 0.02), cv("shadowB", -0.02));
+      u.uHighTint.value.set(cv("highR", 0.2), cv("highG", 0.018), cv("highB", 0.106));
+    }
+    applyCinematicSettings(); // pushes chroma/bloom/css/exposure through
+  }
+
   function getBaseExposure() {
     if (darkWaveActive) return baseToneMappingExposure * 1.48;
-    return cinematicState.enabled ? baseToneMappingExposure * 1.55 : baseToneMappingExposure;
+    // Only a slight lift now. The old ×1.55 was tuned for the dark VHS grade; with the
+    // lighter music-video grade + bloom it blew the bright daytime scene out to milky
+    // white (killing contrast/detail). Keep near-neutral so the grade/bloom do the work.
+    return cinematicState.enabled ? baseToneMappingExposure * cinematicCfg.exposureMul : baseToneMappingExposure;
+  }
+
+  // Velocity-driven motion blur state: the afterimage trail length is derived from
+  // how much the CAMERA actually moved/turned this frame, so a still camera is fully
+  // crisp (no whole-frame ghosting) and the smear only appears — and scales — with
+  // real motion. This is the "smart" part: naive feedback blur trails everything all
+  // the time; this trails only what's moving.
+  const _mbCamPos = new THREE.Vector3();
+  const _mbCamQuat = new THREE.Quaternion();
+  let _mbLastPos: any = null;
+  let _mbLastQuat: any = null;
+  let _mbDamp = 0;
+  function updateMotionBlurDamp() {
+    if (!afterimagePass?.uniforms?.damp || !cinematicState.enabled) return;
+    camera.getWorldPosition(_mbCamPos);
+    camera.getWorldQuaternion(_mbCamQuat);
+    if (!_mbLastPos) { _mbLastPos = _mbCamPos.clone(); _mbLastQuat = _mbCamQuat.clone(); }
+    const posDelta = _mbCamPos.distanceTo(_mbLastPos);
+    const angDelta = _mbCamQuat.angleTo(_mbLastQuat);
+    _mbLastPos.copy(_mbCamPos);
+    _mbLastQuat.copy(_mbCamQuat);
+    // Weight turning more than translation (pans read blur best). Frame-step based,
+    // so slower fps → bigger steps → more blur, which is physically correct.
+    const motion = posDelta * cinematicCfg.motionBlurMove + angDelta * cinematicCfg.motionBlurTurn;
+    const target = Math.min(cinematicCfg.motionBlurMax, motion * 1.5);
+    // Ramp up fast (blur appears the instant you move), decay slower so it trails
+    // off naturally rather than snapping back to crisp.
+    _mbDamp += (target - _mbDamp) * (target > _mbDamp ? 0.5 : 0.16);
+    afterimagePass.uniforms.damp.value = _mbDamp;
+  }
+
+  // ── Halo-style menu backdrop camera ───────────────────────────────────────
+  // The main menu is transparent (see menu_halo.css) and the real game scene
+  // drifts behind it, the way Halo CE parks a slow orbit on the ring. It uses
+  // its OWN camera so the player rig (yaw/pitch/camera) is never touched — the
+  // mission starts from exactly the pose it otherwise would.
+  //
+  // Only for the MAIN menu: pausing mid-run keeps the live gameplay view, since
+  // seeing your own frozen firefight is the useful thing there.
+  const MENU_WARM_FRAMES = 6;
+  const menuCam = new THREE.PerspectiveCamera(40, 1, 0.5, 900);
+  menuCam.layers.enable(1);
+  const menuBackdrop = {
+    // Hero subject: the plaza statue landmark (modules/landmarks.ts → x 0, z 175).
+    // Framing is measured off the real model once it exists so the shot holds up
+    // if the landmark is ever rescaled or swapped; these are the fallbacks for a
+    // failed/absent GLB.
+    target: new THREE.Vector3(0, 9, 175),
+    subjectHeight: 18,
+    groundY: 0,
+    framed: false,
+    // Player-camera frames rendered before the orbit takes over. renderer.compile()
+    // does not cover every program variant (some depend on render-time state), so the
+    // old opaque menu was quietly linking the rest by rendering the spawn view. Keep a
+    // few of those frames or they link during wave 1 — see .tools/shader-stability.spec.cjs.
+    warmFrames: 0,
+    angle: Math.PI * 0.28,
+    t: 0,
+  };
+  const menuFrameBox = new THREE.Box3();
+  function frameMenuSubject() {
+    if (menuBackdrop.framed) return;
+    const subject = perkMachineState?.station;
+    if (!subject) return;
+    menuFrameBox.setFromObject(subject);
+    if (menuFrameBox.isEmpty()) return;
+    menuFrameBox.getCenter(menuBackdrop.target);
+    menuBackdrop.subjectHeight = Math.max(6, menuFrameBox.max.y - menuFrameBox.min.y);
+    menuBackdrop.groundY = menuFrameBox.min.y;
+    menuBackdrop.framed = true;
+  }
+  function menuBackdropActive() {
+    return bootComplete
+      && !!overlay
+      && !overlay.classList.contains("hidden")
+      && overlay.dataset.mode !== "pause"
+      && game.state !== "playing"
+      && game.state !== "transition";
+  }
+  function updateMenuBackdropCamera(dt) {
+    if (!menuBackdropActive()) return;
+    frameMenuSubject();
+    menuBackdrop.t += dt;
+    // Slow orbit (~1 revolution every 5 minutes) with a gentle vertical breathe,
+    // so the shot never reads as a static wallpaper but never distracts either.
+    menuBackdrop.angle += dt * 0.021;
+    const h = menuBackdrop.subjectHeight;
+    const radius = h * 1.7 + Math.sin(menuBackdrop.t * 0.11) * h * 0.12;
+    // Low and looking UP, the way Halo CE frames the ring against open sky —
+    // the statue reads as a silhouette instead of a rooftop diorama.
+    const eyeY = menuBackdrop.groundY + h * 0.18 + Math.sin(menuBackdrop.t * 0.07) * h * 0.05;
+    const tgt = menuBackdrop.target;
+    const sa = Math.sin(menuBackdrop.angle), ca = Math.cos(menuBackdrop.angle);
+    menuCam.position.set(tgt.x + sa * radius, eyeY, tgt.z + ca * radius);
+    // Aim off to one side of the subject (along the camera's right axis) so the
+    // statue sits on a third rather than directly behind the menu column, and
+    // high enough that the wordmark lands on open sky.
+    const lateral = h * 0.38;
+    menuCam.lookAt(
+      tgt.x + ca * lateral,
+      menuBackdrop.groundY + h * 0.92,
+      tgt.z - sa * lateral,
+    );
+    const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+    if (menuCam.aspect !== aspect) {
+      menuCam.aspect = aspect;
+      menuCam.updateProjectionMatrix();
+    }
   }
 
   function renderScene() {
@@ -2058,10 +2291,44 @@ declare module "three" {
       cinematicPass.enabled = cinematicState.enabled;
       cinematicPass.uniforms.time.value = performance.now() * 0.001;
     }
-    if (chromaPass) {
-      chromaPass.enabled = cinematicState.enabled;
+    updateMotionBlurDamp();
+    if (debugOrbit.active) {
+      // Position the debug cam on a sphere around the player torso and look at it.
+      const tx = yaw.position.x, ty = yaw.position.y + 0.7, tz = yaw.position.z;
+      const ce = Math.cos(debugOrbit.elevation), se = Math.sin(debugOrbit.elevation);
+      debugOrbitCam.position.set(
+        tx + debugOrbit.dist * ce * Math.sin(debugOrbit.azimuth),
+        ty + debugOrbit.dist * se,
+        tz + debugOrbit.dist * ce * Math.cos(debugOrbit.azimuth),
+      );
+      debugOrbitCam.lookAt(tx, ty, tz);
+      debugOrbitCam.aspect = window.innerWidth / window.innerHeight;
+      debugOrbitCam.updateProjectionMatrix();
+      renderer.render(scene, debugOrbitCam);
+      return;
     }
-    if (cinematicState.enabled && composer && rendererBackend !== "webgpu") composer.render();
+    // The menu backdrop swaps the CAMERA, never the pipeline: it still goes
+    // through the composer when post is on, so every pass is compiled and warm
+    // before the first gameplay frame (see cinematicRenderPass).
+    const useComposer = cinematicState.enabled && composer && rendererBackend !== "webgpu";
+    if (menuBackdropActive()) {
+      if (menuBackdrop.warmFrames < MENU_WARM_FRAMES) {
+        menuBackdrop.warmFrames++;
+        if (useComposer) composer.render();
+        else renderer.render(scene, camera);
+        return;
+      }
+      if (useComposer && cinematicRenderPass) {
+        const prev = cinematicRenderPass.camera;
+        cinematicRenderPass.camera = menuCam;
+        composer.render();
+        cinematicRenderPass.camera = prev;
+      } else {
+        renderer.render(scene, menuCam);
+      }
+      return;
+    }
+    if (useComposer) composer.render();
     else renderer.render(scene, camera);
   }
 
@@ -2070,12 +2337,16 @@ declare module "three" {
     renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     if (composer) {
-      const composerPixelRatio = lowEndMode && cinematicState.enabled ? Math.max(0.5, renderPixelRatio * 0.88) : renderPixelRatio;
-      composer.setPixelRatio(composerPixelRatio);
+      // Cinematic used to force an extra -12% cut here on low-end tier — beta
+      // feedback was that players don't want cinematic to look softer, they'd
+      // rather it just cost a bit of framerate (see updateAdaptiveQuality).
+      composer.setPixelRatio(renderPixelRatio);
       composer.setSize(window.innerWidth, window.innerHeight);
+      // composer.setSize() just reset bloom back to full resolution — reassert
+      // its cheaper internal size (see applyBloomResolution).
+      applyBloomResolution();
     }
     if (cinematicPass) cinematicPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
-    if (chromaPass && chromaPass.uniforms && chromaPass.uniforms.resolution) chromaPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
   }
 
   applyCinematicSettings();
@@ -2133,18 +2404,26 @@ declare module "three" {
     maybeAutoFallbackRenderer();
     maybePerfGovernor();
 
+    // Cinematic's post-FX (bloom/chroma/afterimage — 3-4 full-screen passes) is
+    // GPU fill cost, exactly what this governor reacts to. Beta feedback: players
+    // turn cinematic on for the *look* and don't want it silently undone by a
+    // resolution cut. So while cinematic is enabled, resolution is only allowed
+    // to recover upward, never step down — the FPS hit from cinematic is paid in
+    // framerate, not sharpness. (Sustained hitches still drop scale below, via
+    // recoverFromFrameHitch — that's a stutter safety net, a different problem.)
+    const allowScaleDown = !cinematicState.enabled;
     let nextScale = quality.scale;
     if (mobileMode) {
       // Wide dead-band + gentle, infrequent steps → at most one realloc every
       // few seconds, and none at all while FPS sits in a comfortable band.
-      if (quality.lastFps < 30) nextScale -= 0.12;
-      else if (quality.lastFps < 45) nextScale -= 0.06;
+      if (quality.lastFps < 30) { if (allowScaleDown) nextScale -= 0.12; }
+      else if (quality.lastFps < 45) { if (allowScaleDown) nextScale -= 0.06; }
       else if (quality.lastFps > 58) nextScale += 0.05;
     } else {
       const heavyFramePenalty = rendererBackend === "webgpu" ? 0.12 : 0.14;
-      if (quality.lastFps < 42) nextScale -= lowEndMode ? heavyFramePenalty * 1.15 : heavyFramePenalty;
-      else if (quality.lastFps < 48) nextScale -= lowEndMode ? 0.1 : 0.08;
-      else if (quality.lastFps < 55) nextScale -= lowEndMode ? 0.05 : 0.035;
+      if (quality.lastFps < 42) { if (allowScaleDown) nextScale -= lowEndMode ? heavyFramePenalty * 1.15 : heavyFramePenalty; }
+      else if (quality.lastFps < 48) { if (allowScaleDown) nextScale -= lowEndMode ? 0.1 : 0.08; }
+      else if (quality.lastFps < 55) { if (allowScaleDown) nextScale -= lowEndMode ? 0.05 : 0.035; }
       // Recover below the 60Hz vsync cap. requestAnimationFrame cannot report more than
       // ~60fps, so the old `> 61` test never fired: render scale only ever ratcheted
       // down, and one transient hitch left the game permanently blurry. The 55..57 gap
@@ -2250,16 +2529,27 @@ declare module "three" {
     quality.hitchCooldown = 0.45;
     quality.hitchCount++;
 
-    const pressure = rawDt > 0.18 ? 0.18 : rawDt > 0.12 ? 0.13 : 0.08;
-    const nextScale = Math.max(quality.minScale, quality.scale - pressure);
-    if (nextScale < quality.scale - 0.005) {
-      quality.scale = nextScale;
-      applyRenderScale();
+    // Same rule as updateAdaptiveQuality's allowScaleDown: while cinematic is on,
+    // its post-FX cost is paid in framerate, not sharpness. Without this guard a
+    // single hitch (shadows are a common trigger — a shadow-casting mesh entering
+    // view, or the autoUpdate shadow-map re-render) would cut render scale here,
+    // and since cinematic's extra passes often keep steady-state fps just under
+    // the 57fps recovery threshold in updateAdaptiveQuality, that cut never
+    // healed back — reading as "cinematic + shadows permanently drops resolution".
+    if (!cinematicState.enabled) {
+      const pressure = rawDt > 0.18 ? 0.18 : rawDt > 0.12 ? 0.13 : 0.08;
+      const nextScale = Math.max(quality.minScale, quality.scale - pressure);
+      if (nextScale < quality.scale - 0.005) {
+        quality.scale = nextScale;
+        applyRenderScale();
+      }
     }
 
     const maxEffects = lowEndMode ? 4 : 6;
     while (lightningEffects.length > maxEffects) recycleLightningEffect(lightningEffects.shift());
-    while (particles.length > MAX_ACTIVE_IMPACT_PARTICLES * 0.7) recycleImpactParticle(particles.shift());
+    // Particles cost fill, not draw calls, so pressure trims the live count
+    // rather than the effect variety.
+    particleFX?.trim(lowEndMode ? 0.35 : 0.7);
   }
 
   // ── Frame-time / performance overlay (toggle with F3 or backtick) ───────────
@@ -2327,7 +2617,7 @@ declare module "three" {
         `scale    ${(quality.scale * 100).toFixed(0)}%   hitch ${quality.hitchCount}\n` +
         `draws    ${info.calls ?? "?"}   tris ${info.triangles ? (info.triangles / 1000).toFixed(0) + "k" : "?"}\n` +
         `geo ${mem.geometries ?? "?"}  tex ${mem.textures ?? "?"}\n` +
-        `enemies ${enemies.length}  ptcl ${particles.length}  lit ${lightningEffects.length}` +
+        `enemies ${enemies.length}  ptcl ${particleFX?.count() ?? 0}  lit ${lightningEffects.length}` +
         (net?.active ? `\nnet  ${gameMode} ${net.isHost ? "host" : "guest"}  peers ${net.peerCount}` : "");
       drawGraph();
     }
@@ -2363,34 +2653,38 @@ declare module "three" {
     crosshair.kick = Math.max(0, crosshair.kick - dt * 3.8);
     crosshair.recoilX += (0 - crosshair.recoilX) * Math.min(1, dt * 16);
     crosshair.recoilY += (0 - crosshair.recoilY) * Math.min(1, dt * 18);
+    // Snap tight as ADS comes up — the old (1 - ads) * 0.08 term was nearly
+    // invisible against the 0.85 base, so aiming barely changed the reticle.
+    // A hard collapse toward a pinpoint sells "settling into the sight."
+    const adsTighten = 1 - Math.min(1, viewState.ads * 1.15) * 0.62;
     const targetSpread =
-      0.85 +
-      (moving ? 0.22 : 0) +
-      (sprinting ? 0.22 : 0) +
-      (1 - viewState.ads) * 0.08 +
-      crosshair.kick * 0.36;
+      (0.85 +
+        (moving ? 0.22 : 0) +
+        (sprinting ? 0.22 : 0) +
+        crosshair.kick * 0.36) * adsTighten;
 
     crosshair.spread += (targetSpread - crosshair.spread) * Math.min(1, dt * 14);
     const reticleX = crosshair.recoilX.toFixed(2);
     const reticleY = crosshair.recoilY.toFixed(2);
     crosshair.root.style.transform = `translate(calc(-50% + ${reticleX}px), calc(-50% + ${reticleY}px)) scale(${crosshair.spread.toFixed(3)})`;
     const hidden = game.state !== "playing" || viewState.lookBack > 0.08;
-    crosshair.root.style.opacity = hidden ? "0" : viewState.ads > 0.9 ? "0.3" : "1";
+    // Sniper hides the reticle once scoped (it has its own zoomed view to aim with).
+    const sniperScoped = currentGun === GUNS.SNIPER && viewState.ads > 0.7;
+    crosshair.root.style.opacity = hidden ? "0" : sniperScoped ? "0" : viewState.ads > 0.9 ? "0.3" : "1";
   }
 
-  const impactParticlePool = [];
-  const MAX_ACTIVE_IMPACT_PARTICLES = 36;
+  // Pooled GPU particle system (modules/particle_fx.ts). Two draw calls total,
+  // replacing the old one-Mesh-per-particle pool that capped effects at 36.
+  // Created in prewarmEffectPools() so it lands after `scene` exists and its
+  // programs compile during the boot warm-up. Call sites go through
+  // spawnImpactParticles(pos, normal, strength, kind) — see the EFFECTS table in
+  // particle_fx.ts for the available `kind` values.
+  let particleFX: ParticleFX | null = null;
   const tracerPool: Record<string, any> = {};
   for (const gt of Object.values(GUNS)) tracerPool[gt] = []; // one pool per roster gun
   const bulletHolePool = [];
   const activeBulletHoles = [];
   const MAX_ACTIVE_BULLET_HOLES = 48;
-
-  const impactGeometry = new THREE.SphereGeometry(0.02, 3, 3);
-  const impactMaterials = [
-    new THREE.MeshBasicMaterial({ color: 0xffcc44, transparent: true }),
-    new THREE.MeshBasicMaterial({ color: 0xff8822, transparent: true }),
-  ];
 
   function createTracerAlphaMap() {
     const canvas = document.createElement("canvas");
@@ -2421,7 +2715,6 @@ declare module "three" {
     [GUNS.LMG]:    new THREE.MeshBasicMaterial({ color: 0xffdca0, transparent: true, opacity: 0.11, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
     [GUNS.DMR]:    new THREE.MeshBasicMaterial({ color: 0xf2f8ff, transparent: true, opacity: 0.12, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
     [GUNS.AKIMBO]: new THREE.MeshBasicMaterial({ color: 0xffe6b8, transparent: true, opacity: 0.09, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
-    [GUNS.RAILGUN]:new THREE.MeshBasicMaterial({ color: 0xa8f0ff, transparent: true, opacity: 0.16, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
     [GUNS.FLAK]:   new THREE.MeshBasicMaterial({ color: 0xffb870, transparent: true, opacity: 0.08, alphaMap: tracerAlphaMap, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }),
   };
   const tracerGeometry = new THREE.CylinderGeometry(1, 0.08, 1, 12, 8, true);
@@ -2462,6 +2755,21 @@ declare module "three" {
     sizeAttenuation: true,
     opacity: 0,
   });
+
+  // Per-caster bolt palettes — every enemy.lightning-driven attack used to share one
+  // hardcoded purple regardless of who cast it, so the Warden's Judgment Lance, the
+  // Seraph's Blink Strike, and the Cherub's Null Field/Sanctuary Collapse all read as
+  // the same effect. Colors mirror each type's existing ENEMY_TYPES color/emissive so
+  // the bolt matches the body it comes from.
+  const LIGHTNING_DEFAULT_TINT = { core: 0xeeddff, glow: 0xbb44ff, outer: 0x7711cc, ring: 0xcc55ff, dot: 0xffffff };
+  const LIGHTNING_TINTS = {
+    "Siege Drone":  { core: 0xeaf6ff, glow: 0x3fa4ff, outer: 0x0a4fb0, ring: 0x6fc4ff, dot: 0xbfe6ff }, // Warden — electric blue
+    "Blink Seraph": { core: 0xf5eaff, glow: 0xb257ff, outer: 0x4a1090, ring: 0xcf9bff, dot: 0xd9b8ff }, // Seraph — violet
+    "Null Cherub":  { core: 0xe8fff6, glow: 0x27e6a6, outer: 0x006b52, ring: 0x62ffd6, dot: 0x9dffdf }, // Cherub — teal/emerald
+  };
+  function getLightningTint(enemy) {
+    return (enemy && LIGHTNING_TINTS[enemy.typeName]) || LIGHTNING_DEFAULT_TINT;
+  }
   const packUpgradeEffects = [];
   const packBeamGeometry = new THREE.CylinderGeometry(0.09, 0.16, 1, 18, 1, true);
   const packRingGeometry = new THREE.TorusGeometry(1, 0.018, 8, 56);
@@ -3339,23 +3647,6 @@ function createAnimatedEnergySprite(sheet, color = 0xffffff, scale = 1, opacity 
     if (parts.light) parts.light.intensity = 0;
     if (parts.impactLight) parts.impactLight.intensity = 0;
   }
-function checkoutImpactParticle() {
-    if (impactParticlePool.length) {
-      const p = impactParticlePool.pop();
-      p.mesh.visible = true;
-      return p;
-    }
-    const mesh = new THREE.Mesh(impactGeometry, impactMaterials[0]);
-    mesh.visible = true;
-    scene.add(mesh);
-    return { mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 } as any;
-  }
-
-  function recycleImpactParticle(particle) {
-    particle.mesh.visible = false;
-    impactParticlePool.push(particle);
-  }
-
   function checkoutTracer(gunType) {
     const pool = tracerPool[gunType];
     if (pool.length) {
@@ -3982,13 +4273,17 @@ function createLightningEffect() {
     }
   }
 
+  const particleViewportTmp = new THREE.Vector2();
+
   function prewarmEffectPools() {
-    for (let i = 0; i < MAX_ACTIVE_IMPACT_PARTICLES; i++) {
-      const mesh = new THREE.Mesh(impactGeometry, impactMaterials[0]);
-      mesh.visible = false;
-      scene.add(mesh);
-      impactParticlePool.push({ mesh, vel: new THREE.Vector3(), life: 0, maxLife: 0 });
-    }
+    // The two Points layers are permanent scene members and always visible (an
+    // empty layer draws zero pixels because dead slots are parked off-screen),
+    // so their programs link once here and never relink.
+    particleFX = createParticleFX(THREE, scene, {
+      backend: rendererBackend === "webgpu" ? "webgpu" : "webgl",
+      lowEnd: lowEndMode,
+      viewportHeight: () => renderer.getDrawingBufferSize(particleViewportTmp).y || 1080,
+    });
 
     for (const gunType of Object.values(GUNS)) {
       const count = gunType === GUNS.SHOTGUN ? 10 : 5;
@@ -4165,7 +4460,47 @@ function createLightningEffect() {
     shootFlash: 0,
     lightningFlash: 0,
     droneGlow: 0,
+    // Blackout flashlight power-up: null = normal (snap on/off), or
+    // { active, t } while the beam struggles to life during the blackout
+    // cutscene's final shot. Armed at wave start, activated on the pack-advance
+    // beat, cleared to steady-on once it stabilises (or when the cutscene ends).
+    flashlightBoot: null,
   };
+
+  // Duration of the blackout flashlight's flicker-to-life (s). It completes partway
+  // through the final cutscene shot so the beam is solid before control returns.
+  const FLASHLIGHT_BOOT_DUR = 2.2;
+  // Realistic failing-bulb power-up: mostly-off flashes early (the "won't start"
+  // struggle), rapid stutter as it warms, then settles solid. Deterministic on t
+  // (framerate-independent, reproducible). Returns 0..1 intensity multiplier.
+  function flashlightBootLevel(t) {
+    if (t >= FLASHLIGHT_BOOT_DUR) return 1;
+    const p = Math.max(0, t) / FLASHLIGHT_BOOT_DUR; // warmup progress 0..1
+    // Jagged electrical flicker: detuned oscillators multiplied → chaotic 0..1.
+    const flick = 0.5 + 0.5 * Math.sin(t * 53.0) * Math.sin(t * 17.3 + 1.2) * Math.sin(t * 7.1 + 0.4);
+    // Duty threshold falls as it warms: early = rare flashes, late = rare dropouts.
+    // Hard on/off (threshold crossing) reads as a failing electrical contact.
+    const on = flick > (1 - p) * (1 - p) ? 1 : 0;
+    // Scripted dead beats early — the light gutters and fails to catch a few times.
+    const dead = (t < 0.1 || (t > 0.32 && t < 0.44) || (t > 0.7 && t < 0.78)) ? 0 : 1;
+    // Warmup ramp on the "on" brightness, plus a settle that forces solid over the
+    // last quarter so it never pops from stutter straight to steady.
+    const warm = 0.35 + 0.65 * p;
+    const settle = Math.max(0, (p - 0.75) / 0.25);
+    return Math.max(on * dead * warm, settle);
+  }
+
+  // Electrical stutter as the blackout flashlight catches — filtered-noise blips.
+  // Kept quiet and low-mid (no piercing high square tones): this reads as a distant
+  // contact fizzle, not a spark in the ear.
+  function sfxFlashlightBoot() {
+    try {
+      playNoise(0.05, 0.016, 1500, "bandpass", 0, 0, 0.6);
+      playTone(760, "triangle", 0.025, 0.014);
+      setTimeout(() => { playNoise(0.045, 0.014, 1200, "bandpass", 0, 0, 0.55); playTone(600, "triangle", 0.025, 0.012); }, 190);
+      setTimeout(() => playNoise(0.08, 0.016, 620, "lowpass", 0, 0, 0.3), 540);
+    } catch (e) {}
+  }
 
 
   function disablePlayerFlashlightRig() {
@@ -4273,10 +4608,6 @@ function createLightningEffect() {
         right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
         left: { pos: { x: 0.02, y: -0.24, z: 0.04 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
-      [GUNS.RAILGUN]: {
-        right: { pos: { x: -0.1, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
-        left: { pos: { x: 0.34, y: -0.14, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
-      },
       [GUNS.FLAK]: {
         right: { pos: { x: -0.08, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
         left: { pos: { x: 0.34, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
@@ -4297,6 +4628,157 @@ function createLightningEffect() {
     gun.userData.fpHands = { left, right };
   }
 
+  // Procedural weapon surface textures (brushed gunmetal / wood grain / stippled
+  // rubber). Built once from canvases and reused across every weapon instance —
+  // the viewmodel boxes/cylinders already carry default UVs, so these just tile.
+  let _weaponTexCache: any = null;
+  function getWeaponTextures() {
+    if (_weaponTexCache) return _weaponTexCache;
+    const rng = (() => { let s = 0x9e17; return () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff; })();
+
+    function finish(cv: HTMLCanvasElement, repeat = 2) {
+      const tex = new THREE.CanvasTexture(cv);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(repeat, repeat);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // Brushed gunmetal: dark base + horizontal brush streaks + soft speckle wear
+    const metalCv = document.createElement("canvas");
+    metalCv.width = metalCv.height = 128;
+    const mctx = metalCv.getContext("2d")!;
+    mctx.fillStyle = "rgb(46,54,64)";
+    mctx.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 260; i++) {
+      const y = rng() * 128;
+      const shade = 40 + Math.floor(rng() * 45);
+      mctx.strokeStyle = `rgba(${shade + 20},${shade + 26},${shade + 32},${0.08 + rng() * 0.1})`;
+      mctx.lineWidth = 0.6 + rng() * 0.8;
+      mctx.beginPath();
+      mctx.moveTo(0, y);
+      mctx.lineTo(128, y + (rng() - 0.5) * 2);
+      mctx.stroke();
+    }
+    for (let i = 0; i < 60; i++) {
+      mctx.fillStyle = `rgba(0,0,0,${0.05 + rng() * 0.08})`;
+      mctx.beginPath();
+      mctx.arc(rng() * 128, rng() * 128, 0.6 + rng() * 1.6, 0, Math.PI * 2);
+      mctx.fill();
+    }
+    const metalTex = finish(metalCv, 3);
+
+    // Wood grain: warm base + wavy longitudinal grain lines
+    const woodCv = document.createElement("canvas");
+    woodCv.width = woodCv.height = 128;
+    const wctx = woodCv.getContext("2d")!;
+    wctx.fillStyle = "rgb(107,68,35)";
+    wctx.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 2) {
+      const shade = rng();
+      wctx.strokeStyle = `rgba(${60 + Math.floor(shade * 40)},${34 + Math.floor(shade * 26)},${16 + Math.floor(shade * 14)},${0.35 + rng() * 0.3})`;
+      wctx.lineWidth = 1 + rng() * 1.5;
+      wctx.beginPath();
+      wctx.moveTo(0, y);
+      for (let x = 0; x <= 128; x += 16) wctx.lineTo(x, y + Math.sin(x * 0.08 + y) * 3 + (rng() - 0.5) * 2);
+      wctx.stroke();
+    }
+    const woodTex = finish(woodCv, 2);
+
+    // Stippled rubber grip: near-black base + diamond knurl dots
+    const rubberCv = document.createElement("canvas");
+    rubberCv.width = rubberCv.height = 64;
+    const rctx = rubberCv.getContext("2d")!;
+    rctx.fillStyle = "rgb(9,11,14)";
+    rctx.fillRect(0, 0, 64, 64);
+    for (let y = 0; y < 64; y += 6) {
+      for (let x = 0; x < 64; x += 6) {
+        const off = (Math.floor(y / 6) % 2) * 3;
+        rctx.fillStyle = `rgba(${20 + Math.floor(rng() * 12)},${22 + Math.floor(rng() * 12)},${26 + Math.floor(rng() * 12)},0.9)`;
+        rctx.beginPath();
+        rctx.arc(x + off + 1.5, y + 1.5, 1.3, 0, Math.PI * 2);
+        rctx.fill();
+      }
+    }
+    const rubberTex = finish(rubberCv, 4);
+
+    _weaponTexCache = { metalTex, woodTex, rubberTex };
+    return _weaponTexCache;
+  }
+
+  // Shared fractal-tunnel GLSL skin (Shadertoy raymarch, adapted: gl_FragCoord ->
+  // per-vertex object-space UV so it reads on any weapon mesh; iteration counts cut
+  // 43/10 -> 18/6 since this now runs on hand-held geometry every frame, not once).
+  const weaponSkinUniforms = { uTime: { value: 0 }, iResolution: { value: new THREE.Vector2() } };
+  const weaponSkinMaterial = new THREE.ShaderMaterial({
+    uniforms: weaponSkinUniforms,
+    fog: false,
+    vertexShader: /* glsl */`
+      varying vec2 vUv2;
+      void main() {
+        vUv2 = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision highp float;
+      uniform float uTime;
+      uniform vec2 iResolution;
+      mat2 c(float a){ float b=cos(a),d=sin(a); return mat2(b,-d,d,b); }
+      float l(float a){ return .8*a-2./.73*cos(.73*a)-1.3/1.61*cos(1.61*a+1.7)-.8/3.11*cos(3.11*a+4.2); }
+      void main() {
+        vec2 g = iResolution;
+        float b = uTime;
+        vec2 n = gl_FragCoord.xy;
+        float o = l(b);
+        float p = 1.*sin(.41*b+2.1)+.6*sin(.97*b+.3);
+        float q = .7*sin(.53*b+4.)+.5*sin(1.13*b+1.1);
+        float r = .4*sin(.29*b+1.2);
+        vec4 m = vec4(0.);
+        float d = .7;
+        float e = 0.;
+        float f = 0.;
+        for(float i=0.;i<43.;i++){
+          vec3 a=vec3((n.xy*2.1-g)/g.y*d,d);
+          a.xy*=c(r);
+          a.yz*=c(q);
+          a.xz*=c(p);
+          a.z+=o;
+          a=mod(a-1.,2.)-1.;
+          e=4.;
+          for(int j=0;j<10;j++){
+            a=abs(a)-.7;
+            a.yz*=c(.5);
+            float k=max(dot(a,a)*.4,1e-2);
+            e/=k;
+            a/=k;
+          }
+          f=1./e;
+          d+=f;
+          vec4 s=1.1+sin(log(e)*.6+vec4(1.,2.,4.,0.));
+          m+=s*.12/exp(f*1e3+d*.15);
+        }
+        gl_FragColor = m;
+      }
+    `,
+  });
+  weaponSkinMaterial.toneMapped = false;
+  // Pack-a-Punch tinting reads/writes emissive*/metalness/roughness on packMats;
+  // the shader has none of those, so stub them out as harmless no-op fields.
+  // (Cast: these aren't part of ShaderMaterial's type — they're runtime stubs.)
+  const weaponSkinStub = weaponSkinMaterial as any;
+  weaponSkinStub.emissive = new THREE.Color(0);
+  weaponSkinStub.emissiveIntensity = 0;
+  weaponSkinStub.metalness = 0;
+  weaponSkinStub.roughness = 1;
+  function updateWeaponSkinShader(dt) {
+    weaponSkinUniforms.uTime.value += dt;
+    const w = renderer.domElement.clientWidth;
+    const h = renderer.domElement.clientHeight;
+    weaponSkinUniforms.iResolution.value.set(w, h);
+  }
+  window.__rbWeaponSkin = weaponSkinMaterial; // dev diagnostic
+
   function createWeaponViewModel(gunType: GunType = GUNS.RIFLE, parent: any = camera) {
     const gun = new THREE.Group();
     parent.add(gun);
@@ -4305,15 +4787,12 @@ function createLightningEffect() {
     gun.rotation.y = Math.PI * 0.5;
     if (firstPersonModel) gun.scale.setScalar(0.76);
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x29374a, emissive: 0x0d1726, emissiveIntensity: 0.36, roughness: 0.35, metalness: 0.72 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x121822, emissive: 0x05080f, emissiveIntensity: 0.2, roughness: 0.62, metalness: 0.34 });
-    const accentMat = new THREE.MeshStandardMaterial({ color: 0x62d8ff, emissive: 0x236d92, emissiveIntensity: 0.46, roughness: 0.22, metalness: 0.78 });
-    const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, emissive: 0x26160c, emissiveIntensity: 0.16, roughness: 0.7, metalness: 0.1 });
-    const rubberMat = new THREE.MeshStandardMaterial({ color: 0x070a0f, emissive: 0x010205, emissiveIntensity: 0.12, roughness: 0.82, metalness: 0.08 });
-    const lensMat = new THREE.MeshStandardMaterial({ color: 0x183246, emissive: 0x2ca8d8, emissiveIntensity: 0.26, roughness: 0.18, metalness: 0.04 });
-    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc58f42, emissive: 0x1c1000, emissiveIntensity: 0.16, roughness: 0.34, metalness: 0.72 });
-    const edgeMat = new THREE.MeshStandardMaterial({ color: 0x8fa8bf, emissive: 0x122435, emissiveIntensity: 0.2, roughness: 0.24, metalness: 0.86 });
-    const warningMat = new THREE.MeshStandardMaterial({ color: 0xff8a36, emissive: 0xa43e12, emissiveIntensity: 0.62, roughness: 0.28, metalness: 0.42 });
+    const weaponTex = getWeaponTextures();
+    // Fractal-tunnel GLSL skin: every weapon surface shares the one shader material
+    // (var names kept as-is so downstream geometry/packMats wiring is untouched).
+    const bodyMat = weaponSkinMaterial, darkMat = weaponSkinMaterial, accentMat = weaponSkinMaterial,
+      woodMat = weaponSkinMaterial, rubberMat = weaponSkinMaterial, lensMat = weaponSkinMaterial,
+      brassMat = weaponSkinMaterial, edgeMat = weaponSkinMaterial, warningMat = weaponSkinMaterial;
 
     // Pack-a-Punch: tag the metal materials so they can take on the upgrade glow.
     // Each viewmodel owns its own material instances, so tinting is per-gun.
@@ -4485,37 +4964,6 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.AKIMBO);
       const { muzzle, flash } = buildMuzzleRig(0.4, 0.05, 0xffc86a, 0.32, 0.052, 0.16, 0.036);
-      return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
-    }
-
-    if (gunType === GUNS.RAILGUN) {
-      // ── Lancer Railgun — twin rails, coil rings, glowing core ───────────────
-      const receiver = addBox(gun, { x: 0.6, y: 0.18, z: 0.16 }, { x: -0.02, y: 0.0, z: 0 }, bodyMat);
-      // Twin accelerator rails
-      addBox(gun, { x: 0.9, y: 0.035, z: 0.035 }, { x: 0.62, y: 0.055, z: 0.045 }, edgeMat);
-      addBox(gun, { x: 0.9, y: 0.035, z: 0.035 }, { x: 0.62, y: 0.055, z: -0.045 }, edgeMat);
-      addBox(gun, { x: 0.9, y: 0.02, z: 0.02 }, { x: 0.62, y: -0.01, z: 0 }, darkMat); // lower spine
-      // Energy core between the rails (uses lens material — emissive cyan)
-      addBox(gun, { x: 0.78, y: 0.028, z: 0.05 }, { x: 0.58, y: 0.055, z: 0 }, lensMat);
-      // Coil rings along the rails
-      for (let i = 0; i < 5; i++) addCyl(gun, 0.075, 0.075, 0.028, 12, { x: 0.3 + i * 0.18, y: 0.045, z: 0 }, { z: Math.PI * 0.5 }, i % 2 ? accentMat : darkMat);
-      addCyl(gun, 0.05, 0.09, 0.08, 12, { x: 1.1, y: 0.05, z: 0 }, { z: Math.PI * 0.5 }, accentMat); // flared emitter
-      // Capacitor bank underside
-      addBox(gun, { x: 0.3, y: 0.1, z: 0.14 }, { x: 0.24, y: -0.1, z: 0 }, darkMat);
-      addAccentGlow(gun, 0.26, { x: 0.24, y: -0.155, z: 0.06 }, lensMat);
-      const mag = addBox(gun, { x: 0.12, y: 0.14, z: 0.09 }, { x: -0.06, y: -0.15, z: 0 }, brassMat); // fuel cell
-      addBox(gun, { x: 0.085, y: 0.24, z: 0.12 }, { x: -0.24, y: -0.18, z: 0 }, rubberMat, { z: -0.2 }); // grip
-      const trigger = addBox(gun, { x: 0.012, y: 0.055, z: 0.012 }, { x: -0.13, y: -0.11, z: 0 }, accentMat);
-      addBox(gun, { x: 0.24, y: 0.1, z: 0.13 }, { x: -0.44, y: 0.0, z: 0 }, bodyMat); // stock
-      addBox(gun, { x: 0.06, y: 0.16, z: 0.12 }, { x: -0.58, y: -0.02, z: 0 }, rubberMat);
-      // Holo sight block
-      addBox(gun, { x: 0.14, y: 0.06, z: 0.07 }, { x: -0.1, y: 0.14, z: 0 }, darkMat);
-      addBox(gun, { x: 0.02, y: 0.05, z: 0.05 }, { x: -0.04, y: 0.17, z: 0 }, lensMat);
-      const slide = addBox(gun, { x: 0.05, y: 0.024, z: 0.07 }, { x: -0.16, y: 0.07, z: -0.1 }, darkMat);
-      const chamberGlow = addBox(gun, { x: 0.1, y: 0.014, z: 0.016 }, { x: 0.05, y: 0.095, z: -0.084 }, warningMat);
-      chamberGlow.visible = false;
-      if (firstPersonModel) attachFirstPersonHands(gun, GUNS.RAILGUN);
-      const { muzzle, flash } = buildMuzzleRig(1.16, 0.05, 0x7ae8ff, 0.34, 0.05, 0.3, 0.042);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5160,7 +5608,9 @@ function createLightningEffect() {
   }
 
   function findArmBones(root) {
-    const b = { rightUpperArm: null, leftUpperArm: null, rightForeArm: null, leftForeArm: null, spine: null };
+    const b: any = { rightUpperArm: null, leftUpperArm: null, rightForeArm: null, leftForeArm: null, spine: null,
+      // Legs (for foot-lock IK). upLeg = thigh, leg = shin, foot = ankle.
+      leftUpLeg: null, leftLeg: null, leftFoot: null, rightUpLeg: null, rightLeg: null, rightFoot: null, hips: null };
 
     // Compact name: strip all non-alphanumeric chars and lowercase — handles "mixamorig:RightArm" → "mixamorigrightarm"
     const compact = name => (name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -5173,6 +5623,13 @@ function createLightningEffect() {
       { key: 'rightForeArm',  exact: /^(rightforearm|forearm_r|lowerarm_r|r_forearm|mixamorigrightforearm|mixamoriglowerarm_r)$/ },
       { key: 'leftForeArm',   exact: /^(leftforearm|forearm_l|lowerarm_l|l_forearm|mixamorigleftforearm|mixamoriglowerarm_l)$/  },
       { key: 'spine',         exact: /^(spine2|spine_2|upperchest|chest_upper|mixamorigspine2|mixamorigupperchest)$/ },
+      { key: 'leftUpLeg',     exact: /^(leftupleg|upleg_l|l_upleg|thigh_l|mixamorigleftupleg)$/ },
+      { key: 'rightUpLeg',    exact: /^(rightupleg|upleg_r|r_upleg|thigh_r|mixamorigrightupleg)$/ },
+      { key: 'leftLeg',       exact: /^(leftleg|leg_l|l_leg|shin_l|calf_l|mixamorigleftleg)$/ },
+      { key: 'rightLeg',      exact: /^(rightleg|leg_r|r_leg|shin_r|calf_r|mixamorigrightleg)$/ },
+      { key: 'leftFoot',      exact: /^(leftfoot|foot_l|l_foot|ankle_l|mixamorigleftfoot)$/ },
+      { key: 'rightFoot',     exact: /^(rightfoot|foot_r|r_foot|ankle_r|mixamorigrightfoot)$/ },
+      { key: 'hips',          exact: /^(hips|pelvis|mixamorighips)$/ },
     ];
 
     // Fallback: broader substring patterns — only used if exact match didn't fire
@@ -5182,6 +5639,13 @@ function createLightningEffect() {
       { key: 'rightForeArm',  re: /right.*fore|forearm.*r/  },
       { key: 'leftForeArm',   re: /left.*fore|forearm.*l/   },
       { key: 'spine',         re: /spine2|spine_2|upperchest/ },
+      { key: 'leftUpLeg',     re: /left.*upleg|thigh.*l/ },
+      { key: 'rightUpLeg',    re: /right.*upleg|thigh.*r/ },
+      { key: 'leftLeg',       re: /left.*leg|shin.*l|calf.*l/ },
+      { key: 'rightLeg',      re: /right.*leg|shin.*r|calf.*r/ },
+      { key: 'leftFoot',      re: /left.*foot|ankle.*l/ },
+      { key: 'rightFoot',     re: /right.*foot|ankle.*r/ },
+      { key: 'hips',          re: /hips|pelvis/ },
     ];
 
     // First pass: exact
@@ -5287,8 +5751,9 @@ function createLightningEffect() {
     }
   }
 
-  function configureThirdPersonWeaponTransform(gun) {
-    gun.scale.setScalar(0.6);
+  function configureThirdPersonWeaponTransform(gun, gunType?: GunType) {
+    const handScale = (gunType && Number.isFinite(GUN_SPECS[gunType]?.handScale)) ? GUN_SPECS[gunType].handScale : 1;
+    gun.scale.setScalar(0.6 * handScale);
     gun.traverse(obj => {
       if (!obj.isMesh) return;
       obj.castShadow = false;
@@ -5320,7 +5785,7 @@ function createLightningEffect() {
     let nextWeapon = thirdPersonWeaponCache.get(gunType);
     if (!nextWeapon) {
       nextWeapon = createWeaponViewModel(gunType, scene);
-      configureThirdPersonWeaponTransform(nextWeapon.gun);
+      configureThirdPersonWeaponTransform(nextWeapon.gun, gunType);
       captureThirdPersonPartBase(nextWeapon.mag);
       captureThirdPersonPartBase(nextWeapon.slide);
       captureWeaponRigPartBases(nextWeapon, "thirdPersonBase");
@@ -5511,7 +5976,7 @@ function createLightningEffect() {
     root.name = "Third person player";
 
     let model = PLAYER_CHARACTER_FBX && skeletonClone ? skeletonClone(PLAYER_CHARACTER_FBX) : createFallbackThirdPersonModel();
-    model.name = "Player black mask model";
+    model.name = "Player Pete model";
     root.add(model);
     scene.add(root);
 
@@ -5630,7 +6095,15 @@ function createLightningEffect() {
 
   function clearThirdPersonAimOffsets() {
     if (!thirdPerson.aimOffsets?.length) return;
-    for (const applied of thirdPerson.aimOffsets) {
+    // Undo in REVERSE application order. Offsets are applied with premultiply, so
+    // a bone that got A then B this frame holds B·A·clip; its inverse is
+    // A⁻¹·B⁻¹, i.e. remove B before A. Undoing forward instead leaves the
+    // commutator B⁻¹·A⁻¹·B·A on every multi-offset bone (e.g. the right upper arm,
+    // which gets both aimArmAtPoint and applyWorldPitchToBone). That residual is
+    // tiny per frame but ACCUMULATES — it slowly wound the one-handed gun (which is
+    // parented to that hand) around its barrel: the "idle hand does a slow 360".
+    for (let i = thirdPerson.aimOffsets.length - 1; i >= 0; i--) {
+      const applied = thirdPerson.aimOffsets[i];
       if (!applied?.bone) continue;
       applied.bone.quaternion.premultiply(_aimOffsetInvQuat.copy(applied.quat).invert());
     }
@@ -5664,6 +6137,7 @@ function createLightningEffect() {
   const _aimDeltaQuat = new THREE.Quaternion();
   const _aimPointTmp = new THREE.Vector3();
   const _aimFwdTmp = new THREE.Vector3();
+  const _foregripTmp = new THREE.Vector3();
   const _aimShoulderTmp = new THREE.Vector3();
   const _aimHandTmp = new THREE.Vector3();
   const _aimCurDirTmp = new THREE.Vector3();
@@ -5693,10 +6167,198 @@ function createLightningEffect() {
     _aimWantDirTmp.subVectors(point, _aimShoulderTmp).normalize();
     _aimDeltaQuat.setFromUnitVectors(_aimCurDirTmp, _aimWantDirTmp);
     const ang = 2 * Math.acos(Math.min(1, Math.abs(_aimDeltaQuat.w)));
+    // SINGULARITY GUARD: when the aim direction is nearly OPPOSITE the arm's current
+    // direction (~180°), setFromUnitVectors picks an arbitrary perpendicular spin
+    // axis — applying even a clamped slice of that makes the arm whip around (the
+    // "360° arm spin"). A target that far behind is never a real aim, so bail out and
+    // let the camera-pitch bone drive carry elevation instead.
+    if (ang > 2.2) return;
     let k = weight;
     if (ang > 1e-4) k *= Math.min(1, MAX_ARM_AIM_ANGLE / ang);
     if (k < 0.999) _aimDeltaQuat.slerp(_aimIdentityQuat, 1 - k);
     applyWorldQuatToBone(upperArm, _aimDeltaQuat);
+  }
+
+  // ── Two-bone analytic IK (rifle hands onto the gun grips) ────────────────────
+  // The two-handed gun is authoritative (torso-anchored + aimed); each arm is then
+  // solved so its HAND bone lands on the gun's grip point, elbows bending naturally.
+  // Law-of-cosines (Ryan Juckett) in WORLD space, layered on top of the mixer and
+  // undone next frame through thirdPerson.aimOffsets like every other aim offset.
+  // DISABLED (user decision): two-handed guns use the clone-NPC DIRECT pose (gun at
+  // the hand-centre, fixed forward+pitch rotation) — the look the user preferred.
+  // The two-bone grip IK path is kept in the code but gated off by this flag.
+  const TWO_HAND_IK = false;
+  // Torso-relative rest anchor for the two-handed gun (offset from the spine bone).
+  // FWD must be big enough that the gun's STOCK (which extends BACKWARD from the
+  // grip) clears the torso — at 0.28 the stock poked through the player's back.
+  let TWO_HAND_GUN_FWD = 0.52, TWO_HAND_GUN_UP = 0.02, TWO_HAND_GUN_RIGHT = 0.06;
+  // Slight down-scale for two-handed guns — they read a touch too large against the
+  // player model. Applied on top of the 0.6 base × per-gun handScale.
+  const TWO_HAND_GUN_SCALE = 0.85;
+  const _ikA = new THREE.Vector3(), _ikB = new THREE.Vector3(), _ikC = new THREE.Vector3();
+  const _ikAC = new THREE.Vector3(), _ikAB = new THREE.Vector3(), _ikAT = new THREE.Vector3();
+  const _ikBA = new THREE.Vector3(), _ikBC = new THREE.Vector3();
+  const _ikAxis0 = new THREE.Vector3(), _ikAxis1 = new THREE.Vector3(), _ikUp = new THREE.Vector3(0, 1, 0);
+  const _ikQBend = new THREE.Quaternion(), _ikQSwing = new THREE.Quaternion(), _ikQUpper = new THREE.Quaternion();
+  const _ikQFore = new THREE.Quaternion(), _ikQId = new THREE.Quaternion();
+  const _ikGrips = { right: new THREE.Vector3(), left: new THREE.Vector3(), rDelta: 0, lDelta: 0, valid: false };
+  const _ikHandTmp = new THREE.Vector3();
+
+  function _ang(u, v) { const d = u.dot(v) / (u.length() * v.length() || 1); return Math.acos(clamp(d, -1, 1)); }
+
+  // Solve so `hand`'s world position reaches `target`; upper/fore are the two bones.
+  function solveTwoBoneIK(upper, fore, hand, target, weight) {
+    if (!upper || !fore || !hand || weight <= 0.001) return;
+    upper.getWorldPosition(_ikA);
+    fore.getWorldPosition(_ikB);
+    hand.getWorldPosition(_ikC);
+    const lab = _ikB.distanceTo(_ikA);
+    const lcb = _ikC.distanceTo(_ikB);
+    if (lab < 1e-4 || lcb < 1e-4) return;
+    let lat = target.distanceTo(_ikA);
+    lat = clamp(lat, Math.abs(lab - lcb) + 1e-3, lab + lcb - 1e-3);
+
+    _ikAC.subVectors(_ikC, _ikA);
+    _ikAB.subVectors(_ikB, _ikA);
+    _ikAT.subVectors(target, _ikA);
+    _ikBA.subVectors(_ikA, _ikB);
+    _ikBC.subVectors(_ikC, _ikB);
+
+    const acAb0 = _ang(_ikAC, _ikAB);
+    const baBc0 = _ang(_ikBA, _ikBC);
+    const acAb1 = Math.acos(clamp((lab * lab + lat * lat - lcb * lcb) / (2 * lab * lat), -1, 1));
+    const baBc1 = Math.acos(clamp((lab * lab + lcb * lcb - lat * lat) / (2 * lab * lcb), -1, 1));
+
+    _ikAxis0.crossVectors(_ikAC, _ikAB);
+    if (_ikAxis0.lengthSq() < 1e-8) _ikAxis0.crossVectors(_ikAC, _ikUp);
+    if (_ikAxis0.lengthSq() < 1e-8) _ikAxis0.set(0, 0, 1);
+    _ikAxis0.normalize();
+
+    // Upper arm: bend (about the joint plane) then swing (align a→c onto a→t).
+    _ikQBend.setFromAxisAngle(_ikAxis0, acAb1 - acAb0);
+    _ikQSwing.setFromUnitVectors(_ikAC.clone().normalize(), _ikAT.clone().normalize());
+    _ikQUpper.copy(_ikQSwing).multiply(_ikQBend);
+    if (weight < 0.999) _ikQUpper.slerp(_ikQId, 1 - weight);
+    applyWorldQuatToBone(upper, _ikQUpper);
+
+    // Propagate so the forearm reads the rotated shoulder before it solves.
+    upper.updateMatrixWorld(true);
+
+    // Forearm: correct the elbow interior angle about the same plane axis.
+    _ikQFore.setFromAxisAngle(_ikAxis0, baBc1 - baBc0);
+    if (weight < 0.999) _ikQFore.slerp(_ikQId, 1 - weight);
+    applyWorldQuatToBone(fore, _ikQFore);
+    fore.updateMatrixWorld(true);
+  }
+
+  // ── Foot-lock IK (anti-slide) ───────────────────────────────────────────────
+  // The finisher on top of the velocity-matched cadence. In an in-place run clip
+  // the stance foot already tracks backward relative to the hips at ~ground speed,
+  // so with the cadence matched its WORLD position is nearly still — but turns and
+  // any residual speed mismatch still let the planted foot creep. This pins the
+  // planted foot's world XZ for the duration of its stance and solves the leg
+  // (Ryan Juckett two-bone IK) to hold it, releasing the moment the clip lifts the
+  // foot into its swing. VERTICAL is left to the animation (heel–toe roll intact);
+  // only the horizontal slide is cancelled. Everything is derived from the rig at
+  // runtime — bone lengths from getWorldPosition, ground from propTopAt — and
+  // gated behind FOOT_IK. Diagnose with window.__rbFootIK().
+  // Runtime-toggleable so it can be A/B'd live (window.__rbFootIK(true/false)) —
+  // foot-lock quality is a per-rig, 60fps visual judgement, not something the
+  // headless harness can confirm. Persisted so a preference survives reloads.
+  let FOOT_IK = localStorage.getItem("rb_foot_ik") !== "0";
+  const FOOT_IK_MAX_WEIGHT = 0.8;   // never fully override the clip (leaves knee life)
+  // Stance is detected by COMPARING the two feet (rig-agnostic): the lower foot is
+  // the one bearing weight. Absolute ankle heights are meaningless across rigs (the
+  // ankle sits well above the sole), so we use the height DIFFERENCE with
+  // hysteresis instead of a fixed ground threshold.
+  const FOOT_PLANT_LEAD = 0.02;     // must be at least this much lower than the other foot to plant
+  const FOOT_RELEASE_LEAD = 0.05;   // once this much HIGHER than the other foot, it is swinging → release
+  const FOOT_MAX_SLIDE = 0.30;      // clip carried the foot this far from the lock ⇒ it is stepping, release
+  const FOOT_MAX_REACH = 0.70;      // lock this far from the hip ⇒ leg would drag, release (must step)
+  const FOOT_IK_BLEND = 12;         // weight ramp rate (in/out), per second
+  const _footL = new THREE.Vector3(), _footR = new THREE.Vector3();
+  const _footTarget = new THREE.Vector3(), _hipWorld = new THREE.Vector3();
+
+  function solveFootLock(st, upLeg, leg, foot, footW, otherHeight, grounded, dt) {
+    const groundY = propTopAt(footW.x, footW.z, 0.12);
+    const heightAbove = footW.y - groundY;
+
+    if (!st.locked) {
+      // Plant when grounded and this foot is the LOWER (weight-bearing) one.
+      if (grounded && heightAbove < otherHeight - FOOT_PLANT_LEAD) {
+        st.locked = true; st.wx = footW.x; st.wz = footW.z;
+      }
+    } else {
+      const slide = Math.hypot(footW.x - st.wx, footW.z - st.wz);
+      upLeg.getWorldPosition(_hipWorld);
+      const reach = Math.hypot(st.wx - _hipWorld.x, st.wz - _hipWorld.z);
+      // Release once the foot clearly lifts above the other (push-off into swing),
+      // the clip steps it away from the lock, the leg would over-reach, or airborne.
+      if (!grounded || heightAbove > otherHeight + FOOT_RELEASE_LEAD ||
+          slide > FOOT_MAX_SLIDE || reach > FOOT_MAX_REACH) {
+        st.locked = false;
+      }
+    }
+
+    const targetW = st.locked ? FOOT_IK_MAX_WEIGHT : 0;
+    st.weight += (targetW - st.weight) * Math.min(1, dt * FOOT_IK_BLEND);
+    if (st.weight <= 0.01) { st.weight = 0; return; }
+
+    // Hold the locked XZ, keep the animated height (no vertical fight → no pop).
+    _footTarget.set(st.wx, footW.y, st.wz);
+    solveTwoBoneIK(upLeg, leg, foot, _footTarget, st.weight);
+  }
+
+  function applyThirdPersonFootIK(dt) {
+    if (!FOOT_IK || !thirdPerson.aimBones) return;
+    const b = thirdPerson.aimBones;
+    if (!b.leftFoot || !b.rightFoot) return;   // rig without resolved legs → skip
+    const grounded = player.grounded && (player.jumpOffset || 0) <= 0.05 &&
+      !thirdPerson.lastMove?.jumping && !thirdPerson.cutsceneAction && !player.pvpDead;
+    // Read BOTH feet first (before solving either changes the skeleton), so stance
+    // detection compares a consistent frame.
+    b.leftFoot.getWorldPosition(_footL);
+    b.rightFoot.getWorldPosition(_footR);
+    const lH = _footL.y - propTopAt(_footL.x, _footL.z, 0.12);
+    const rH = _footR.y - propTopAt(_footR.x, _footR.z, 0.12);
+    solveFootLock(thirdPerson.footIK.left, b.leftUpLeg, b.leftLeg, b.leftFoot, _footL, rH, grounded, dt);
+    solveFootLock(thirdPerson.footIK.right, b.rightUpLeg, b.rightLeg, b.rightFoot, _footR, lH, grounded, dt);
+  }
+
+  // Compute the two grip world points on the currently-posed two-handed gun and
+  // solve both arms onto them. Called from updateThirdPersonWeaponPose after the
+  // gun transform (torso-anchored + aimed) is finalized. Records the residual
+  // hand↔grip distances for the __rbTest.ikGripDelta diagnostic.
+  const _ikGunOrigin = new THREE.Vector3(), _ikMuzzle = new THREE.Vector3(), _ikBarrel = new THREE.Vector3();
+  // Grip placement along the barrel (fraction of gun-origin→muzzle distance) + drop.
+  const RIGHT_GRIP_ALONG = 0.06, RIGHT_GRIP_DROP = -0.02;
+  const LEFT_GRIP_ALONG = 0.30, LEFT_GRIP_DROP = -0.02;
+  function solveTwoHandGripIK(weight) {
+    _ikGrips.valid = false;
+    const b = thirdPerson.aimBones;
+    const gun = thirdPerson.weapon?.gun;
+    if (!b || !gun || !thirdPerson.rightHand || !thirdPerson.leftHand) return;
+    if (!b.rightUpperArm || !b.rightForeArm || !b.leftUpperArm || !b.leftForeArm) return;
+    gun.updateMatrixWorld(true);
+    gun.getWorldPosition(_ikGunOrigin);
+    const muzzle = thirdPerson.weapon.muzzle;
+    if (muzzle) { muzzle.getWorldPosition(_ikMuzzle); _ikBarrel.subVectors(_ikMuzzle, _ikGunOrigin); }
+    else _ikBarrel.set(Math.cos(yaw.rotation.y), 0, -Math.sin(yaw.rotation.y));
+    const barrelLen = _ikBarrel.length() || 1;
+    _ikBarrel.multiplyScalar(1 / barrelLen);
+    _ikGrips.right.copy(_ikGunOrigin).addScaledVector(_ikBarrel, RIGHT_GRIP_ALONG * barrelLen);
+    _ikGrips.right.y += RIGHT_GRIP_DROP;
+    _ikGrips.left.copy(_ikGunOrigin).addScaledVector(_ikBarrel, LEFT_GRIP_ALONG * barrelLen);
+    _ikGrips.left.y += LEFT_GRIP_DROP;
+
+    solveTwoBoneIK(b.rightUpperArm, b.rightForeArm, thirdPerson.rightHand, _ikGrips.right, weight);
+    solveTwoBoneIK(b.leftUpperArm, b.leftForeArm, thirdPerson.leftHand, _ikGrips.left, weight);
+
+    thirdPerson.rightHand.getWorldPosition(_ikHandTmp);
+    _ikGrips.rDelta = _ikHandTmp.distanceTo(_ikGrips.right);
+    thirdPerson.leftHand.getWorldPosition(_ikHandTmp);
+    _ikGrips.lDelta = _ikHandTmp.distanceTo(_ikGrips.left);
+    _ikGrips.valid = true;
   }
 
   // Called every frame after mixer.update() and before updateThirdPersonWeaponPose().
@@ -5707,12 +6369,15 @@ function createLightningEffect() {
     if (!b) return;
 
     // â"€â"€ Aim blend â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-    // Full raise when aiming or in the brief window after firing; otherwise 0 so
-    // the idle/walk clip fully controls the arms (gun lowered / hip-carry pose).
-    // In unified FP the arms must ALWAYS be up (we view the gun from the eye), so
-    // force the blend to 1 whenever the unified body is the active view.
+    // ALWAYS-AIM: the operator keeps the gun raised and pointed at the crosshair
+    // at all times — idle, moving, and firing — for every weapon (two-handed guns
+    // aim two-handed, one-handed sidearms aim one-handed). The ONLY times the gun
+    // lowers are reload, death, and scripted cutscene poses, where the arms must
+    // be free for those animation clips to read correctly. In unified FP the arms
+    // must always be up regardless (we view the gun from the eye).
     const unifiedFp = unifiedFirstPersonBodyActive();
-    const aimTarget = (unifiedFp || mouse.aiming || thirdPerson.fireTimer > 0) ? 1.0 : 0.0;
+    const aimSuppressed = thirdPerson.reloadTimer > 0 || player.pvpDead || !!thirdPerson.cutsceneAction;
+    const aimTarget = (!unifiedFp && aimSuppressed) ? 0.0 : 1.0;
     thirdPerson.aimBlend += (aimTarget - thirdPerson.aimBlend) * Math.min(1, dt * 9);
 
     // â"€â"€ Fire punch spring â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -5743,7 +6408,7 @@ function createLightningEffect() {
       const clip = act.getClip?.();
       const dur = clip?.duration || 1;
       const phase = (act.time / dur) * Math.PI * 2 * 2; // 2 steps per locomotion loop
-      const amp = thirdPerson.lastMove?.sprinting ? 0.085 : 0.05;
+      const amp = thirdPerson.lastMove?.sprinting ? 0.06 : 0.035;
       const gain = carryW * (1 - blend * 0.75);
       swayUpper = Math.sin(phase) * amp * gain;
       swayFore  = Math.sin(phase - 0.6) * amp * 0.55 * gain;   // forearm lags slightly
@@ -5781,11 +6446,23 @@ function createLightningEffect() {
     const spineAngle = clamp(camPitch * SPINE_PITCH_FACTOR * blend
                           + punch * PUNCH_SPINE_FACTOR + swaySpine, -spineClamp, spineClamp);
 
-    // Spine leans into the aim direction (applied FIRST so the arm solve below
-    // measures the torso-pitched pose).
-    applyWorldPitchToBone(b.spine, spineAngle);
-
     const oneHand = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
+    // CLONE-FAITHFUL two-handed: real two-handed guns replicate the clone-NPC pose
+    // 1:1 (updateClonedGhostWeaponPose) — the arms just play the mixamo clip, the
+    // WHOLE model bends for pitch (updateThirdPersonCharacter), and the gun rotates
+    // at the hand-centre. So NONE of the procedural spine-pitch / arm-aim / arm-pitch
+    // below runs for them: that is the "extra stuff" that morphed the arms unnaturally.
+    // One-handed sidearms and unified-FP keep the procedural pose.
+    const twoHandClone = !oneHand && !unifiedFp;
+
+    // Spine leans into the aim direction (applied FIRST so the arm solve below
+    // measures the torso-pitched pose). One-handed / unified-FP only.
+    if (!twoHandClone) applyWorldPitchToBone(b.spine, spineAngle);
+    // Two-handed IK path: the gun is torso-anchored and the HANDS are IK-solved onto
+    // its grips later in updateThirdPersonWeaponPose. So here we apply ONLY the spine
+    // lean (above) and leave the arms untouched — the procedural arm raise/aim below
+    // would fight the IK. One-handed and unified-FP keep the legacy procedural pose.
+    const useTwoHandIK = TWO_HAND_IK && !oneHand && !unifiedFp;
     if (unifiedFp) {
       // Unified FP keeps the original linear scheme (tuned for the eye camera).
       const upperArmAngle = clamp((ARM_RAISE_BIAS + camPitch * UPPER_ARM_PITCH_FACTOR) * blend
@@ -5801,18 +6478,87 @@ function createLightningEffect() {
       // this frame's animated + spine-pitched pose, then rotate each aiming arm
       // from its ACTUAL direction toward the crosshair point. Self-limiting: the
       // delta shrinks to zero as the arm reaches the target, at any camera pitch.
-      if (blend > 0.02 && thirdPerson.model) {
+      if (blend > 0.02 && thirdPerson.model && !useTwoHandIK && !twoHandClone) {
         thirdPerson.model.updateMatrixWorld(true);
         camera.getWorldPosition(_aimPointTmp);
         camera.getWorldDirection(_aimFwdTmp);
         _aimPointTmp.addScaledVector(_aimFwdTmp, 16); // crosshair point (~16 u out)
-        aimArmAtPoint(b.rightUpperArm, thirdPerson.rightHand, _aimPointTmp, blend * 0.85);
-        if (!oneHand) aimArmAtPoint(b.leftUpperArm, thirdPerson.leftHand, _aimPointTmp, blend * 0.8);
+        if (oneHand) {
+          // Sidearm (pistol/akimbo/SMG): the one-handed Pistol clips hold a fairly
+          // NEUTRAL arm, so the right arm must be solved almost fully to the
+          // crosshair to read as "aiming".
+          // CLAMP the vertical aim DIRECTION (like the two-handed path below): an
+          // unclamped near-vertical target made the shoulder solve swing the arm
+          // straight up and whip it through a full 360° at steep up/down look. The
+          // gun still elevates the rest of the way via the upper/forearm pitch below
+          // (which is clamped) — the arm direction just stops short of vertical.
+          if (_aimFwdTmp.y > 0.5) { _aimFwdTmp.y = 0.5; _aimFwdTmp.normalize(); }
+          else if (_aimFwdTmp.y < -0.5) { _aimFwdTmp.y = -0.5; _aimFwdTmp.normalize(); }
+          camera.getWorldPosition(_aimPointTmp);
+          _aimPointTmp.addScaledVector(_aimFwdTmp, 16);
+          aimArmAtPoint(b.rightUpperArm, thirdPerson.rightHand, _aimPointTmp, blend * 0.85);
+        } else {
+          // Two-handed (rifle/shotgun/sniper/lmg/dmr/flak): the rifle clips
+          // (Rifle Aiming Idle / rifle run / Strafe / Firing Rifle) ALREADY hold
+          // the gun aimed forward at chest/shoulder height. The gun mesh is
+          // parented to the right hand, so solving that arm to the distant 16u
+          // crosshair on TOP of the clip DOUBLE-raises it and jams the muzzle to
+          // the character's cheek (the OLD regression, back when the base was the
+          // shouldered Rifle Aiming Idle + a polluted handFit). The base is now the
+          // frozen rifle-run ready carry with a clean fit, so we CAN solve the right
+          // arm meaningfully toward the crosshair — this makes the muzzle actually
+          // follow where the player is looking (up/down) instead of staying level
+          // and reading as "aiming down". The SPINE (SPINE_PITCH_FACTOR above) adds
+          // the rest of the pitch through the hierarchy.
+          // Direct-pose two-handed: the gun sits at the hand-centre, so we position
+          // BOTH hands toward the aim and let the gun (rotated forward+pitch in
+          // updateThirdPersonWeaponPose) sit between them. Right arm points down-range;
+          // left arm to the foregrip just ahead of the right hand.
+          // CAP the UP elevation of the ARM-aim direction so at steep up-look the arms
+          // don't reach straight overhead — the GUN still tracks FULL pitch via its own
+          // rotateOnWorldAxis, so it points up correctly while the hands stay sane.
+          // (One-handed used the unclamped _aimPointTmp above and is unaffected.)
+          if (_aimFwdTmp.y > 0.42) { _aimFwdTmp.y = 0.42; _aimFwdTmp.normalize(); }
+          camera.getWorldPosition(_aimPointTmp);
+          _aimPointTmp.addScaledVector(_aimFwdTmp, 16);
+          aimArmAtPoint(b.rightUpperArm, thirdPerson.rightHand, _aimPointTmp, blend * 0.55);
+          thirdPerson.rightHand.getWorldPosition(_foregripTmp);
+          _foregripTmp.addScaledVector(_aimFwdTmp, 0.34);
+          aimArmAtPoint(b.leftUpperArm, thirdPerson.leftHand, _foregripTmp, blend * 0.95);
+        }
       }
       // Additive feel on top of the solve: fire punch + gait sway, plus a small
       // forearm follow so the elbow doesn't read locked.
-      applyWorldPitchToBone(b.rightUpperArm, clamp(punch * PUNCH_ARM_FACTOR * (oneHand ? 0.7 : 1) + swayUpper, -0.4, 0.4));
-      applyWorldPitchToBone(b.rightForeArm,  clamp(camPitch * 0.10 * blend + punch * PUNCH_FOREARM_FACTOR * (oneHand ? 0.7 : 1) + swayFore, -foreLim, foreLim));
+      // One-handed aim pitch is DISTRIBUTED across the shoulder (upper arm) AND the
+      // elbow (forearm), the way a real arm raises/lowers a sidearm — the shoulder
+      // leads with the larger share and the elbow follows, so the motion reads as
+      // muscle-driven instead of the elbow doing all the work. Sidearms are rigidly
+      // parented to the hand and aimArmAtPoint only aims the arm DIRECTION (not the
+      // wrist), so this bone pitch is what actually elevates the attached gun.
+      // Camera-pitch drives the aiming arm(s) — shoulder leads, elbow follows — so
+      // the WHOLE grip raises/lowers with the look (a real muscle-driven aim), not
+      // just the gun tilting in place. One-handed: only the firing (right) arm.
+      // Two-handed: BOTH arms get it symmetrically so the two-hand grip lifts as a
+      // unit (the gun sits at the hand-centre, so lifting the hands lifts the gun).
+      // Camera-pitch drives the aiming arm(s) — shoulder leads, elbow follows — so
+      // the whole grip raises/lowers with the look. One-handed: firing (right) arm
+      // only. Two-handed: both arms symmetrically so the two-hand grip lifts as a
+      // unit (the direct-pose gun sits at the hand-centre, so lifting the hands
+      // lifts the gun). The upward raise is capped for two-handed so the hands
+      // don't fly overhead at steep angles.
+      const upperPitchK   = oneHand ? 0.50 : 0.42;
+      const upperPitchLim = oneHand ? 0.65 : 0.78;
+      const forePitchK    = oneHand ? 0.45 : 0.32;
+      const forePitchLim  = oneHand ? 0.60 : 0.62;
+      // Two-handed up-lift: the gun sits at the hand-centre, so lifting the arms
+      // lifts the WHOLE gun (not just tilting its barrel in place). But the lift
+      // SATURATES — the effective up-pitch is capped at 0.5 (moderate up) so steep
+      // up-look doesn't keep raising the hands overhead. Moderate up still lifts
+      // nicely; beyond that the gun keeps tilting (aim) while the hands plateau.
+      const armPitch = (!oneHand && camPitch > 0) ? Math.min(camPitch, 0.5) * 0.85 : camPitch;
+      if (!useTwoHandIK && !twoHandClone) {
+      applyWorldPitchToBone(b.rightUpperArm, clamp(armPitch * upperPitchK * blend + punch * PUNCH_ARM_FACTOR * (oneHand ? 0.7 : 1) + swayUpper, -upperPitchLim, upperPitchLim));
+      applyWorldPitchToBone(b.rightForeArm,  clamp(armPitch * forePitchK * blend + punch * PUNCH_FOREARM_FACTOR * (oneHand ? 0.7 : 1) + swayFore, -forePitchLim, forePitchLim));
       if (oneHand) {
         // Pistol support arm: tucked clearly LOWER than the firing arm (measured
         // sign convention: ARM_RAISE_BIAS pulls DOWN from the clip's raised pose).
@@ -5822,9 +6568,12 @@ function createLightningEffect() {
         applyWorldPitchToBone(b.leftUpperArm, clamp(ARM_RAISE_BIAS * tuck * blend + punch * PUNCH_ARM_FACTOR * 0.15 + swayUpper * 0.5, upperLo, upperHi));
         applyWorldPitchToBone(b.leftForeArm,  clamp(punch * PUNCH_FOREARM_FACTOR * 0.25 + swayFore * 0.5, -foreLim, foreLim));
       } else {
-        applyWorldPitchToBone(b.leftUpperArm, clamp(punch * PUNCH_ARM_FACTOR + swayUpper, -0.4, 0.4));
-        applyWorldPitchToBone(b.leftForeArm,  clamp(camPitch * 0.10 * blend + punch * PUNCH_FOREARM_FACTOR + swayFore, -foreLim, foreLim));
+        // Two-handed support (left) arm mirrors the firing arm so both hands rise/
+        // fall together and stay on the gun.
+        applyWorldPitchToBone(b.leftUpperArm, clamp(armPitch * upperPitchK * blend + punch * PUNCH_ARM_FACTOR + swayUpper, -upperPitchLim, upperPitchLim));
+        applyWorldPitchToBone(b.leftForeArm,  clamp(armPitch * forePitchK * blend + punch * PUNCH_FOREARM_FACTOR + swayFore, -forePitchLim, forePitchLim));
       }
+      } // end !useTwoHandIK
     }
 
     // Knife swing layered on the RIGHT arm only: wind-up raises the arm, then the
@@ -6031,9 +6780,35 @@ function createLightningEffect() {
     }
     // Pack-a-Punch bank amount — used by both pose paths and the glow flare below.
     const tpPackBump = weaponAnim.packAnim > 0 ? Math.sin((1 - weaponAnim.packAnim) * Math.PI) : 0;
-    const gunParented = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
+    // Inspect flourish: a quick raise-and-spin the player can trigger any time they
+    // aren't reloading/switching/aiming/moving (see tryInspect). env ramps in over
+    // the first 18%, holds, ramps back out over the last 18% so it never pops in
+    // or out; spin is one full oscillation so the gun rolls out and back rather
+    // than snapping to a held angle.
+    let inspectEnv = 0, inspectSpin = 0;
+    if (thirdPerson.inspecting) {
+      const t = thirdPerson.inspectT;
+      const riseEnv = Math.min(1, t / 0.18);
+      const fallEnv = 1 - Math.max(0, (t - 0.82) / 0.18);
+      inspectEnv = Math.max(0, Math.min(riseEnv, fallEnv));
+      inspectSpin = Math.sin(t * Math.PI * 2) * inspectEnv;
+    }
+    // ONE-HANDED sidearms are parented to the hand (handFit) — they're small and
+    // read as held. TWO-HANDED guns use the clone-NPC DIRECT pose (legacy branch
+    // below): gun at the hand-centre with a fixed forward+pitch rotation, NOT
+    // parented. This is deliberate: a parented rifle SWINGS with the run animation
+    // (the barrel follows the walk-cycle hand instead of the aim), which looked
+    // badly wrong while moving. The direct pose keeps the gun aimed forward at all
+    // times, moving or standing — the clones prove it reads correctly.
+    const gunHandParented = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
+    // TWO-HANDED clone-faithful path: parented to the body ROOT and posed exactly
+    // like updateClonedGhostWeaponPose (hand-centre in root-local space + fixed
+    // rotation). Only for real two-handed guns and NOT in unified-FP (which keeps
+    // its own world-space viewmodel placement in the legacy branch below).
+    const twoHandRootPose = !gunHandParented && !unifiedFpActive;
+    const gunParented = gunHandParented && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
       && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
-    if (GUN_IN_HAND && !gunParented && gun.parent && gun.parent !== scene) scene.attach(gun);
+    if (GUN_IN_HAND && !gunParented && !twoHandRootPose && gun.parent && gun.parent !== scene) scene.attach(gun);
     if (gunParented) {
       if (gun.parent !== thirdPerson.rightHand) thirdPerson.rightHand.add(gun);
       const fit = thirdPerson.weapon.handFit;
@@ -6042,8 +6817,10 @@ function createLightningEffect() {
       gun.scale.copy(fit.scale);
       // Grip-fit trim (free-camera verification): the calibrated fit inherits the
       // legacy world-pose float — seat the grip back into the palm (gun barrel is
-      // local +X) and level the muzzle, which sat ~25° high.
-      gun.rotateZ(-0.42);
+      // local +X) and level the muzzle. rotateZ was -0.42 which over-lowered the
+      // muzzle so one-handed barrels pointed at the FLOOR at level look; reduced so
+      // the sidearm points roughly forward when the player looks straight.
+      gun.rotateZ(-0.16);
       gun.translateX(-0.12);
       gun.translateY(-0.04);
       // Subtle additive feel in gun-local space — the hand itself already
@@ -6053,6 +6830,12 @@ function createLightningEffect() {
         gun.position.y -= e * 0.2;
         gun.rotateX(-e * 0.45);
       }
+      if (inspectEnv > 0) {
+        gun.translateY(inspectEnv * 0.05);
+        gun.translateX(-inspectEnv * 0.03);
+        gun.rotateY(inspectSpin * 0.55);
+        gun.rotateX(-inspectEnv * 0.22);
+      }
       const tpSpecH = GUN_SPECS[currentGun] || ({} as any);
       if (tpSpecH.fireCycle === "rattle" && gunState.fireCooldown > 0) {
         const tj = performance.now();
@@ -6061,12 +6844,89 @@ function createLightningEffect() {
         gun.position.y += Math.sin(tj * 0.163) * jAmp;
       }
       if (tpPackBump > 0) gun.rotateZ(tpPackBump * 0.4);
+    } else if (twoHandRootPose) {
+      // ── CLONE-FAITHFUL two-handed pose ────────────────────────────────────
+      // Byte-for-byte the clone-NPC placement (see updateClonedGhostWeaponPose):
+      // parent the gun to the body ROOT and sit it at the hand-centre in root-
+      // local space with a FIXED forward+pitch rotation. The arms just carry the
+      // rifle clip — no IK, no world-axis pitch, no handFit. This is the look the
+      // user preferred and the clones prove reads correctly while moving.
+      // Reload mag/slide/clip staging (above + updateThirdPersonReloadClip) is
+      // parent-independent and still runs; reload/pack/inspect only nudge locally.
+      const tpRoot = thirdPerson.root;
+      if (gun.parent !== tpRoot) tpRoot.add(gun);
+      tpRoot.updateMatrixWorld(true);
+
+      // hand-centre → root-local, with the clone's fixed nudges (x+0.02, y+0.05, z-0.2)
+      const local = handCenter.clone();
+      tpRoot.worldToLocal(local);
+      local.z -= 0.2; local.y += 0.05; local.x += 0.02;
+      // Long-gun trim: push the receiver forward along the barrel (root-local forward
+      // is -z) and slightly down so the stock/scope clears the operator's torso/head
+      // instead of clipping through it. 0 for compact guns (see GunSpec.tpBarrelPush).
+      const tpLongSpec = GUN_SPECS[currentGun];
+      if (tpLongSpec?.tpBarrelPush) local.z -= tpLongSpec.tpBarrelPush;
+      if (tpLongSpec?.tpBarrelDrop) local.y -= tpLongSpec.tpBarrelDrop;
+      gun.position.copy(local);
+
+      // Scale: the player keeps its per-gun size calibration (0.6 base × handScale ×
+      // twoHandMul) — the clone's flat 0.55 would mis-size the different gun meshes.
+      const tpHandScaleC = Number.isFinite(GUN_SPECS[currentGun]?.handScale) ? GUN_SPECS[currentGun].handScale : 1;
+      const wantScaleC = 0.6 * tpHandScaleC * TWO_HAND_GUN_SCALE;
+      if (Math.abs(gun.scale.x - wantScaleC) > 1e-4) gun.scale.setScalar(wantScaleC);
+
+      // Fixed clone rotation (root-local): pitch about local X, fixed forward yaw
+      // (π/2, because the root already faces the aim), small roll. NO reload / equip /
+      // inspect / pack / lag / rattle terms — a 1:1 replicate of the clone.
+      // NOTE sign: the clone derives aimPitch from a downward LOS convention, but the
+      // player camera's `pitch.rotation.x` is POSITIVE when looking UP — so the barrel
+      // must rise with +pitch (lift the muzzle as you raise your view, like a real
+      // shoulder-mount). Using the clone's -aimPitch here inverted it (muzzle dipped
+      // when looking up). Hence +aimPitchC.
+      const aimPitchC = clamp(pitch.rotation.x, -0.5, 0.5);
+      gun.rotation.set(aimPitchC * 0.62, Math.PI * 0.5, -0.08);
+
+      // Reload staging (this branch owns no reload terms otherwise, so the gun used
+      // to just float at the hand-centre through the whole reload). Mirror the legacy
+      // path: the LEFT (support) hand cradles the gun down/in while the RIGHT hand
+      // pulls away to fetch and seat the fresh mag. Everything here is in root-local
+      // space (the gun is parented to tpRoot).
+      if (reloadActive) {
+        const cradleWorld = reloadGripTmp
+          .copy(leftHandTmp)
+          .addScaledVector(forward, 0.12)
+          .addScaledVector(right, 0.05);
+        cradleWorld.y += 0.05;
+        tpRoot.worldToLocal(cradleWorld); // → root-local, matching gun.position space
+        gun.position.lerp(cradleWorld, reloadPresent * 0.9);
+        // Cant the receiver toward the body as it's cradled, plus a small settle on
+        // mag-seat and the post-reload action rack so it reads mechanically.
+        gun.rotation.z += reloadPresent * 0.5;
+        gun.rotation.x += magSeat * 0.12 - actionRack * 0.1;
+      }
     } else {
     // Grip anchor. Normally the two-handed centre; during reload the LEFT (support)
     // hand cradles the gun so the RIGHT hand is free to fetch/insert the fresh clip.
     // Without this the gun stays pinned to the hand-centre and drags toward the right
     // hand as it pulls away — which is what read as "off".
     const gripAnchor = reloadGripTmp.copy(handCenter);
+    // Two-handed IK: anchor the gun on the TORSO (spine bone), independent of where
+    // the arms currently are — breaking the old circular hand-centre dependency. The
+    // gun becomes authoritative; the hands are IK-solved onto its grips at the end of
+    // this function. Rest point = spine world pos, offset forward/up/right; the aimed
+    // rotation (set below) then pitches the whole gun about its RIGHT axis so the grips
+    // rise/fall with the look and the hands follow.
+    const useTwoHandIKPose = TWO_HAND_IK
+      && GUN_SPECS[currentGun]?.gripStyle !== "oneHand"
+      && !unifiedFirstPersonBodyActive() && !reloadActive
+      && thirdPerson.aimBones?.spine;
+    if (useTwoHandIKPose) {
+      thirdPerson.aimBones.spine.getWorldPosition(gripAnchor);
+      gripAnchor
+        .addScaledVector(forward, TWO_HAND_GUN_FWD)
+        .addScaledVector(right, TWO_HAND_GUN_RIGHT);
+      gripAnchor.y += TWO_HAND_GUN_UP;
+    }
     // One-handed (pistol) grip: the gun lives in the RIGHT (firing) hand, not the
     // two-hand centre — with the support hand tucked lower (see the oneHand branch
     // in applyThirdPersonArmPose), the centre sags and the pistol would float
@@ -6085,12 +6945,23 @@ function createLightningEffect() {
       gripAnchor.y += (leftCradleY - gripAnchor.y) * bias;
       gripAnchor.z += (leftCradleZ - gripAnchor.z) * bias;
     }
-    thirdPerson.weapon.gun.position
-      .copy(gripAnchor)
-      .addScaledVector(forward, 0.18)
-      .addScaledVector(right, 0.01);
-    thirdPerson.weapon.gun.position.y += 0.06;
-    thirdPerson.weapon.gun.position.addScaledVector(forward, 0.03);
+    thirdPerson.weapon.gun.position.copy(gripAnchor);
+    if (!useTwoHandIKPose) {
+      // Legacy hand-centre placement keeps its small forward/up nudges. The IK pose
+      // owns its offset fully via the TWO_HAND_GUN_* constants above.
+      thirdPerson.weapon.gun.position
+        .addScaledVector(forward, 0.18)
+        .addScaledVector(right, 0.01);
+      thirdPerson.weapon.gun.position.y += 0.06;
+      thirdPerson.weapon.gun.position.addScaledVector(forward, 0.03);
+      // Per-gun direct-pose trim: the SNIPER is long with a top scope, so at the
+      // shared hand-centre its rear/scope reaches back into the face. Push it
+      // forward and down so it clears the head and sits like the other rifles.
+      if (currentGun === GUNS.SNIPER) {
+        thirdPerson.weapon.gun.position.addScaledVector(forward, 0.12);
+        thirdPerson.weapon.gun.position.y -= 0.09;
+      }
+    }
 
     // Unified-FP weapon fit. Two paths:
     //  • camera-relative (UNIFIED_FP_GUN_CAMERA_RELATIVE): place the gun as a floating
@@ -6123,8 +6994,16 @@ function createLightningEffect() {
           .addScaledVector(right,   UNIFIED_FP_GUN_RIGHT);
         thirdPerson.weapon.gun.position.y += UNIFIED_FP_GUN_UP;
       }
-    } else if (thirdPerson.weapon.gun.scale.x !== 0.6) {
-      thirdPerson.weapon.gun.scale.setScalar(0.6);
+    } else {
+      // Keep the per-frame scale consistent with how the gun was BUILT
+      // (0.6 base × per-gun handScale) — the old flat 0.6 reset here silently
+      // wiped each weapon's size calibration, making guns read inconsistently
+      // sized against the body.
+      const tpHandScale = Number.isFinite(GUN_SPECS[currentGun]?.handScale) ? GUN_SPECS[currentGun].handScale : 1;
+      // Two-handed guns read a touch too large vs the body — shrink them slightly.
+      const twoHandMul = (GUN_SPECS[currentGun]?.gripStyle === "oneHand") ? 1 : TWO_HAND_GUN_SCALE;
+      const wantScale = 0.6 * tpHandScale * twoHandMul;
+      if (Math.abs(thirdPerson.weapon.gun.scale.x - wantScale) > 1e-4) thirdPerson.weapon.gun.scale.setScalar(wantScale);
     }
     if (reloadActive) {
       thirdPerson.weapon.gun.position
@@ -6132,13 +7011,27 @@ function createLightningEffect() {
         .addScaledVector(forward, -0.08 * reloadPresent + 0.025 * actionRack);
       thirdPerson.weapon.gun.position.y -= 0.1 * reloadPresent - 0.03 * magSeat;
     }
+    // Base orientation: face the body's forward (yaw) with roll — NO pitch here.
+    // Applying camera pitch as the Euler x-component only elevates the muzzle when
+    // the body yaw is ~0; at any other facing the yaw+π/2 term rotates the pitch
+    // axis away from horizontal, so looking up left the gun pointing sideways
+    // (Euler gimbal). Pitch is instead applied about the WORLD horizontal axis below.
     thirdPerson.weapon.gun.rotation.set(
-      // Camera pitch DIRECT (mouse-look: looking down = negative pitch.rotation.x;
-      // the old -0.96 factor mirrored it — muzzle rose when looking at the floor).
-      pitch.rotation.x * 0.96 - reloadPresent * 0.22 + actionRack * 0.08,
+      -reloadPresent * 0.22 + actionRack * 0.08,
       yaw.rotation.y + Math.PI * 0.5 - reloadPresent * 0.18 + magSeat * 0.08,
       spanDir.z * 0.08 - 0.1 + reloadPresent * 0.42 - magSeat * 0.18
     );
+    // Elevate the muzzle about the player's world-horizontal RIGHT axis so pitch
+    // tracking is correct at EVERY body yaw (looking down = negative pitch → muzzle
+    // dips; looking up → muzzle rises). `right` is the unit world-right vector.
+    // CRITICAL: the gun pitch MUST use the SAME clamped + upward-capped value the
+    // arms use (see `armPitch` in applyThirdPersonArmPose — clamp ±0.92, ×0.5 on the
+    // way up). The two-handed gun isn't rigidly bolted to both hands; it's placed at
+    // the hand-centre. If the gun pitches MORE than the hands do, its grip swings
+    // off the hands and they clip through it. Keeping the two in lock-step means the
+    // gun and the hands rise together and the hands stay ON the grip.
+    // (Pre-calibration + reload fallback only — steady state is the parented fit.)
+    thirdPerson.weapon.gun.rotateOnWorldAxis(_gunPitchAxisTmp.copy(right), pitch.rotation.x * 0.96);
 
     // Per-gun feel layered on top of the absolute pose set above (all additive,
     // recomputed every frame — never accumulates):
@@ -6163,6 +7056,12 @@ function createLightningEffect() {
       thirdPerson.weapon.gun.rotation.x -= e * 0.55;
       thirdPerson.weapon.gun.rotation.z += e * 0.3;
     }
+    if (inspectEnv > 0) {
+      thirdPerson.weapon.gun.position.y += inspectEnv * 0.08;
+      thirdPerson.weapon.gun.position.addScaledVector(forward, -inspectEnv * 0.1);
+      thirdPerson.weapon.gun.rotation.y += inspectSpin * 0.6;
+      thirdPerson.weapon.gun.rotation.x -= inspectEnv * 0.2;
+    }
 
     // Pack-a-Punch on the third-person weapon: a quick bank during the upgrade
     // plus the energy glow (slow shimmer + a bright flare through the upgrade).
@@ -6177,8 +7076,20 @@ function createLightningEffect() {
     // gun's current world transform IS the correct in-hand pose. attach() to the
     // hand bone converts it to the equivalent hand-local transform, which we
     // record as this weapon's permanent fit (research: seed-via-attach pattern).
-    if (GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
-        && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3) {
+    //
+    // CRITICAL — the pose MUST be settled before capture. The always-aim change
+    // holds aimBlend≈1 at all times, so the old gate (aimBlend>0.75) fired within
+    // ~3 frames of a weapon becoming ready — i.e. DURING the equip dip (equip>0),
+    // whose additive raise/roll (see the `thirdPerson.equip > 0` block above:
+    // rot.x -= e*0.55, rot.z += e*0.3, pos.y -= e*0.34) then got baked PERMANENTLY
+    // into handFit. That jammed every non-starter weapon to the cheek and rolled it
+    // (read as "held upside-down / like a pistol"). Only the Service Pistol escaped:
+    // as the STARTER it calibrates at boot, long after its equip settled to 0.
+    // So require equip fully finished (and not inspecting) — capture only from the
+    // same clean, settled stance the pistol always got.
+    if (gunHandParented && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
+        && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3
+        && thirdPerson.equip < 0.02 && !thirdPerson.inspecting) {
       // Deterministic: 3 consecutive stable aiming frames, then capture (the old
       // one-frame |pitch|<0.12 gate could stall for seconds of live play).
       thirdPerson.weapon._fitFrames = (thirdPerson.weapon._fitFrames || 0) + 1;
@@ -6189,6 +7100,13 @@ function createLightningEffect() {
       }
     } else if (thirdPerson.weapon) {
       thirdPerson.weapon._fitFrames = 0;
+    }
+
+    // ── IK the hands onto the (now fully-posed) two-handed gun's grip points ──────
+    // Runs last so it reads the final gun transform. Solves each arm so the hand
+    // bone lands on its grip (right = grip/trigger, left = foregrip along barrel).
+    if (useTwoHandIKPose && rightReady && leftReady) {
+      solveTwoHandGripIK(thirdPerson.aimBlend);
     }
     }
     const tpMats = thirdPerson.weapon.gun.userData.packMats;
@@ -6231,15 +7149,31 @@ function createLightningEffect() {
     // Equip lower/raise timer (duration = the incoming gun's equipTime).
     thirdPerson.equip = Math.max(0, thirdPerson.equip - dt / Math.max(0.08, thirdPerson.equipTime || 0.3));
 
+    // Inspect flourish: cancels the instant the player moves, sprints, jumps or
+    // ADS's — same "any action interrupts it" convention as the reference we're
+    // matching. Otherwise it advances 0→1 over inspectDuration and clears itself.
+    if (thirdPerson.inspecting) {
+      if ((moveState?.f || 0) !== 0 || (moveState?.s || 0) !== 0 || moveState?.sprinting || moveState?.jumping || viewState.ads > 0.05) {
+        thirdPerson.inspecting = false;
+        thirdPerson.inspectT = 0;
+      } else {
+        thirdPerson.inspectT += dt / Math.max(0.1, thirdPerson.inspectDuration);
+        if (thirdPerson.inspectT >= 1) {
+          thirdPerson.inspecting = false;
+          thirdPerson.inspectT = 0;
+        }
+      }
+    }
+
     // Heavy-gun muzzle lag: the gun's yaw trails quick turns via a small
     // rotational spring, weighted by spec.swayMul (pistol snappy, LMG floaty).
     const yawNow = yaw.rotation.y;
     if (thirdPerson.prevYawAngle === null) thirdPerson.prevYawAngle = yawNow;
     const yawTurnVel = (yawNow - thirdPerson.prevYawAngle) / Math.max(dt, 1e-4);
     thirdPerson.prevYawAngle = yawNow;
-    const lagWeight = Math.max(0, (Number.isFinite(GUN_SPECS[currentGun]?.swayMul) ? GUN_SPECS[currentGun].swayMul : 1) - 0.55) * 0.055;
-    const lagTarget = clamp(-yawTurnVel * lagWeight, -0.28, 0.28);
-    thirdPerson.gunLagVel += ((lagTarget - thirdPerson.gunLag) * 30 - thirdPerson.gunLagVel * 10) * dt;
+    const lagWeight = Math.max(0, (Number.isFinite(GUN_SPECS[currentGun]?.swayMul) ? GUN_SPECS[currentGun].swayMul : 1) - 0.55) * 0.04;
+    const lagTarget = clamp(-yawTurnVel * lagWeight, -0.22, 0.22);
+    thirdPerson.gunLagVel += ((lagTarget - thirdPerson.gunLag) * 36 - thirdPerson.gunLagVel * 13) * dt;
     thirdPerson.gunLag += thirdPerson.gunLagVel * dt;
 
     const bodyRecoilBack = clamp(thirdPerson.recoilBack, 0, 0.18);
@@ -6257,7 +7191,10 @@ function createLightningEffect() {
     thirdPerson.root.position.y += Math.min(0.055, bodyRecoilBack * 0.35);
     thirdPerson.root.rotation.y = yaw.rotation.y + bodyRecoilYaw;
     if (thirdPerson.model) {
-      thirdPerson.model.rotation.x = -pitch.rotation.x * 0.14 - bodyRecoilPitch;
+      // Whole-model pitch bend — the clone's technique (ghost.model.rotation.x =
+      // -aimPitch*0.18): with the procedural spine-pitch removed for two-handed guns,
+      // this is what leans the operator's torso into the aim. Matches the clone's 0.18.
+      thirdPerson.model.rotation.x = -pitch.rotation.x * 0.18 - bodyRecoilPitch;
       thirdPerson.model.rotation.z = bodyRecoilRoll;
     }
     thirdPerson.lastMove = moveState || thirdPerson.lastMove;
@@ -6290,7 +7227,16 @@ function createLightningEffect() {
       else if (thirdPerson.actions.jumpForward) targetAction = "jumpForward";
       else targetAction = "jump";
     } else if (movingNow && thirdPerson.lastMove.sprinting) {
-      targetAction = pistolMoveSet ? "pistolRun" : pickSprintLocomotionAction(thirdPerson.actions, f, s);
+      if (pistolMoveSet) {
+        // Sprint-strafe: use the one-handed Pistol Strafe clip when lateral input
+        // dominates (mirrors the two-handed sprintLeft/sprintRight lateral clips);
+        // otherwise the forward pistol run. Without this the sidearm always ran
+        // FORWARD while circle-strafing, so the strafe clip was effectively unused.
+        targetAction = (Math.abs(s) > Math.abs(f) * 1.2 && thirdPerson.actions.pistolStrafe)
+          ? "pistolStrafe" : "pistolRun";
+      } else {
+        targetAction = pickSprintLocomotionAction(thirdPerson.actions, f, s);
+      }
     } else if (movingNow) {
       // While moving, KEEP the locomotion clip even when firing — the arms are
       // raised/punched procedurally by applyThirdPersonArmPose (which is grip-style
@@ -6309,6 +7255,12 @@ function createLightningEffect() {
         else targetAction = thirdPerson.actions.walkBack ? "walkBack" : "walk";
       } else if (pistolMoveSet) {
         targetAction = "pistolRun"; // walk pace via timeScale below
+      } else if (thirdPerson.actions.rifleRun) {
+        // Two-handed forward movement: use the "running and shooting" rifle-run
+        // clip (gun stays aimed forward, both hands on it) instead of the neutral
+        // Walking clip — matches the always-aiming read. Walk pace is applied via
+        // timeScale below (sprint uses full pace through pickSprintLocomotionAction).
+        targetAction = "rifleRun";
       } else if (!wasMoving && thirdPerson.actions.startWalk) {
         targetAction = "startWalk";
       } else {
@@ -6318,19 +7270,79 @@ function createLightningEffect() {
       // Standing fire: the two-handed rifle fire clip reads wrong on a pistol —
       // stay on idle and let the one-hand-aware procedural punch carry the shot.
       targetAction = pistolMoveSet ? "idle" : "fire";
-    } else if (wasMoving && !movingNow) {
+    } else if (wasMoving && !movingNow && !pistolMoveSet && !thirdPerson.actions.rifleRun) {
+      // Stop-walk settle clips are GENERIC locomotion stops (the hands come off the
+      // gun as the arms lower/swing out). Only use them when carrying NEITHER a
+      // two-handed rifle NOR a one-handed sidearm. For two-handed guns we fall
+      // through to idle → rifleHold below; for one-handed guns to idle → pistolHold —
+      // both settle straight back onto the frozen held-carry pose, so releasing W
+      // never makes the hands let go of the gun and flail outward.
       if (thirdPerson._lastWalkAction === "walkBack" && thirdPerson.actions.stopWalkBack) {
         targetAction = "stopWalkBack";
       } else if (thirdPerson.actions.stopWalk) {
         targetAction = "stopWalk";
       }
     }
+    // One-handed sidearms have no dedicated IDLE clip in the Pistol set (only
+    // run/strafe/jump). When standing (plain idle OR standing-fire) the chain
+    // above lands on the two-handed RIFLE "idle" clip, which leaves the support
+    // arm floating up in the air (reads completely wrong on a pistol). Instead
+    // hold the real one-handed pistolRun pose FROZEN — same clean two-hand-on-gun
+    // stance seen while walking, just paused.
+    let pistolHold = false;
+    if (pistolMoveSet && (targetAction === "idle" || targetAction === "fire")) {
+      targetAction = "pistolRun";
+      pistolHold = true;
+    }
+    // Two-handed standing: the `idle` clip is "Rifle Aiming Idle" — a shouldered
+    // ADS pose that jams the rifle up to the CHEEK. The user wants the natural
+    // running-and-shooting READY carry (gun extended forward at chest, like the
+    // pistol reads) at all times. So hold the `rifle run` pose FROZEN when standing
+    // idle — same clip used for two-handed movement, just paused — instead of the
+    // shouldered aim idle. (Standing FIRE still uses the `fire` clip so the shot
+    // reads.) One-handed guns are handled by pistolHold above.
+    let rifleHold = false;
+    if (!pistolMoveSet && thirdPerson.actions.rifleRun && targetAction === "idle") {
+      targetAction = "rifleRun";
+      rifleHold = true;
+    }
     thirdPerson._lastWalkAction = targetAction;
-    // Pistol run doubles as the walk clip (slower cadence) and, in REVERSE, as the
-    // backpedal. Sign flips with movement direction.
+    // ── Anti-skate: velocity-matched locomotion cadence ─────────────────────────
+    // Feet skate when the clip plays at a fixed rate while the body moves at a
+    // different speed. Instead of the old binary sprint→1.0 / walk→0.62, drive the
+    // clip's timeScale from the character's ACTUAL ground speed / the sprint
+    // reference speed. This tracks acceleration, deceleration, the ADS move
+    // penalty, carry-weight and perk speed multipliers continuously, so the stride
+    // matches the ground the whole time — not just at the two hardcoded speeds.
+    // (walkSpeed/sprintSpeed = 5.8/9.2 ≈ 0.63, so steady walk/sprint are unchanged;
+    // everything BETWEEN and during ramps is what stops sliding.)
+    const groundSpeed = Math.hypot(player.velX || 0, player.velZ || 0);
+    const cadenceRef = Math.max(0.1, player.sprintSpeed || 9.2);
+    const locoCadence = clamp(groundSpeed / cadenceRef, 0.35, 1.25);
+    // Pistol run doubles as the walk clip and, in REVERSE, as the backpedal (sign
+    // flips with movement direction). Held as the standing idle (pistolHold) it is
+    // frozen (timeScale 0) on a neutral frame.
     if (thirdPerson.actions.pistolRun) {
-      const back = (thirdPerson.lastMove.f || 0) < -0.1 ? -1 : 1;
-      thirdPerson.actions.pistolRun.timeScale = (thirdPerson.lastMove.sprinting ? 1 : 0.62) * back;
+      if (pistolHold) {
+        thirdPerson.actions.pistolRun.timeScale = 0;
+        thirdPerson.actions.pistolRun.time = 0;
+      } else {
+        const back = (thirdPerson.lastMove.f || 0) < -0.1 ? -1 : 1;
+        thirdPerson.actions.pistolRun.timeScale = locoCadence * back;
+      }
+    }
+    if (thirdPerson.actions.pistolStrafe && targetAction === "pistolStrafe") {
+      thirdPerson.actions.pistolStrafe.timeScale = locoCadence;
+    }
+    // Two-handed forward locomotion shares the rifle-run clip for both walk and
+    // sprint, on the same velocity-matched cadence.
+    if (thirdPerson.actions.rifleRun && targetAction === "rifleRun") {
+      if (rifleHold) {
+        thirdPerson.actions.rifleRun.timeScale = 0; // frozen ready-carry stance
+        thirdPerson.actions.rifleRun.time = 0;
+      } else {
+        thirdPerson.actions.rifleRun.timeScale = locoCadence;
+      }
     }
 
     clearThirdPersonAimOffsets();
@@ -6360,6 +7372,10 @@ function createLightningEffect() {
     // Force skeleton matrices to propagate our bone changes before weapon pose
     // reads hand bone world-positions via getWorldPosition().
     if (thirdPerson.model) thirdPerson.model.updateMatrixWorld(true);
+
+    // Foot-lock IK: reads foot world-positions (now fresh) and pins planted feet.
+    // Legs are independent of the hands, so it runs before the weapon pose freely.
+    applyThirdPersonFootIK(dt);
 
     updateThirdPersonWeaponPose();
   }
@@ -6486,6 +7502,46 @@ function createLightningEffect() {
 
     const goal = findNearestOpenCell(playerCell.mx + offX, playerCell.my + offY, 2);
     return goal || playerCell;
+  }
+
+  // Squad coordination: groups currently-aggroed enemies by the target they're
+  // engaging and assigns each a wedge angle around it, so the generic orbit/strafe
+  // sign-flip (see updateEnemies) spreads them into a ring instead of a coin flip
+  // per enemy. Deliberately sign-only — never touches per-type aiPhase/aiLateralMul/
+  // aiAdvanceMul, so no type's tuned animation timing changes, only which side it's on.
+  function updateSquadFormations() {
+    const groups = new Map();
+    for (const enemy of liveEnemies) {
+      if (!enemy.alive || !enemy.aggroed) { enemy.squadSize = 1; continue; }
+      const target = getCoopEnemyTarget(enemy);
+      let group = groups.get(target.id);
+      if (!group) groups.set(target.id, group = { list: [], tx: target.x, tz: target.z });
+      group.list.push(enemy);
+    }
+    const phase = performance.now() * 0.00015; // slow ring rotation
+    for (const { list, tx, tz } of groups.values()) {
+      if (list.length < 2) { if (list[0]) list[0].squadSize = 1; continue; }
+      // Sort by current angle-to-target so slot assignment is minimal-rotation
+      // (nobody has to leapfrog across the ring to reach their wedge).
+      list.sort((a, b) =>
+        Math.atan2(a.mesh.position.z - tz, a.mesh.position.x - tx) -
+        Math.atan2(b.mesh.position.z - tz, b.mesh.position.x - tx));
+      list.forEach((enemy, i) => {
+        enemy.squadSlot = i;
+        enemy.squadSize = list.length;
+        enemy.squadAngle = phase + (i / list.length) * Math.PI * 2;
+      });
+    }
+  }
+
+  function pickSquadOrbitDir(enemy, refX, refZ) {
+    if (enemy.squadSize > 1) {
+      const curAngle = Math.atan2(enemy.mesh.position.z - refZ, enemy.mesh.position.x - refX);
+      let delta = enemy.squadAngle - curAngle;
+      delta = Math.atan2(Math.sin(delta), Math.cos(delta)); // wrap to [-PI, PI]
+      return delta >= 0 ? 1 : -1;
+    }
+    return Math.random() > 0.5 ? 1 : -1;
   }
 
   function disposeObject3D(root) {
@@ -6803,9 +7859,20 @@ function createLightningEffect() {
         const gltf = await gltfLoader.loadAsync(new URL(PLAYER_MODEL_GLTF_PATH, window.location.href).href);
         PLAYER_CHARACTER_FBX = gltf.scene;
       } catch (glbErr) {
-        console.warn("black mask.glb could not be loaded; trying the original FBX.", glbErr);
+        console.warn("Pete.glb could not be loaded; trying the original FBX.", glbErr);
         PLAYER_CHARACTER_FBX = await fbxLoader.loadAsync(new URL(PLAYER_MODEL_PATH, window.location.href).href);
       }
+      // FBX2glTF (used to convert Pete's raw FBX into a scale-consistent GLB — see
+      // scripts/convert-pete.mjs) dedupes bone names on conversion, turning
+      // "mixamorigHips" into "mixamorig1Hips". The player animation clips (loaded
+      // separately from stock Mixamo FBX files) still target "mixamorigHips", so
+      // without this normalization every track silently fails to bind and the
+      // model just stands in its bind pose.
+      PLAYER_CHARACTER_FBX.traverse(obj => {
+        if (obj.isBone && /^mixamorig[0-9]+/.test(obj.name)) {
+          obj.name = obj.name.replace(/^mixamorig[0-9]+/, "mixamorig");
+        }
+      });
       const playerRigRemovals = [];
       PLAYER_CHARACTER_FBX.traverse(obj => {
         const renderable = obj.isMesh || obj.isLine || obj.isLineSegments || obj.isPoints;
@@ -6834,7 +7901,7 @@ function createLightningEffect() {
       PLAYER_CHARACTER_FBX.userData.modelEditorHeight = new THREE.Box3().setFromObject(PLAYER_CHARACTER_FBX).getSize(new THREE.Vector3()).y;
       registerModelEditorRoot(PLAYER_CHARACTER_FBX, "player");
     } catch (err) {
-      console.warn("black mask.fbx could not be loaded; using fallback third-person body.", err);
+      console.warn("Pete.fbx could not be loaded; using fallback third-person body.", err);
       PLAYER_CHARACTER_FBX = null;
       return;
     }
@@ -7882,7 +8949,17 @@ function createLightningEffect() {
       const sideScore = i < 2 ? 0.4 : i < 4 ? 0.25 : 0;
       const retreatScore = tooClose ? Math.max(0, candidateDist - dist) * 0.1 : 0;
       const closeScore = tooFar ? Math.max(0, dist - moveCost) * 0.035 : 0;
-      const score = losScore * 2.4 + rangeScore * 1.5 + sideScore + retreatScore + closeScore - moveCost * 0.025;
+      let score;
+      if (enemy.aiRetreat) {
+        // Cover-seeking: while backing off (crowded/point-blank), reward
+        // BREAKING the player's sightline over holding an angle to shoot
+        // from — a retreating clone should duck out of view behind whatever
+        // wall/corner is nearby instead of backpedaling in the open forever.
+        const coverScore = losScore ? 0 : 1.8;
+        score = coverScore + retreatScore - moveCost * 0.02;
+      } else {
+        score = losScore * 2.4 + rangeScore * 1.5 + sideScore + retreatScore + closeScore - moveCost * 0.025;
+      }
       if (score > bestScore) {
         bestScore = score;
         best = { x, z };
@@ -8123,7 +9200,9 @@ function createLightningEffect() {
       opacity: 0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      // depthTest ON: in third-person the player body must occlude the flash so it
+      // never bleeds through / behind the model. (FP viewmodel is removed.)
+      depthTest: true,
       toneMapped: false,
     });
     const flash = new THREE.Sprite(material);
@@ -8148,7 +9227,9 @@ function createLightningEffect() {
       opacity: 0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      // depthTest ON so the player body occludes the flash in third-person (no
+      // bleed-through behind the model). Clones below inherit this.
+      depthTest: true,
       toneMapped: false,
       side: THREE.DoubleSide,
     });
@@ -8158,7 +9239,7 @@ function createLightningEffect() {
       opacity: 0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       toneMapped: false,
     });
 
@@ -8197,7 +9278,7 @@ function createLightningEffect() {
       opacity: 0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       toneMapped: false,
       side: THREE.DoubleSide,
     });
@@ -8474,8 +9555,9 @@ function createLightningEffect() {
     model.add(auraAnchor);
     root.userData.clonedGhostAura = { glowMaterials, scanRings, auraRing, auraLight: null };
 
-    const weaponRig = createWeaponViewModel(type.ranged?.gunType || GUNS.RIFLE, root);
-    configureThirdPersonWeaponTransform(weaponRig.gun);
+    const cloneGunType = type.ranged?.gunType || GUNS.RIFLE;
+    const weaponRig = createWeaponViewModel(cloneGunType, root);
+    configureThirdPersonWeaponTransform(weaponRig.gun, cloneGunType);
     weaponRig.gun.visible = true;
     weaponRig.gun.traverse(obj => {
       if (!obj.isMesh || !obj.material) return;
@@ -9035,12 +10117,15 @@ function createLightningEffect() {
     const blink = ENEMY_TYPES.find(type => type.name === "Blink Seraph");
     const nullCherub = ENEMY_TYPES.find(type => type.name === "Null Cherub");
     const zombie = ENEMY_TYPES.find(type => type.name === "Zombie");
-    const choices = [{ type: siege, weight: 1 }];
-    if (wave >= 2) choices.push({ type: ghost, weight: Math.min(0.42, 0.13 + (wave - 2) * 0.035) });
-    if (wave >= 4) choices.push({ type: blink, weight: Math.min(0.2, 0.04 + (wave - 4) * 0.013) });
-    // Zombies trickle in from wave 5, ramping slowly (cap ~½ of spawns).
-    if (wave >= 5 && zombie && ZOMBIE_CHARACTER_GLB) choices.push({ type: zombie, weight: Math.min(0.55, 0.22 + (wave - 5) * 0.05) });
-    if (wave >= 6) choices.push({ type: nullCherub, weight: Math.min(0.17, 0.035 + (wave - 6) * 0.011) });
+    // Siege Drone decays from 1.0 toward a 0.55 floor as the rest of the roster
+    // unlocks, so it stops structurally dominating every wave once there's
+    // something else to fight.
+    const choices = [{ type: siege, weight: Math.max(0.55, 1 - (wave - 1) * 0.045) }];
+    if (wave >= 2) choices.push({ type: ghost, weight: Math.min(0.65, 0.35 + (wave - 2) * 0.04) });
+    if (wave >= 4) choices.push({ type: blink, weight: Math.min(0.45, 0.22 + (wave - 4) * 0.025) });
+    // Zombies trickle in from wave 5, ramping slowly (cap ~60% of spawns).
+    if (wave >= 5 && zombie && ZOMBIE_CHARACTER_GLB) choices.push({ type: zombie, weight: Math.min(0.6, 0.28 + (wave - 5) * 0.045) });
+    if (wave >= 6) choices.push({ type: nullCherub, weight: Math.min(0.4, 0.15 + (wave - 6) * 0.02) });
 
     const total = choices.reduce((sum, choice) => sum + choice.weight, 0);
     let roll = Math.random() * total;
@@ -9201,6 +10286,9 @@ function createLightningEffect() {
       aggroRange: getEnemyAggroRange(type),
       aggroed: false,
       typeName: type.name,
+      // Metal (angel) enemies spark/shrapnel instead of bleeding — see the same
+      // flag mirrored in prepareEnemyForSpawn for the pooled-recycle path.
+      angelModel: !!type.angelModel,
       xp: type.xp,
       // Physics-debris tint/size per enemy type (Phase 3 showcase refinement).
       debrisColor: type.color ?? 0x8a94a0,
@@ -9329,6 +10417,10 @@ function createLightningEffect() {
     // the pack advancing is literal).
     enemy.aggroed = blackout;
     enemy.typeName = type.name;
+    // Angels (Warden/Seraph/Cherub/Siege Drone) are metal — impacts spark and
+    // deaths shrapnel instead of bleeding. The enemy object stores typeName (a
+    // string), not the type def, so mirror the flag we need onto the enemy.
+    enemy.angelModel = !!type.angelModel;
     enemy.xp = type.xp;
     enemy.aura = type.aura;
     enemy.navPath = [];
@@ -9348,6 +10440,9 @@ function createLightningEffect() {
     enemy.liftPhase = 0;
     enemy.liftDuration = 0;
     enemy.orbitDir = Math.random() > 0.5 ? 1 : -1;
+    enemy.squadSlot = -1;
+    enemy.squadSize = 1;
+    enemy.squadAngle = 0;
     enemy.lungeBoost = 0;
     enemy.lungeTimer = 0.6 + Math.random() * 0.8;
     enemy.animSeed = Math.random() * Math.PI * 2;
@@ -9461,6 +10556,7 @@ function createLightningEffect() {
   function recycleEnemiesToPool(oldEnemies) {
     for (const enemy of oldEnemies) {
       setEnemyAlive(enemy, false);
+      stopZombieVoiceIfOwner(enemy);
       hideMegaBlast(enemy);
       resetEnemyAura(enemy);
       deactivateEnemyRuntimeLights(enemy);
@@ -9490,6 +10586,7 @@ async function spawnEnemies(wave, options: any = {}) {
     for (let i = 0; i < oldEnemies.length; i++) {
       const enemy = oldEnemies[i];
       setEnemyAlive(enemy, false);
+      stopZombieVoiceIfOwner(enemy);
       hideMegaBlast(enemy);
       resetEnemyAura(enemy);
       deactivateEnemyRuntimeLights(enemy);
@@ -9549,6 +10646,36 @@ async function spawnEnemies(wave, options: any = {}) {
     game.totalEnemies = enemies.length;
     game.killed = 0;
     updateObjective();
+  }
+
+  // Position the wave-1 enemies in a shallow arc a few metres in front of the
+  // player, each facing the operator — the "three Wardens standing over you" the
+  // intro cutscene hands off to. Repositions whatever enemies are already live
+  // (primed or freshly spawned); AI is frozen through the cutscene so they hold.
+  function placeWaveOneWardensNearPlayer() {
+    const list = enemies;
+    if (!list.length) return;
+    const fwd = { x: -Math.sin(yaw.rotation.y), z: -Math.cos(yaw.rotation.y) };
+    const rgt = { x: Math.cos(yaw.rotation.y), z: -Math.sin(yaw.rotation.y) };
+    const fwdDist = 12;
+    const n = list.length;
+    for (let i = 0; i < n; i++) {
+      const enemy = list[i];
+      const lat = (i - (n - 1) / 2) * 4.6; // symmetric lateral spread
+      let x = yaw.position.x + fwd.x * fwdDist + rgt.x * lat;
+      let z = yaw.position.z + fwd.z * fwdDist + rgt.z * lat;
+      // If the arc slot lands in a wall, pull it back toward the player until open.
+      for (let pull = 0; pull < 6 && wallAtWorldRadius(x, z, 0.9); pull++) {
+        x -= fwd.x * 1.6; z -= fwd.z * 1.6;
+      }
+      enemy.mesh.position.set(x, enemy.mesh.position.y, z);
+      enemy.mesh.rotation.y = Math.atan2(yaw.position.x - x, yaw.position.z - z); // face operator
+      // Reset movement/aim tracking so the AI doesn't register a teleport jump.
+      enemy.smoothVelX = 0; enemy.smoothVelZ = 0;
+      enemy.aimTrackX = yaw.position.x; enemy.aimTrackZ = yaw.position.z;
+      enemy.navPath = []; enemy.navGoal = null; enemy.navTimer = 0;
+      enemy.lastSeenX = yaw.position.x; enemy.lastSeenZ = yaw.position.z;
+    }
   }
 
   function activatePrimedFirstWave() {
@@ -9677,7 +10804,7 @@ async function spawnEnemies(wave, options: any = {}) {
       let warmedThirdPersonWeapon = thirdPersonWeaponCache.get(gunType);
       if (!warmedThirdPersonWeapon) {
         warmedThirdPersonWeapon = createWeaponViewModel(gunType, scene);
-        configureThirdPersonWeaponTransform(warmedThirdPersonWeapon.gun);
+        configureThirdPersonWeaponTransform(warmedThirdPersonWeapon.gun, gunType);
         captureThirdPersonPartBase(warmedThirdPersonWeapon.mag);
         captureThirdPersonPartBase(warmedThirdPersonWeapon.slide);
         captureWeaponRigPartBases(warmedThirdPersonWeapon, "thirdPersonBase");
@@ -9706,7 +10833,17 @@ async function spawnEnemies(wave, options: any = {}) {
   let weaponAnim: any = initializeWeaponAnimation(currentGun);
   captureWeaponAnimationBases(weaponAnim, weapon);
 
-  const cameraFX: any = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74 };
+  const cameraFX: any = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74,
+    // ── Cinematic locomotion camera (Steadicam feel) ─────────────────────────
+    // Persistent state for the subtle "movie" motion added while moving/running:
+    // a speed-scaled figure-8 float, a lateral lag that trails strafes, a Dutch
+    // tilt into the strafe, and a gentle run cadence. All spring/smoothed so it
+    // eases in and out instead of snapping. Damped to ~0 during ADS.
+    cinePhase: 0,        // gait phase accumulator (advances faster with speed)
+    cineSpeed: 0,        // smoothed movement speed (0..1 of sprint speed)
+    cineLatLag: 0,       // smoothed lateral lag/whip (trails strafe input)
+    cineLean: 0,         // smoothed Dutch-tilt roll into the strafe
+  };
   const viewState: any = { ads: 0, lookBack: 0 };
 
   function applyEnemyHitFeedback(enemy, damage, headshot, dirX = 0, dirZ = 0, options: any = {}) {
@@ -9735,6 +10872,67 @@ async function spawnEnemies(wave, options: any = {}) {
   let audioCtx = null;
   let audioBus = null;
   let droneSfxTimer = 0;
+  // Master volume (0..1) — user-adjustable via the menu/pause volume sliders,
+  // persisted in settings. Scales BOTH the synth bus master gain (base 0.78) and
+  // the Howler sample layer (base 0.82) so the whole mix moves together.
+  let masterVolume = (typeof savedSettings?.masterVolume === "number")
+    ? Math.max(0, Math.min(1, savedSettings.masterVolume)) : 1.0;
+
+  // ── Category mix ──────────────────────────────────────────────────────────
+  // Three real sub-buses sit between the synth voices and the master gain, so
+  // the Audio settings move actual signal rather than pretending to:
+  //   weapons — gunfire (yours and theirs)
+  //   voices  — enemy vocalisations
+  //   world   — everything else: impacts, interface, ambience, abilities
+  // The Howler sample layer has no node graph we can splice, so its per-play
+  // volumes are scaled by the same numbers at the call sites.
+  const AUDIO_CATEGORIES = ["weapons", "voices", "world"] as const;
+  const categoryVolume: Record<string, number> = { weapons: 1, voices: 1, world: 1 };
+  for (const cat of AUDIO_CATEGORIES) {
+    const saved = savedSettings?.[`vol_${cat}`];
+    if (typeof saved === "number") categoryVolume[cat] = Math.max(0, Math.min(1, saved));
+  }
+  // Mute-when-unfocused: multiplies the master gain without touching the setting.
+  let muteWhenUnfocused = savedSettings?.muteWhenUnfocused === true;
+  let windowFocused = true;
+
+  function effectiveMasterVolume() {
+    return (muteWhenUnfocused && !windowFocused) ? 0 : masterVolume;
+  }
+  function applyMasterVolume() {
+    const v = effectiveMasterVolume();
+    if (audioBus?.master) audioBus.master.gain.value = 0.78 * v;
+    audioEngine.setMasterVolume(v);
+  }
+  function setMasterVolume(v) {
+    masterVolume = Math.max(0, Math.min(1, v));
+    applyMasterVolume();
+    saveSettings({ masterVolume });
+  }
+  function setCategoryVolume(cat, v) {
+    if (!(cat in categoryVolume)) return;
+    categoryVolume[cat] = Math.max(0, Math.min(1, v));
+    if (audioBus?.cat?.[cat]) audioBus.cat[cat].gain.value = categoryVolume[cat];
+    saveSettings({ [`vol_${cat}`]: categoryVolume[cat] });
+  }
+  function setMuteWhenUnfocused(on) {
+    muteWhenUnfocused = !!on;
+    applyMasterVolume();
+    saveSettings({ muteWhenUnfocused });
+  }
+  window.addEventListener("blur", () => { windowFocused = false; applyMasterVolume(); });
+  window.addEventListener("focus", () => { windowFocused = true; applyMasterVolume(); });
+
+  // The synth voices are built by ~40 helper functions that all funnel through
+  // connectWithPan. Rather than thread a category argument through every one,
+  // the few callers that own a category declare it around their (synchronous)
+  // body; connectWithPan reads it. Default is "world".
+  let sfxCategory = "world";
+  function inSfxCategory<T>(cat: string, fn: () => T): T {
+    const prev = sfxCategory;
+    sfxCategory = cat;
+    try { return fn(); } finally { sfxCategory = prev; }
+  }
   const noiseBufferCache = new Map();
   const warmedWeaponAudioTypes = new Set();
   const warmedLiveWeaponAudioTypes = new Set();
@@ -9757,12 +10955,27 @@ async function spawnEnemies(wave, options: any = {}) {
       compressor.release.value = 0.16;
 
       const master = ctx.createGain();
-      master.gain.value = 0.78;
+      master.gain.value = 0.78 * effectiveMasterVolume();
       compressor.connect(master);
       master.connect(ctx.destination);
-      audioBus = { input: compressor, master };
+
+      // Category gains feed the compressor, so the mix is balanced BEFORE the
+      // limiter — turning gunfire down genuinely lets the voices through.
+      const cat: Record<string, GainNode> = {};
+      for (const name of AUDIO_CATEGORIES) {
+        const g = ctx.createGain();
+        g.gain.value = categoryVolume[name];
+        g.connect(compressor);
+        cat[name] = g;
+      }
+      audioBus = { input: compressor, master, cat };
     }
     return audioBus.input;
+  }
+
+  function getCategoryInput(category = "world") {
+    getAudioBus();
+    return audioBus.cat?.[category] || audioBus.input;
   }
 
   // ── Voice limiter ────────────────────────────────────────────────────────
@@ -9781,7 +10994,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function connectWithPan(ctx, node, pan = 0) {
-    const output = getAudioBus();
+    const output = getCategoryInput(sfxCategory);
     if (ctx.createStereoPanner) {
       const panner = ctx.createStereoPanner();
       panner.pan.value = Math.max(-1, Math.min(1, pan));
@@ -9801,6 +11014,10 @@ async function spawnEnemies(wave, options: any = {}) {
   async function loadAudioAssets() {
     if (audioAssetsLoaded) return;
     audioAssetsLoaded = true;
+    // Howler sample layer (real recorded SFX). Registered + loaded once; every
+    // call site degrades to the synth voices if this never becomes ready.
+    audioEngine.registerAll(HOWLER_MANIFEST);
+    audioEngine.init().then(() => audioEngine.setMasterVolume(masterVolume)).catch(() => {});
     const ctx = getAudioCtx();
     const entries = [...Object.entries(SFX_MANIFEST || {}), ...Object.entries(VO_MANIFEST || {})];
     await Promise.all(entries.map(async ([name, url]) => {
@@ -9816,6 +11033,12 @@ async function spawnEnemies(wave, options: any = {}) {
   }
   function hasEventSound(name) { return loadedAudioBuffers.has(name); }
   function playEventSound(name, { volume = 1, pan = 0, rate = 1 } = {}) {
+    // Prefer the Howler sample layer when it has this sound (real recorded SFX).
+    // The sample layer has no bus to route through, so the caller's active
+    // category is folded into the per-play volume instead (the buffer path
+    // below gets it for free via connectWithPan).
+    const catMul = categoryVolume[sfxCategory] ?? 1;
+    if (audioEngine.has(name) && audioEngine.play(name, { volume: volume * catMul, pan, rate }) >= 0) return true;
     const buf = loadedAudioBuffers.get(name);
     if (!buf) return false;
     if (!acquireVoice(buf.duration / Math.max(0.1, rate))) return false;
@@ -10050,11 +11273,20 @@ async function spawnEnemies(wave, options: any = {}) {
     } catch (_) {}
   }
 
+  // Gunfire owns the "weapons" category on both layers (synth voices via
+  // inSfxCategory, recorded samples via the mul passed to audioEngine.fire).
   function sfxShoot() {
+    return inSfxCategory("weapons", sfxShootVoices);
+  }
+
+  function sfxShootVoices() {
     // Data-driven fire SFX: each gun's fireCycle (mechanism) picks a distinct synth
     // voice tuned per-gun (freq/gain/decay), and GUN_SPECS[gun].fireSound is tried
     // first against the manifest so dropping real files in assets/audio/sfx/ overrides
     // the synth with zero code changes.
+    // Real recorded fire: automatic weapons drive a sustained loop, semi-autos a
+    // pooled one-shot (see audio_engine.fire). Handled → skip the synth voice.
+    if (audioEngine.fire(currentGun, categoryVolume.weapons)) return;
     const spec = GUN_SPECS[currentGun] || ({} as any);
     const cycle = spec.fireCycle || "rifle";
     const scatterGun = cycle === "pump";
@@ -10097,16 +11329,6 @@ async function spawnEnemies(wave, options: any = {}) {
       playTone(240, "triangle", 0.03, 0.14, -120, 0.02, 0, 140);
       playNoise(0.34, 0.55, 260, "lowpass", 0.004, 0, 0.55);
       playNoise(0.60, 0.20, 480, "bandpass", 0.03, 0, 1.2);
-      return;
-    }
-    // ── RAILGUN — "coil": sci-fi charge + zap, not a ballistic crack ────────
-    if (cycle === "coil") {
-      playSweep(180, 1400, 0.05, 0.55, "sawtooth", 0, 0);
-      playNoise(0.03, 0.9, 9000, "highpass", 0.045, 0, 2.6);
-      playTone(2200, "sine", 0.14, 0.5, 0, 0.048, 0, 5200);
-      playModulatedTone(140, 0.16, 0.35, 30, 260, 0.05, 0, 40);
-      playNoise(0.5, 0.4, 200, "lowpass", 0.06, 0, 0.6);
-      playTone(60, "sine", 0.3, 0.3, -200, 0.06, 0, 20);
       return;
     }
     if (scatterGun) {
@@ -10198,6 +11420,39 @@ async function spawnEnemies(wave, options: any = {}) {
     playNoise(0.24, 0.14 * atten, 1200, "bandpass", 0.04, pan, 2.8);
   }
 
+  // Elemental ability casts (Warden/Seraph/Cherub) + generic lightning telegraph.
+  // One recorded magic-impact sample (and one electric sample for lightning),
+  // re-pitched per ability so each kit reads distinct, positioned relative to the
+  // player. Real-sample only (audioEngine) — a no-op if Howler didn't load.
+  const SPELL_RATE = {
+    judgmentLance: 0.82, bulwark: 0.7, rollingBarrage: 0.9,
+    blinkStrike: 1.16, afterimageFeint: 1.28, nullField: 1.02,
+    sanctuaryCollapse: 0.78, lightningCast: 1.0,
+  };
+  // Teleport-flavoured casts use the crisp whoosh (dry) instead of the reverbed
+  // magic sample; lightning uses the electric sample; everything else the magic.
+  const SPELL_SAMPLE = {
+    lightningCast: "spell_electric",
+    blinkStrike: "whoosh",
+    afterimageFeint: "whoosh",
+  };
+  let _lastSpellAt = 0;
+  function playSpell(kind, wx, wz) {
+    const now = performance.now() / 1000;
+    if (now - _lastSpellAt < 0.05) return; // throttle simultaneous casters
+    const dx = wx - yaw.position.x, dz = wz - yaw.position.z;
+    const dist = Math.max(1, Math.hypot(dx, dz));
+    const pan = Math.max(-0.9, Math.min(0.9, dx / Math.max(5, dist)));
+    const vol = Math.max(0.2, Math.min(1, 1 - dist / 46));
+    const sample = SPELL_SAMPLE[kind] || "spell_magic";
+    // Reverbed magic/electric samples are already loud + long-tailed, so keep
+    // their in-world gain modest; the dry whoosh can sit a touch higher.
+    const level = sample === "whoosh" ? 0.8 : 0.55;
+    if (audioEngine.play(sample, { volume: vol * level, pan, rate: SPELL_RATE[kind] || 1 }) >= 0) {
+      _lastSpellAt = now;
+    }
+  }
+
   function sfxLightning(enemy, intensity = 1) {
     if (playEventSound('lightning', { volume: Math.min(0.85, 0.45 * (intensity || 1)) })) return;
     const dx = enemy.mesh.position.x - yaw.position.x;
@@ -10267,6 +11522,10 @@ async function spawnEnemies(wave, options: any = {}) {
   function sfxReload() {
     const spec = GUN_SPECS[currentGun] || ({} as any);
     const style = spec.reloadStyle || "mag";
+    // Real recorded reload, time-fit to this gun's reload duration so the sound
+    // lands exactly as the mechanical reload completes (gunState.reloadTimer was
+    // just set to reloadDuration by tryReload).
+    if (audioEngine.fitPlay('reload', gunState.reloadTimer || spec.reloadTime || 1, { volume: 0.9 })) return;
     if (spec.reloadSound && playEventSound(spec.reloadSound, { volume: 0.8 })) return;
     if (playEventSound('reload', { volume: 0.8 })) return;
     if (style === "shells") { sfxReloadShells(); return; }
@@ -10383,6 +11642,27 @@ async function spawnEnemies(wave, options: any = {}) {
     playNoise(0.5, 0.20, 1400, "bandpass", 0.02, 0, 1.4);
   }
 
+  // ── Menu blips ─────────────────────────────────────────────────────────────
+  // Short, dry and quiet: a console main menu wants a tick under the cursor, not
+  // a chime. Rate-limited so holding an arrow key doesn't machine-gun the bus.
+  let lastMenuBlipAt = -999;
+  function sfxMenuMove() {
+    const t = performance.now() / 1000;
+    if (t - lastMenuBlipAt < 0.045) return;
+    lastMenuBlipAt = t;
+    if (!audioCtx) return; // don't spin up the context just to tick
+    inSfxCategory("world", () => {
+      playTone(1180, "sine", 0.045, 0.05, 0, 0, 0, 2400);
+      playNoise(0.018, 0.035, 4200, "bandpass", 0, 0, 4.0);
+    });
+  }
+  function sfxMenuBack() {
+    if (!audioCtx) return;
+    inSfxCategory("world", () => {
+      playTone(560, "sine", 0.07, 0.06, -160, 0, 0, 1200);
+    });
+  }
+
   // Low denied buzz — press E without enough XP at a statue/box.
   function sfxDenied() {
     if (playEventSound('perk_deny', { volume: 0.6 })) return;
@@ -10476,6 +11756,10 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function sfxDroneAlien(enemy, intensity = 1) {
+    return inSfxCategory("voices", () => sfxDroneAlienVoices(enemy, intensity));
+  }
+
+  function sfxDroneAlienVoices(enemy, intensity = 1) {
     const dx = enemy.mesh.position.x - yaw.position.x;
     const dz = enemy.mesh.position.z - yaw.position.z;
     const dist = Math.max(1, Math.hypot(dx, dz));
@@ -10547,29 +11831,52 @@ async function spawnEnemies(wave, options: any = {}) {
     }
 
     if (bestEnemy && bestScore > 0.08) {
-      sfxDroneAlien(bestEnemy, bestScore);
-      droneSfxTimer = 0.42 + Math.random() * 0.62 - Math.min(0.22, bestScore * 0.12);
+      // Zombies get real recorded groans (non-overlapping, positional); other
+      // enemy types keep the synth alien vocal. Zombie voices are long, so on a
+      // successful play we hold the timer well past a typical groan.
+      if (bestEnemy.mesh.userData.zombieCharacterModel === true && sfxZombieVoice(bestEnemy, bestScore)) {
+        droneSfxTimer = 2.6 + Math.random() * 1.8;
+      } else {
+        sfxDroneAlien(bestEnemy, bestScore);
+        droneSfxTimer = 0.42 + Math.random() * 0.62 - Math.min(0.22, bestScore * 0.12);
+      }
     }
   }
 
-  function spawnImpactParticles(pos, normal, countOverride = null) {
-    const available = Math.max(0, MAX_ACTIVE_IMPACT_PARTICLES - particles.length);
-    const count = Math.min(available, countOverride ?? (3 + Math.floor(Math.random() * 4)));
-    for (let i = 0; i < count; i++) {
-      const p = checkoutImpactParticle();
-      p.mesh.material = impactMaterials[Math.random() > 0.5 ? 0 : 1];
-      p.mesh.position.copy(pos);
-      p.mesh.scale.setScalar(0.9 + Math.random() * 1.35);
-      const speed = 1.5 + Math.random() * 3;
-      p.vel.set(
-        normal.x + (Math.random() - 0.5) * 2,
-        normal.y + (Math.random() - 0.5) * 2 + 0.5,
-        normal.z + (Math.random() - 0.5) * 2
-      ).normalize().multiplyScalar(speed);
-      p.life = 0.22 + Math.random() * 0.22;
-      p.maxLife = 0.45;
-      particles.push(p);
-    }
+  // Recorded zombie vocalisation (two variants). Positional pan + distance gain,
+  // single-voice so groans never stack. Returns true if it actually started one.
+  // Tracks WHICH zombie is voicing so stopZombieVoiceIfOwner() can cut the sample
+  // the instant that specific zombie dies, instead of it playing out to the end.
+  let activeZombieVoiceEnemy = null;
+  let activeZombieVoiceSample = null;
+  function sfxZombieVoice(enemy, intensity = 1) {
+    const dx = enemy.mesh.position.x - yaw.position.x;
+    const dz = enemy.mesh.position.z - yaw.position.z;
+    const dist = Math.max(1, Math.hypot(dx, dz));
+    const pan = Math.max(-0.9, Math.min(0.9, dx / Math.max(5, dist)));
+    const vol = Math.max(0.15, Math.min(0.8, intensity * (1 - Math.min(dist, 30) / 40)));
+    const sample = Math.random() < 0.5 ? "zombie_voice_a" : "zombie_voice_b";
+    const started = audioEngine.playSingle(sample, { volume: vol * categoryVolume.voices, pan, rate: 0.92 + Math.random() * 0.16 });
+    if (started) { activeZombieVoiceEnemy = enemy; activeZombieVoiceSample = sample; }
+    return started;
+  }
+  function stopZombieVoiceIfOwner(enemy) {
+    if (activeZombieVoiceEnemy !== enemy) return;
+    if (activeZombieVoiceSample) audioEngine.stopSingle(activeZombieVoiceSample);
+    activeZombieVoiceEnemy = null;
+    activeZombieVoiceSample = null;
+  }
+
+  /**
+   * Back-compat wrapper for the old mesh-pool API. The legacy third argument was
+   * a particle *count* but call sites already pass fractional values (1.8, 2.6)
+   * using it as a strength dial, so it is normalised into an intensity around
+   * the old default of ~3.5.
+   */
+  function spawnImpactParticles(pos, normal, countOverride = null, kind = "bulletWall") {
+    particleFX?.emit(kind, pos, normal, {
+      intensity: countOverride == null ? 1 : Math.max(0.25, countOverride / 3.5),
+    });
   }
 
   function createDamageNumberTexture(text, color, strokeColor) {
@@ -10757,6 +12064,13 @@ async function spawnEnemies(wave, options: any = {}) {
     const electric = options.electric === true;
 
     const effect = checkoutLightningEffect();
+    const tint = options.tint || LIGHTNING_DEFAULT_TINT;
+    effect.core.material.color.setHex(tint.core);
+    effect.glow.material.color.setHex(tint.glow);
+    effect.outer.material.color.setHex(tint.outer);
+    effect.ring.material.color.setHex(tint.ring);
+    effect.sourceRing.material.color.setHex(tint.ring);
+    effect.glowDots.material.color.setHex(tint.dot);
     const mainPathCount = buildLightningPathScratch(
       start,
       end,
@@ -11026,6 +12340,7 @@ async function spawnEnemies(wave, options: any = {}) {
   // Corona flair — a couple of short arcs crackling around the Warden's tesla nodes.
   function spawnWardenCorona(enemy, nodes, count = 2) {
     const coronaCount = Math.min(count, nodes.length || 1);
+    const tint = getLightningTint(enemy);
     for (let i = 0; i < coronaCount; i++) {
       getTeslaStrikeOrigin(enemy, i, enemyShotOriginTmp);
       const angle = Math.random() * Math.PI * 2;
@@ -11035,7 +12350,7 @@ async function spawnEnemies(wave, options: any = {}) {
         Math.max(0.2, enemyShotOriginTmp.y + (Math.random() - 0.5) * 0.6),
         enemyShotOriginTmp.z + Math.sin(angle) * radius
       );
-      const opts = { segments: 6, branches: 2, sourceBranches: 1, jitter: 0.25, lift: 0.03, life: 0.06, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+      const opts = { segments: 6, branches: 2, sourceBranches: 1, jitter: 0.25, lift: 0.03, life: 0.06, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint };
       spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 0.6 + Math.random() * 0.3, opts);
       broadcastCoopLightningFx(enemyShotOriginTmp, teslaBranchTmp, 0.6, { enemy: ensureCoopEnemyNetId(enemy), ...opts });
     }
@@ -11050,20 +12365,22 @@ async function spawnEnemies(wave, options: any = {}) {
     const aimZ = Number.isFinite(enemy.lightningAimZ) ? enemy.lightningAimZ : pz;
     enemy.lightningAimX = null;
     enemy.lightningAimZ = null;
+    playSpell("judgmentLance", aimX, aimZ);
     lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.34);
 
+    const tint = getLightningTint(enemy);
     getTeslaStrikeOrigin(enemy, 0, enemyShotOriginTmp);       // crown node
     lanceAimTmp.set(aimX, 0.06, aimZ);                        // ground impact under aim
-    const mainOpts = { segments: 16, branches: 6, sourceBranches: 3, jitter: 0.22, lift: 0.05, life: 0.12, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+    const mainOpts = { segments: 16, branches: 6, sourceBranches: 3, jitter: 0.22, lift: 0.05, life: 0.12, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint };
     spawnLightningEffect(enemyShotOriginTmp, lanceAimTmp, 1.8, mainOpts);
     broadcastCoopLightningFx(enemyShotOriginTmp, lanceAimTmp, 1.8, { enemy: ensureCoopEnemyNetId(enemy), ...mainOpts });
-    spawnImpactParticles(new THREE.Vector3(aimX, 0.05, aimZ), lanceUpTmp, 1.8);
+    spawnImpactParticles(new THREE.Vector3(aimX, 0.05, aimZ), lanceUpTmp, 1.8, "energyImpact");
 
     // Secondary forks from the arm/keel nodes rake outward from the impact.
     for (let i = 1; i < Math.min(3, nodes.length); i++) {
       getTeslaStrikeOrigin(enemy, i, enemyShotOriginTmp);
       teslaBranchTmp.set(aimX + (Math.random() - 0.5) * 2.6, 0.06, aimZ + (Math.random() - 0.5) * 2.6);
-      const forkOpts = { segments: 10, branches: 3, sourceBranches: 1, jitter: 0.3, lift: 0.05, life: 0.08, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+      const forkOpts = { segments: 10, branches: 3, sourceBranches: 1, jitter: 0.3, lift: 0.05, life: 0.08, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint };
       spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 1.1, forkOpts);
       broadcastCoopLightningFx(enemyShotOriginTmp, teslaBranchTmp, 1.1, { enemy: ensureCoopEnemyNetId(enemy), ...forkOpts });
     }
@@ -11093,21 +12410,23 @@ async function spawnEnemies(wave, options: any = {}) {
     enemy.attackPulse = Math.max(enemy.attackPulse, 1.3);
     const cx = enemy.mesh.position.x;
     const cz = enemy.mesh.position.z;
+    playSpell("bulwark", cx, cz);
     const novaRadius = Math.max(5.0, spec.radius * 4.0);
     getTeslaStrikeOrigin(enemy, 0, enemyShotOriginTmp);       // core discharge point
 
     // BULWARK DISCHARGE: 5 spokes (bolt-budget friendly) + a physical shove — the
     // Warden violently reclaims its personal space instead of just ticking damage.
     const spokes = 5;
+    const tint = getLightningTint(enemy);
     for (let i = 0; i < spokes; i++) {
       const angle = (i / spokes) * Math.PI * 2 + Math.random() * 0.25;
       const reach = novaRadius * (0.7 + Math.random() * 0.3);
       teslaBranchTmp.set(cx + Math.cos(angle) * reach, 0.06, cz + Math.sin(angle) * reach);
-      const opts = { segments: 9, branches: 2, sourceBranches: 1, jitter: 0.34, lift: 0.04, life: 0.09, rings: i === 0, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+      const opts = { segments: 9, branches: 2, sourceBranches: 1, jitter: 0.34, lift: 0.04, life: 0.09, rings: i === 0, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint };
       spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 1.2, opts);
       if (i % 2 === 0) broadcastCoopLightningFx(enemyShotOriginTmp, teslaBranchTmp, 1.2, { enemy: ensureCoopEnemyNetId(enemy), ...opts });
     }
-    spawnImpactParticles(new THREE.Vector3(cx, 0.05, cz), lanceUpTmp, 2.6);
+    spawnImpactParticles(new THREE.Vector3(cx, 0.05, cz), lanceUpTmp, 2.6, "energyImpact");
 
     if (canDamagePlayer) {
       const hitDist = Math.hypot(px - cx, pz - cz);
@@ -11168,6 +12487,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
     if (!enemy.barrageActive && enemy.aggroed && enemy.barrageCooldown <= 0 && dist > 7 && dist < 26) {
       enemy.barrageActive = true;
+      playSpell("rollingBarrage", enemy.mesh.position.x, enemy.mesh.position.z);
       enemy.barrageSpawned = 0;
       enemy.barrageSpawnTimer = 0.35; // beat between the rise and the first ring
       enemy.barrageOriginX = enemy.mesh.position.x;
@@ -11203,10 +12523,10 @@ async function spawnEnemies(wave, options: any = {}) {
       detonateTelegraphRing(s.ring);
       megaBlastOriginTmp.set(s.x, 34, s.z);
       megaBlastEndTmp.set(s.x, 0.06, s.z);
-      const opts = { segments: 14, branches: 3, sourceBranches: 1, jitter: 0.18, lift: 0.05, life: 0.14, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+      const opts = { segments: 14, branches: 3, sourceBranches: 1, jitter: 0.18, lift: 0.05, life: 0.14, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: getLightningTint(enemy) };
       spawnLightningEffect(megaBlastOriginTmp, megaBlastEndTmp, 2.0, opts);
       broadcastCoopLightningFx(megaBlastOriginTmp, megaBlastEndTmp, 2.0, { enemy: ensureCoopEnemyNetId(enemy), ...opts });
-      spawnImpactParticles(new THREE.Vector3(s.x, 0.05, s.z), lanceUpTmp, 3);
+      spawnImpactParticles(new THREE.Vector3(s.x, 0.05, s.z), lanceUpTmp, 3, "energyImpact");
       lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.35);
       const hd = Math.hypot(px - s.x, pz - s.z);
       if (hd < 2.2) {
@@ -11290,15 +12610,16 @@ async function spawnEnemies(wave, options: any = {}) {
 
       // Travel arc + arrival burst: three short crackling bolts fan out from the
       // arrival point — the Seraph reassembles OUT of the lightning.
-      spawnLightningEffect(from, to, 0.7, { segments: 5, branches: 1, sourceBranches: 1, jitter: 0.26, lift: 0.55, life: 0.08, rings: true });
+      const blinkTint = getLightningTint(enemy);
+      spawnLightningEffect(from, to, 0.7, { segments: 5, branches: 1, sourceBranches: 1, jitter: 0.26, lift: 0.55, life: 0.08, rings: true, tint: blinkTint });
       broadcastCoopLightningFx(from, to, 0.7, { enemy: ensureCoopEnemyNetId(enemy), segments: 5, branches: 1, sourceBranches: 1, jitter: 0.26, lift: 0.55, life: 0.08, rings: true });
       getTeslaStrikeOrigin(enemy, 0, enemyShotOriginTmp);
       for (let i = 0; i < 3; i++) {
         const a = (i / 3) * Math.PI * 2 + Math.random() * 0.4;
         teslaBranchTmp.set(enemy.mesh.position.x + Math.cos(a) * 1.6, 0.08, enemy.mesh.position.z + Math.sin(a) * 1.6);
-        spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 0.7, { segments: 4, branches: 1, sourceBranches: 0, jitter: 0.2, lift: 0.04, life: 0.06, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS });
+        spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 0.7, { segments: 4, branches: 1, sourceBranches: 0, jitter: 0.2, lift: 0.04, life: 0.06, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: blinkTint });
       }
-      spawnImpactParticles(new THREE.Vector3(enemy.mesh.position.x, 0.05, enemy.mesh.position.z), lanceUpTmp, 3);
+      spawnImpactParticles(new THREE.Vector3(enemy.mesh.position.x, 0.05, enemy.mesh.position.z), lanceUpTmp, 3, "energyImpact");
 
       // Point-blank arrival discharge — punishes standing on the marked ring.
       const hd = Math.hypot(px - enemy.mesh.position.x, pz - enemy.mesh.position.z);
@@ -11341,6 +12662,7 @@ async function spawnEnemies(wave, options: any = {}) {
     enemy.attackPulse = Math.max(enemy.attackPulse, 1.2);
     if (enemy.blinkRing) releaseTelegraphRing(enemy.blinkRing);
     enemy.blinkRing = spawnTelegraphRing(spot.x, spot.z, 0.9, 0xb28cff, 0.35, { peak: 0.6 });
+    playSpell("blinkStrike", enemy.mesh.position.x, enemy.mesh.position.z);
     return true;
   }
 
@@ -11362,6 +12684,7 @@ async function spawnEnemies(wave, options: any = {}) {
     enemy.sanctZ = pz;
     enemy.sanctR = 7.0;
     enemy.sanctuaryRing = spawnTelegraphRing(px, pz, 7.0, 0x62ffd6, 0.3, { peak: 0.42 });
+    playSpell("sanctuaryCollapse", enemy.mesh.position.x, enemy.mesh.position.z);
     enemy.megaBlastTimer = spec.duration;
     enemy.megaBlastCooldown = 0;
     enemy.megaBlastDamageTimer = 0;
@@ -11379,7 +12702,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // the player immediately reads WHO is calling down the bombardment.
     getMegaBlastOrigin(enemy, megaBlastCasterTmp);
     megaBlastOriginTmp.set(enemy.mesh.position.x, 34, enemy.mesh.position.z);
-    spawnLightningEffect(megaBlastCasterTmp, megaBlastOriginTmp, 2.2, { segments: 12, branches: 4, sourceBranches: 3, jitter: 0.24, lift: 0.1, life: 0.22, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS });
+    spawnLightningEffect(megaBlastCasterTmp, megaBlastOriginTmp, 2.2, { segments: 12, branches: 4, sourceBranches: 3, jitter: 0.24, lift: 0.1, life: 0.22, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: getLightningTint(enemy) });
     broadcastCoopLightningFx(megaBlastCasterTmp, megaBlastOriginTmp, 2.2, { enemy: ensureCoopEnemyNetId(enemy), segments: 12, branches: 4, sourceBranches: 3, jitter: 0.24, lift: 0.1, life: 0.22, rings: false, electric: true });
     sfxMegaBlastFire(enemy);
   }
@@ -11447,13 +12770,14 @@ async function spawnEnemies(wave, options: any = {}) {
       }
       megaBlastOriginTmp.set(sxp, 34, szp);   // bolt from high above
       megaBlastEndTmp.set(sxp, 0.06, szp);    // down to the ground
-      const opts = { segments: 14, branches: 4, sourceBranches: 2, jitter: 0.18, lift: 0.05, life: 0.16, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS };
+      const cherubTint = getLightningTint(enemy);
+      const opts = { segments: 14, branches: 4, sourceBranches: 2, jitter: 0.18, lift: 0.05, life: 0.16, rings: true, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: cherubTint };
       spawnLightningEffect(megaBlastOriginTmp, megaBlastEndTmp, 2.1, opts);
       broadcastCoopLightningFx(megaBlastOriginTmp, megaBlastEndTmp, 2.1, { enemy: ensureCoopEnemyNetId(enemy), ...opts });
       // Casting arc: cherub → the strike's sky origin, so every bolt visibly comes FROM it.
       getMegaBlastOrigin(enemy, megaBlastCasterTmp);
-      spawnLightningEffect(megaBlastCasterTmp, megaBlastOriginTmp, 1.1, { segments: 8, branches: 2, sourceBranches: 2, jitter: 0.3, lift: 0.25, life: 0.13, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS });
-      spawnImpactParticles(new THREE.Vector3(sxp, 0.05, szp), impactNormalTmp.set(0, 1, 0), 2.4);
+      spawnLightningEffect(megaBlastCasterTmp, megaBlastOriginTmp, 1.1, { segments: 8, branches: 2, sourceBranches: 2, jitter: 0.3, lift: 0.25, life: 0.13, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: cherubTint });
+      spawnImpactParticles(new THREE.Vector3(sxp, 0.05, szp), impactNormalTmp.set(0, 1, 0), 2.4, "energyImpact");
       lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.5);
       if (enemy.megaBlastSfxTimer <= 0) { sfxMegaBlastBeam(enemy, 0.9); enemy.megaBlastSfxTimer = 0.28; }
 
@@ -11501,6 +12825,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
     const origin = enemyShotOriginTmp.set(enemy.mesh.position.x, enemy.mesh.position.y + 0.45, enemy.mesh.position.z);
     const arcCount = deviceProfile.tier === "low" ? 3 : 4;
+    const empTint = getLightningTint(enemy);
     for (let i = 0; i < arcCount; i++) {
       const a = (i / arcCount) * Math.PI * 2 + Math.random() * 0.2;
       const end = new THREE.Vector3(
@@ -11508,7 +12833,7 @@ async function spawnEnemies(wave, options: any = {}) {
         0.08 + Math.random() * 0.2,
         enemy.mesh.position.z + Math.sin(a) * spec.radius
       );
-      spawnLightningEffect(origin, end, 0.38, { segments: 3, branches: 0, sourceBranches: 0, jitter: 0.12, lift: 0.08, life: 0.05, rings: false, maxActive: Math.min(5, LIGHTNING_MAX_VISIBLE_EFFECTS) });
+      spawnLightningEffect(origin, end, 0.38, { segments: 3, branches: 0, sourceBranches: 0, jitter: 0.12, lift: 0.08, life: 0.05, rings: false, maxActive: Math.min(5, LIGHTNING_MAX_VISIBLE_EFFECTS), tint: empTint });
       broadcastCoopLightningFx(origin, end, 0.38, { enemy: ensureCoopEnemyNetId(enemy), segments: 3, branches: 0, sourceBranches: 0, jitter: 0.12, lift: 0.08, life: 0.05 });
     }
     const variantCore = enemy.mesh.userData.variantCore;
@@ -11782,11 +13107,20 @@ async function spawnEnemies(wave, options: any = {}) {
 
     getClonedGhostMuzzleWorld(enemy, enemyShotOriginTmp);
     const dist = Math.hypot(px - enemy.mesh.position.x, pz - enemy.mesh.position.z);
-    const accuracyDrift = (spec.aimJitter ?? 0.5) * (0.8 + clamp01(dist / Math.max(1, spec.range)) * 0.95);
+    // Shooting while moving is less accurate — a big source of the "runs away
+    // and still lands every shot" feel came from accuracy being distance-only.
+    const ownSpeed = Math.hypot(enemy.smoothVelX || 0, enemy.smoothVelZ || 0);
+    const moveMul = 1 + clamp01(ownSpeed / Math.max(1, enemy.speed || 6)) * 0.9;
+    const accuracyDrift = (spec.aimJitter ?? 0.5) * (0.8 + clamp01(dist / Math.max(1, spec.range)) * 0.95) * moveMul;
+    // Aim at the damped tracking point (aimTrackX/Z), not the player's true
+    // instantaneous position — the clone's "sight picture" lags like a human's
+    // rather than teleporting the aim to a perfect solution every frame.
+    const aimX = enemy.aimTrackX ?? px;
+    const aimZ = enemy.aimTrackZ ?? pz;
     playerHitCenterTmp.set(
-      px + (targetInfo?.vx ?? ai.playerVelX) * (spec.lead ?? 0.1),
+      aimX + (targetInfo?.vx ?? ai.playerVelX) * (spec.lead ?? 0.1),
       (targetInfo?.y ?? PLAYER_H) * (0.7 + Math.random() * 0.14),
-      pz + (targetInfo?.vz ?? ai.playerVelZ) * (spec.lead ?? 0.1)
+      aimZ + (targetInfo?.vz ?? ai.playerVelZ) * (spec.lead ?? 0.1)
     );
     enemyShotTargetTmp.copy(playerHitCenterTmp);
     enemyShotTargetTmp.x += (Math.random() - 0.5) * accuracyDrift * 2.2;
@@ -11794,7 +13128,11 @@ async function spawnEnemies(wave, options: any = {}) {
     enemyShotTargetTmp.z += (Math.random() - 0.5) * accuracyDrift * 2.2;
     enemyShotDirTmp.copy(enemyShotTargetTmp).sub(enemyShotOriginTmp).normalize();
 
-    const hitDist = raySphereDistance(enemyShotOriginTmp, enemyShotDirTmp, playerHitCenterTmp, player.radius * 1.18);
+    // Whether the shot actually connects is checked against the player's TRUE
+    // current position (not the lagged aim point) — a laggy sight picture makes
+    // the clone miss a moving/retreating player more, exactly as it should.
+    playerTrueCenterTmp.set(px, (targetInfo?.y ?? PLAYER_H) * (0.7 + Math.random() * 0.14), pz);
+    const hitDist = raySphereDistance(enemyShotOriginTmp, enemyShotDirTmp, playerTrueCenterTmp, player.radius * 1.18);
     const maxDist = spec.range;
     raycaster.set(enemyShotOriginTmp, enemyShotDirTmp);
     raycaster.far = maxDist;
@@ -11895,27 +13233,11 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function updateParticles(dt) {
-    const lowEndLateWave = lowEndMode && game.wave >= 6;
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      if (lowEndLateWave && (i % 2) === 1) {
-        p.life -= dt * 0.6;
-        if (p.life <= 0) {
-          recycleImpactParticle(p);
-          particles.splice(i, 1);
-        }
-        continue;
-      }
-      p.life -= dt;
-      if (p.life <= 0) {
-        recycleImpactParticle(p);
-        particles.splice(i, 1);
-        continue;
-      }
-      p.vel.y -= 8 * dt;
-      p.mesh.position.addScaledVector(p.vel, dt);
-      p.mesh.material.opacity = Math.max(0, p.life / p.maxLife);
-    }
+    if (!particleFX) return;
+    // Late waves on low-tier devices thin the emission budget instead of killing
+    // every other live particle (the old approach flickered visibly).
+    particleFX.setBudget(lowEndMode ? (game.wave >= 6 ? 0.35 : 0.55) : 1);
+    particleFX.update(dt);
   }
 
   function updateDamageNumbers(dt) {
@@ -11961,6 +13283,7 @@ async function spawnEnemies(wave, options: any = {}) {
     cameraFX.rollVel = 0;
     if (hud.damageVig) hud.damageVig.style.setProperty("opacity", "0", "important");
     if (hud.damageVig) hud.damageVig.style.setProperty("visibility", "hidden", "important");
+    if (hud.adsVig) hud.adsVig.style.opacity = "0";
     hud.hitMarker?.classList.remove("active");
   }
 
@@ -13220,7 +14543,12 @@ async function spawnEnemies(wave, options: any = {}) {
   function resetPlayer(options: any = {}) {
     const { setStartTime = true } = options;
     cancelCutscene();
-    const start = mapToWorld(1, 1);
+    // Wave 1 opens right at the interior Pack-a-Punch station (createPackStation
+    // anchors it at 0,0,22) so the intro cutscene stages there. PvP/other modes
+    // keep the legacy corner spawn.
+    const packSpawn = !net?.active || gameMode === "coop";
+    const PACK_STATION_X = 0, PACK_STATION_Z = 22;
+    const start = packSpawn ? { x: 3, z: 30 } : mapToWorld(1, 1);
     keys.clear();
     yaw.position.set(start.x, PLAYER_H, start.z);
     ai.playerPrevX = start.x;
@@ -13228,7 +14556,10 @@ async function spawnEnemies(wave, options: any = {}) {
     ai.playerVelX = 0;
     ai.playerVelZ = 0;
     ai.initialized = true;
-    yaw.rotation.y = Math.PI * 0.35;
+    // Face the Pack-a-Punch station when we spawn beside it; else the old default.
+    yaw.rotation.y = packSpawn
+      ? Math.atan2(start.x - PACK_STATION_X, start.z - PACK_STATION_Z)
+      : Math.PI * 0.35;
     pitch.rotation.x = 0;
     camera.rotation.set(0, 0, 0);
     player.hp = player.maxHp;
@@ -13354,33 +14685,291 @@ async function spawnEnemies(wave, options: any = {}) {
     if (hud.killsVal) hud.killsVal.textContent = `${game.killed} / ${game.totalEnemies}`;
   }
 
-  function setMenuPanel(panelName = "briefing") {
-    const nextPanel = ["briefing", "loadout", "intel", "quit"].includes(panelName) ? panelName : "briefing";
-    const navItems = [startBtn, resumeBtn, restartBtn, loadoutBtn, intelBtn, multiplayerBtn, quitBtn].filter(Boolean);
+  // Panel → the nav entry that owns it. "root" is the Halo-style landing state:
+  // no sub-screen, just the centred list (see menu_halo.css [data-panel="root"]).
+  const MENU_PANEL_OWNER = () => ({
+    briefing: briefingBtn,
+    settings: settingsBtn,
+    loadout: loadoutBtn,
+    intel: intelBtn,
+    multiplayer: multiplayerBtn,
+    quit: quitBtn,
+  });
+
+  function setMenuPanel(panelName = "root") {
+    const known = ["root", "briefing", "settings", "loadout", "intel", "quit"];
+    const nextPanel = known.includes(panelName) ? panelName : "root";
+    const navItems = [startBtn, resumeBtn, restartBtn, loadoutBtn, briefingBtn, settingsBtn,
+                      intelBtn, multiplayerBtn, modelEditorBtn, quitBtn].filter(Boolean);
 
     if (panelName === "multiplayer") {
+      if (overlay) overlay.dataset.panel = "multiplayer";
       for (const item of navItems) item.classList.remove("active-nav");
       multiplayerBtn?.classList.add("active-nav");
       return;
     }
 
+    if (overlay) overlay.dataset.panel = nextPanel;
     for (const panel of menuPanels || []) {
       panel.classList.toggle("active", panel.dataset.menuPanel === nextPanel);
     }
     if (nextPanel === "loadout") {
       requestAnimationFrame(() => updateLoadoutPreviews(performance.now(), true));
     }
+    if (nextPanel === "settings") syncSettingsControls();
 
     for (const item of navItems) item.classList.remove("active-nav");
 
-    if (nextPanel === "loadout") loadoutBtn?.classList.add("active-nav");
-    else if (nextPanel === "intel") intelBtn?.classList.add("active-nav");
-    else if (nextPanel === "multiplayer") multiplayerBtn?.classList.add("active-nav");
-    else if (nextPanel === "quit") quitBtn?.classList.add("active-nav");
+    const owner = MENU_PANEL_OWNER()[nextPanel];
+    if (owner) owner.classList.add("active-nav");
     else if (game.state === "paused") resumeBtn?.classList.add("active-nav");
     else startBtn?.classList.add("active-nav");
 
+    syncHaloNavDescription();
     if (quitStatus && nextPanel === "quit") quitStatus.textContent = "Awaiting confirmation";
+  }
+
+  // ── Halo list behaviour ───────────────────────────────────────────────────
+  // The descriptor strip under the list echoes whatever entry is highlighted,
+  // and ↑/↓/Enter drive the list the way a console main menu does.
+  const haloDescEl = document.getElementById("halo-desc");
+  function visibleNavItems() {
+    return Array.from(document.querySelectorAll<HTMLElement>("#overlay .ov-nav-item"))
+      .filter(el => !el.classList.contains("hidden-menu") && el.offsetParent !== null);
+  }
+  function syncHaloNavDescription() {
+    if (!haloDescEl) return;
+    const active = document.querySelector<HTMLElement>("#overlay .ov-nav-item.active-nav");
+    haloDescEl.textContent = active?.dataset.desc || "";
+  }
+  function moveHaloSelection(delta) {
+    const items = visibleNavItems();
+    if (!items.length) return;
+    const current = items.findIndex(el => el.classList.contains("active-nav"));
+    const next = items[(((current < 0 ? 0 : current + delta) % items.length) + items.length) % items.length];
+    for (const el of items) el.classList.remove("active-nav");
+    next.classList.add("active-nav");
+    syncHaloNavDescription();
+    sfxMenuMove();
+  }
+  function activateHaloSelection() {
+    document.querySelector<HTMLElement>("#overlay .ov-nav-item.active-nav")?.click();
+  }
+
+  // ══ Settings screen (video / audio / controls) ═════════════════════════════
+  // Every control here drives a real runtime value and persists through
+  // saveSettings(); the renderer backend is the only one that needs a reload,
+  // because the whole scene is compiled against the chosen GPU pipeline.
+  // Missing markup (headless runs, dev.html) is a no-op, not an error.
+
+  // The device profile's resolution ceiling, captured before the player's cap is
+  // applied on top so "Reset to defaults" can restore it exactly.
+  const deviceMaxRenderScale = quality.maxScale;
+
+  function setUserRenderScaleCap(cap) {
+    const clamped = Math.max(0.5, Math.min(1, cap));
+    quality.maxScale = Math.min(deviceMaxRenderScale, clamped);
+    quality.scale = Math.max(quality.minScale, Math.min(quality.maxScale, quality.scale));
+    applyRenderScale();
+    saveSettings({ renderScaleCap: clamped });
+  }
+
+  function setUserBrightness(v) {
+    userBrightness = Math.max(0.6, Math.min(1.6, v));
+    baseToneMappingExposure = BASE_TONE_MAPPING_EXPOSURE * userBrightness;
+    applyCinematicSettings(); // pushes the new exposure to the renderer
+    saveSettings({ brightness: userBrightness });
+  }
+
+  function setUserFovOffset(v) {
+    userFovOffset = Math.max(-10, Math.min(20, v));
+    saveSettings({ fovOffset: userFovOffset }); // picked up by updateCameraFX
+  }
+
+  function currentRendererPref() {
+    try {
+      const v = localStorage.getItem("rb_renderer");
+      if (v === "webgl" || v === "webgpu" || v === "auto") return v;
+      if (localStorage.getItem("rb_force_webgl")) return "webgl";
+    } catch (_) {}
+    return "auto";
+  }
+
+  // ── Small binding helpers ────────────────────────────────────────────────
+  // Sliders report an integer; `read` maps that to the runtime value and `label`
+  // formats the readout. Segmented choices highlight the button whose data-value
+  // matches `get()`.
+  function bindSettingSlider(id, get, apply, label) {
+    const input = document.getElementById(id) as HTMLInputElement | null;
+    const out = document.getElementById(id + "-val");
+    if (!input) return () => {};
+    const sync = () => {
+      const raw = get();
+      input.value = String(raw);
+      if (out) out.textContent = label(raw);
+    };
+    input.addEventListener("input", () => {
+      const raw = parseFloat(input.value);
+      apply(raw);
+      if (out) out.textContent = label(raw);
+    });
+    sync();
+    return sync;
+  }
+
+  function bindSettingChoice(id, get, apply) {
+    const group = document.getElementById(id);
+    const out = document.getElementById(id + "-val");
+    if (!group) return () => {};
+    const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>("button[data-value]"));
+    const sync = () => {
+      const value = String(get());
+      for (const b of buttons) b.classList.toggle("on", b.dataset.value === value);
+      if (out) out.textContent = "";
+    };
+    for (const b of buttons) {
+      b.addEventListener("click", () => {
+        apply(b.dataset.value);
+        sync();
+      });
+    }
+    sync();
+    return sync;
+  }
+
+  // ── Intel Records terminal ────────────────────────────────────────────────
+  // The rail selects which recovered document is shown; ↑/↓ walk the index while
+  // the screen is open, the same way the main list works.
+  function installIntelRecords() {
+    const panel = document.getElementById("intelPanel");
+    if (!panel) return;
+    const entries = Array.from(panel.querySelectorAll<HTMLElement>(".intel-entry"));
+    const records = Array.from(panel.querySelectorAll<HTMLElement>(".intel-record"));
+    if (!entries.length) return;
+
+    function showRecord(key) {
+      for (const e of entries) e.classList.toggle("is-active", e.dataset.record === key);
+      for (const r of records) r.classList.toggle("is-active", r.dataset.record === key);
+      // A newly opened document starts at the top, not wherever the previous
+      // one was scrolled to (.ov-panel is the scrolling container).
+      panel.scrollTop = 0;
+    }
+
+    for (const entry of entries) {
+      entry.addEventListener("click", () => {
+        if (entry.classList.contains("is-active")) return;
+        sfxMenuMove();
+        showRecord(entry.dataset.record);
+      });
+    }
+
+    panel.addEventListener("keydown", event => {
+      if (event.code !== "ArrowDown" && event.code !== "ArrowUp") return;
+      const i = entries.findIndex(e => e.classList.contains("is-active"));
+      if (i < 0) return;
+      event.preventDefault();
+      const next = entries[(i + (event.code === "ArrowDown" ? 1 : -1) + entries.length) % entries.length];
+      sfxMenuMove();
+      showRecord(next.dataset.record);
+      next.focus();
+    });
+  }
+
+  let syncSettingsControls = () => {};
+
+  function installSettingsScreen() {
+    if (!document.getElementById("settingsPanel")) return;
+    const syncs: Array<() => void> = [];
+
+    // ── Video ──────────────────────────────────────────────────────────────
+    syncs.push(bindSettingChoice("opt-renderer", currentRendererPref, value => {
+      try { localStorage.setItem("rb_renderer", value); localStorage.removeItem("rb_force_webgl"); } catch (_) {}
+      const note = document.getElementById("settings-note");
+      if (note) note.textContent = "Reloading to switch the renderer…";
+      setTimeout(() => window.location.reload(), 260);
+    }));
+
+    syncs.push(bindSettingSlider("opt-resscale",
+      () => Math.round(Math.min(deviceMaxRenderScale, quality.maxScale) * 100),
+      pct => setUserRenderScaleCap(pct / 100),
+      pct => pct + "%"));
+
+    syncs.push(bindSettingSlider("opt-brightness",
+      () => Math.round(userBrightness * 100),
+      pct => setUserBrightness(pct / 100),
+      pct => pct + "%"));
+
+    syncs.push(bindSettingSlider("opt-fov",
+      () => Math.round(userFovOffset),
+      v => setUserFovOffset(v),
+      v => (v > 0 ? "+" : "") + v + "°"));
+
+    // Routed through the legacy #cinematic-toggle checkbox so the PvP lock and
+    // the persistence path in setCinematicEnabled stay the single source of truth.
+    const cinematicCheckbox = document.getElementById("cinematic-toggle") as HTMLInputElement | null;
+    const syncCinematic = bindSettingChoice("opt-cinematic",
+      () => (cinematicState.enabled ? "on" : "off"),
+      value => {
+        if (!cinematicCheckbox) return;
+        cinematicCheckbox.checked = value === "on";
+        cinematicCheckbox.dispatchEvent(new Event("change"));
+      });
+    syncs.push(syncCinematic);
+    // applyCinematicSettings() rewrites the checkbox; mirror that onto the buttons.
+    cinematicCheckbox?.addEventListener("change", () => setTimeout(syncCinematic, 0));
+
+    syncs.push(bindSettingChoice("opt-perf",
+      () => (perfOverlay.visible ? "on" : "off"),
+      value => { if ((value === "on") !== perfOverlay.visible) perfOverlay.toggle(); }));
+
+    // ── Audio ──────────────────────────────────────────────────────────────
+    syncs.push(bindSettingSlider("opt-vol-master",
+      () => Math.round(masterVolume * 100),
+      pct => setMasterVolume(pct / 100),
+      pct => pct + "%"));
+
+    for (const cat of AUDIO_CATEGORIES) {
+      syncs.push(bindSettingSlider(`opt-vol-${cat}`,
+        () => Math.round(categoryVolume[cat] * 100),
+        pct => setCategoryVolume(cat, pct / 100),
+        pct => pct + "%"));
+    }
+
+    syncs.push(bindSettingChoice("opt-mute-blur",
+      () => (muteWhenUnfocused ? "on" : "off"),
+      value => setMuteWhenUnfocused(value === "on")));
+
+    // ── Reset ──────────────────────────────────────────────────────────────
+    document.getElementById("settingsResetBtn")?.addEventListener("click", () => {
+      setUserRenderScaleCap(1);
+      setUserBrightness(1);
+      setUserFovOffset(0);
+      setMasterVolume(1);
+      for (const cat of AUDIO_CATEGORIES) setCategoryVolume(cat, 1);
+      setMuteWhenUnfocused(false);
+      if (perfOverlay.visible) perfOverlay.toggle();
+      if (hud.sensSlider) {
+        hud.sensSlider.value = "1.0";
+        hud.sensSlider.dispatchEvent(new Event("input"));
+      }
+      if (cinematicCheckbox && !cinematicState.enabled) {
+        cinematicCheckbox.checked = true;
+        cinematicCheckbox.dispatchEvent(new Event("change"));
+      }
+      // Renderer preference is deliberately NOT reset — it is a device
+      // capability choice, and clearing it would force an unexpected reload.
+      syncSettingsControls();
+      const note = document.getElementById("settings-note");
+      if (note) note.textContent = "Restored to defaults.";
+    });
+
+    syncSettingsControls = () => { for (const s of syncs) s(); };
+
+    // Apply the persisted resolution cap now that everything is wired.
+    if (typeof savedSettings?.renderScaleCap === "number") {
+      setUserRenderScaleCap(savedSettings.renderScaleCap);
+    }
+    syncSettingsControls();
   }
 
   // Inject the "locked" loadout-card styling once (so BOTH html entry points get
@@ -13438,7 +15027,7 @@ async function spawnEnemies(wave, options: any = {}) {
       if (restartBtn) restartBtn.classList.add("hidden-menu");
       if (quitBtn) quitBtn.classList.remove("hidden-menu");
       if (quitConfirmBtn) quitConfirmBtn.textContent = "Close Window";
-      setMenuPanel("briefing");
+      setMenuPanel("root");
       return;
     }
 
@@ -13448,7 +15037,7 @@ async function spawnEnemies(wave, options: any = {}) {
       if (restartBtn) restartBtn.classList.remove("hidden-menu");
       if (quitBtn) quitBtn.classList.remove("hidden-menu");
       if (quitConfirmBtn) quitConfirmBtn.textContent = "Return To Menu";
-      setMenuPanel("briefing");
+      setMenuPanel("root");
     }
   }
 
@@ -13497,6 +15086,7 @@ async function spawnEnemies(wave, options: any = {}) {
     overlay?.classList.add("hidden");
     requestCanvasPointerLock();
     primeFirstUseAudio();
+    showTransitionCover(); // hide the world/HUD until the intro cutscene (or gameplay) takes over
 
     try {
       await waitFrame();
@@ -13526,13 +15116,19 @@ async function spawnEnemies(wave, options: any = {}) {
         await spawnEnemies(1, { smooth: true, minDistance: 18, preferVisible: true });
       }
       ensureAllLiveEnemiesVisible();
+      // Wave 1 (single-player): pull the trio into a near-player arc facing the
+      // operator, so they read as the three Wardens the intro cutscene leaves
+      // standing over you. Covers both the primed and freshly-spawned paths.
+      if (game.wave === 1 && !net?.active) placeWaveOneWardensNearPlayer();
       game.startTime = performance.now();
       game.state = "playing";
+      let introStarted = false;
       if (game.wave === 1 && !isCoopGuest()) {
         announce('vo_game_start', { minGap: 0 });
         playEventSound('wave_start', { volume: 0.55 });
-        startIntroCutscene(); // lore opener (skipped in ?test=1 runs)
+        introStarted = startIntroCutscene(); // lore opener (skipped in ?test=1 runs)
       }
+      if (!introStarted) hideTransitionCover(); // no cutscene queued — reveal gameplay now
       syncGameplayBodyClass();
       syncClickToPlay?.();
       updateHUD(0);
@@ -13543,6 +15139,7 @@ async function spawnEnemies(wave, options: any = {}) {
       game.state = "menu";
       syncGameplayBodyClass();
       overlay?.classList.remove("hidden");
+      hideTransitionCover();
     } finally {
       game.transitioning = false;
     }
@@ -13584,6 +15181,7 @@ async function spawnEnemies(wave, options: any = {}) {
       return;
     }
     allGuns[currentGun] = gunState;
+    audioEngine.stopFireLoop(true); // hard-cut any auto fire loop from the old weapon
     if (weapon?.gun) weapon.gun.visible = false;
     currentGun = gunType;
     gunState = allGuns[gunType];
@@ -13598,6 +15196,8 @@ async function spawnEnemies(wave, options: any = {}) {
     // rebuilt by selectFirstPersonWeapon, so animSpec is the new gun's.
     thirdPerson.equip = 1;
     thirdPerson.equipTime = weaponAnim.animSpec.equipTime || 0.3;
+    thirdPerson.inspecting = false;
+    thirdPerson.inspectT = 0;
     applyViewModeVisibility();
     gunState.fireCooldown = Math.max(gunState.fireCooldown, 0.14);
     sfxEquip(gunType);
@@ -13609,6 +15209,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (player.pvpDead) return;
     if (weaponAnim.switchBlend > 0.12) return;
     if (gunState.fireCooldown > 0 || gunState.reloadTimer > 0) return;
+    if (thirdPerson.inspecting) { thirdPerson.inspecting = false; thirdPerson.inspectT = 0; }
     if (!player.unlimitedAmmo && gunState.mag <= 0) {
       if (!gunState.isAutoReloading) {
         sfxEmpty();
@@ -13710,13 +15311,17 @@ async function spawnEnemies(wave, options: any = {}) {
     if (activeWeapon?.flash) {
       applyMuzzleFlashSprite(activeWeapon.flash, true, 1, currentGun, activeWeapon === thirdPerson.weapon ? 0.74 : 1);
     }
-    const shotRange = (currentGun === GUNS.SNIPER || currentGun === GUNS.RAILGUN || currentGun === GUNS.DMR) ? MAX_SHOT_RANGE : 42;
+    const shotRange = (currentGun === GUNS.SNIPER || currentGun === GUNS.DMR) ? MAX_SHOT_RANGE : 42;
     const floorMesh = scene.userData.environmentSurfaces?.floor || null;
     const pendingDamage = new Map();
     const pendingHeadshot = new Set();
     const pendingHitDir = new Map();
     let shotHitEnemy = false;
     let shotHitSurface = false;
+    // Angels (Warden/Seraph/Cherub — angelModel) are metal, so their bullet
+    // impacts spark instead of bleeding. Captured from the first enemy hit this
+    // shot, matching where shotEnemyImpactTmp is set below.
+    let shotEnemyMetal = false;
 
     for (let i = 0; i < gunState.pellets; i++) {
       getActiveMuzzleWorld(muzzleWorldTmp, i);
@@ -13802,7 +15407,7 @@ async function spawnEnemies(wave, options: any = {}) {
       hitDir.z += raycaster.ray.direction.z;
       pendingHitDir.set(enemy, hitDir);
       player.shotsHit++;
-      if (!shotHitEnemy) shotEnemyImpactTmp.copy(tracerEnd);
+      if (!shotHitEnemy) { shotEnemyImpactTmp.copy(tracerEnd); shotEnemyMetal = !!enemy.angelModel; }
       shotHitEnemy = true;
     }
 
@@ -13810,7 +15415,7 @@ async function spawnEnemies(wave, options: any = {}) {
       sfxHit();
       showHitMarker();
       impactNormalTmp.copy(raycaster.ray.direction).multiplyScalar(-1);
-      spawnImpactParticles(shotEnemyImpactTmp, impactNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : 3);
+      spawnImpactParticles(shotEnemyImpactTmp, impactNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : 3, shotEnemyMetal ? "bulletMetal" : "bulletFlesh");
     } else if (shotHitSurface) {
       spawnImpactParticles(shotWallImpactTmp, shotWallNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : null);
     }
@@ -13863,8 +15468,9 @@ async function spawnEnemies(wave, options: any = {}) {
   const knifeMesh = (() => {
     const g = new THREE.Group();
     g.name = "MeleeKnife";
-    const steelMat = new THREE.MeshStandardMaterial({ color: 0xbfd4e2, roughness: 0.18, metalness: 0.92, emissive: 0x1a2a36, emissiveIntensity: 0.25 });
-    const gripMat = new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.8, metalness: 0.1 });
+    const meleeTex = getWeaponTextures();
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0xbfd4e2, map: meleeTex.metalTex, roughness: 0.18, metalness: 0.92, emissive: 0x1a2a36, emissiveIntensity: 0.25 });
+    const gripMat = new THREE.MeshStandardMaterial({ color: 0x14181f, map: meleeTex.rubberTex, roughness: 0.8, metalness: 0.1 });
     const blade = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.34, 0.012), steelMat);
     blade.position.y = 0.27; g.add(blade);
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.09, 4), steelMat);
@@ -13961,7 +15567,7 @@ async function spawnEnemies(wave, options: any = {}) {
       if (best) {
         getEnemyHitCenter(best, enemyHitCenterTmp);
         impactNormalTmp.copy(enemyShotDirTmp).multiplyScalar(-1);
-        spawnImpactParticles(enemyHitCenterTmp, impactNormalTmp, 3);
+        spawnImpactParticles(enemyHitCenterTmp, impactNormalTmp, 3, best.angelModel ? "bulletMetal" : "bulletFlesh");
       }
       // Resolve deaths after applying all damage so multi-kills register.
       // Stays on enemies[] (not the live archetype): killEnemy() below removes the
@@ -13978,6 +15584,7 @@ async function spawnEnemies(wave, options: any = {}) {
   function killEnemy(enemy, killerId = myNetId) {
     if (!enemy.alive) return;
     setEnemyAlive(enemy, false);
+    stopZombieVoiceIfOwner(enemy);
     deactivateEnemyRuntimeLights(enemy);
     // Died mid-ability: drop any telegraph rings it was holding.
     if (enemy.telegraphRing) { fadeTelegraphRing(enemy.telegraphRing); enemy.telegraphRing = null; }
@@ -13986,13 +15593,10 @@ async function spawnEnemies(wave, options: any = {}) {
     if (enemy.blinkRing) { fadeTelegraphRing(enemy.blinkRing); enemy.blinkRing = null; }
     if (enemy.barrageQueue) { for (const s of enemy.barrageQueue) fadeTelegraphRing(s.ring); enemy.barrageQueue.length = 0; }
     enemy.barrageActive = false;
-    // Phase 3 showcase: fling a physics-debris burst from the death point, tinted
-    // and sized per enemy type (bigger enemies throw more, larger, coloured chunks).
-    if (PHYSICS_DEBRIS) {
-      const dScale = enemy.debrisScale || 1;
-      const dCount = Math.max(3, Math.min(10, Math.round(4 + dScale * 3)));
-      spawnDebrisBurst(enemy.mesh.position.x, enemy.mesh.position.y + 0.9 * dScale, enemy.mesh.position.z, dCount, enemy.debrisColor ?? 0x8a94a0, dScale);
-    }
+    // Physics-debris burst on death was removed — the shared box-shaped Rapier
+    // chunks read as ugly clutter flying out of the enemy, not a death effect.
+    // The pool (spawnDebrisBurst) is still here, unused, if this is revisited
+    // with a purpose-built gib shape/material instead of the shared casing pool.
     enemy.mesh.visible = false;
     enemyRemovalQueue.push(enemy);
     game.killed++;
@@ -14042,6 +15646,7 @@ async function spawnEnemies(wave, options: any = {}) {
     for (let i = 0; i < limit && pendingEnemyDeaths.length; i++) {
       const enemy = pendingEnemyDeaths.shift();
       enemy.deathQueued = false;
+      stopZombieVoiceIfOwner(enemy);
       // mark invisible now; actual scene removal will happen later
       deactivateEnemyRuntimeLights(enemy);
       if (enemy.mesh) enemy.mesh.visible = false;
@@ -14114,8 +15719,12 @@ async function spawnEnemies(wave, options: any = {}) {
       game.wave++;
       addKillFeed(`WAVE ${game.wave} INCOMING`);
       if (game.wave % 10 === 0) {
-        // Blackout: force the flashlight on and tell the player the rules changed.
+        // Blackout: the flashlight is the rule now — but it doesn't just snap on.
+        // Arm the boot flicker (stays dark through the cutscene's establishing/hero
+        // shots, then guttering-to-life on the final pack-advance beat). Cleared to
+        // steady-on below if no cutscene plays.
         lightingState.flashlightOn = true;
+        lightingState.flashlightBoot = { active: false, t: 0 };
         addKillFeed("BLACKOUT — THEY HUNT FASTER. ×2 XP.");
         announce("vo_wave_start_final"); // the ominous announcer read
       } else if (game.wave > 10 && (game.wave - 1) % 10 === 0) {
@@ -14135,7 +15744,11 @@ async function spawnEnemies(wave, options: any = {}) {
       // Blackout wave: the fire sky (applyWaveLighting above) + enemies now
       // exist — run the local-only intro cutscene. Non-blocking: gameplay state
       // flips to "playing" below; the cutscene freezes input/AI via its flag.
-      if (game.wave % 10 === 0) startBlackoutCutscene();
+      if (game.wave % 10 === 0) {
+        // If the cutscene is disabled/blocked, don't leave the beam armed-dark —
+        // clear the boot so the flashlight is simply on for gameplay.
+        if (!startBlackoutCutscene()) lightingState.flashlightBoot = null;
+      }
       announce('vo_wave_start');
       playEventSound('wave_start', { volume: 0.6 });
       game.waveStartTime = performance.now();
@@ -14179,7 +15792,9 @@ async function spawnEnemies(wave, options: any = {}) {
         0,
         enemy.mesh.position.z - yaw.position.z
       ).normalize();
-      spawnImpactParticles(enemy.mesh.position, impactNormalTmp, headshot ? 7 : 5);
+      const metalEnemy = !!enemy.angelModel;
+      const deathKind = metalEnemy ? "enemyDeathMetal" : (headshot ? "headshot" : "enemyDeath");
+      spawnImpactParticles(enemy.mesh.position, impactNormalTmp, headshot ? 7 : 5, deathKind);
     }
   }
 
@@ -14220,7 +15835,21 @@ async function spawnEnemies(wave, options: any = {}) {
     gunState.reloadTimer = weaponAnim.animSpec.reloadDuration;
     weaponAnim.reloadJolt = 1;
     thirdPerson.reloadTimer = Math.max(thirdPerson.reloadTimer, gunState.reloadTimer);
+    thirdPerson.inspecting = false;
+    thirdPerson.inspectT = 0;
+    audioEngine.stopFireLoop(); // trigger released into reload — kill the fire loop
     sfxReload();
+  }
+
+  function tryInspect() {
+    if (game.state !== "playing") return;
+    if (player.pvpDead) return;
+    if (weaponAnim.switchBlend > 0.12) return;
+    if (gunState.reloadTimer > 0) return;
+    if (thirdPerson.inspecting) return;
+    thirdPerson.inspecting = true;
+    thirdPerson.inspectT = 0;
+    thirdPerson.inspectDuration = GUN_SPECS[currentGun]?.inspectTime || 1.4;
   }
 
   function finishReload() {
@@ -14277,6 +15906,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function endGame(kind) {
     if (game.state === "dead" || game.state === "won") return;
+    audioEngine.stopFireLoop(true); // silence any sustained fire loop on game end
     cancelCutscene(); // restore camera/HUD/letterbox if a cutscene was running
     if (kind === "dead" && net?.active && gameMode === "coop") {
       beginNetworkedPlayerDeath(COOP_RESPAWN_SECONDS, "DOWNED - RESPAWN IN 10");
@@ -14571,10 +16201,15 @@ async function spawnEnemies(wave, options: any = {}) {
   const cutsceneLiveQuatTmp = new THREE.Quaternion();
   const cutsceneRollQuatTmp = new THREE.Quaternion();
   const CUTSCENE_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
+  // Handheld micro-sway temps (sub-0.1° rotational breathing on authored shots).
+  const cutsceneSwayEuler = new THREE.Euler();
+  const cutsceneSwayQuat = new THREE.Quaternion();
+  // Disabled in verification runs (test=1), which assert exact cutscene poses.
+  const CUTSCENE_NO_SWAY = typeof window !== "undefined" && window.location.search.includes("test=1");
   // Soft percussive accent on each hard cut (filmic "thud", not the big engage boom).
   function sfxCutsceneCut() {
-    playTone(58, "sine", 0.5, 0.28, 0, 0, 0, 40);
-    playNoise(0.28, 0.08, 400, "lowpass", 0, 0, 0.5);
+    playTone(58, "sine", 0.5, 0.2, 0, 0, 0, 40);
+    playNoise(0.28, 0.06, 400, "lowpass", 0, 0, 0.5);
   }
 
   function cutsceneEase(x) { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); }
@@ -14585,9 +16220,9 @@ async function spawnEnemies(wave, options: any = {}) {
   // engages, and a short riser as it hands back to gameplay. Uses the shared
   // WebAudio synth (same bus/limiter as every other SFX).
   function sfxCutsceneHit() {
-    playTone(46, "sine", 1.5, 0.5, 0, 0, 0, 30);        // deep sub boom, slides 46→30 Hz
-    playSweep(150, 40, 1.7, 0.26, "sawtooth", 0.02, 0);  // ominous descending drone
-    playNoise(1.3, 0.14, 220, "lowpass", 0, 0, 0.7);     // low rumble bed
+    playTone(46, "sine", 1.5, 0.38, 0, 0, 0, 30);        // deep sub boom, slides 46→30 Hz
+    playSweep(150, 40, 1.7, 0.2, "sawtooth", 0.02, 0);   // ominous descending drone
+    playNoise(1.3, 0.11, 220, "lowpass", 0, 0, 0.7);     // low rumble bed
   }
   function sfxCutsceneRiser() {
     playSweep(70, 320, 0.85, 0.20, "sine", 0, 0);        // rising whoosh into the action
@@ -14628,8 +16263,30 @@ async function spawnEnemies(wave, options: any = {}) {
       #rb-cut-bottom { bottom: 0; transform-origin: bottom; }
       body.rb-cutscene #rb-cut-top, body.rb-cutscene #rb-cut-bottom { transform: scaleY(1); }
       /* Filmic vignette that fades in with the bars — pushes focus to centre. */
-      #rb-cut-vig { position: fixed; inset: 0; z-index: 59; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(ellipse 128% 92% at 50% 48%, transparent 40%, rgba(0,0,0,.34) 74%, rgba(0,0,0,.76) 100%); }
+      #rb-cut-vig { position: fixed; inset: 0; z-index: 59; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(ellipse 128% 92% at 50% 48%, transparent 38%, rgba(0,0,0,.36) 72%, rgba(0,0,0,.8) 100%); }
       body.rb-cutscene #rb-cut-vig { opacity: 1; }
+      /* Filmic colour grade: a teal-orange push (warm highlights, cool shadows) via
+         soft-light, plus a faint anamorphic-style horizontal light bloom near centre.
+         Pure compositing — no shader programs, no light-count change. */
+      #rb-cut-grade { position: fixed; inset: 0; z-index: 58; pointer-events: none; opacity: 0; transition: opacity .8s ease; mix-blend-mode: soft-light;
+        background:
+          radial-gradient(150% 60% at 50% 46%, rgba(255,196,138,.10), transparent 60%),
+          linear-gradient(0deg, rgba(8,24,46,.22), transparent 38%, transparent 60%, rgba(6,16,34,.16)); }
+      body.rb-cutscene #rb-cut-grade { opacity: 1; }
+      /* Animated film grain (SVG fractal-noise tile shuffled via background-position).
+         Overlay blend so it lives in the mid-tones and stays off pure black bars. */
+      #rb-cut-grain { position: fixed; inset: -50%; width: 200%; height: 200%; z-index: 61; pointer-events: none; opacity: 0; mix-blend-mode: overlay;
+        transition: opacity .5s ease; background-size: 170px 170px;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+      body.rb-cutscene #rb-cut-grain { opacity: .07; animation: rbCutGrain .6s steps(5) infinite; }
+      @keyframes rbCutGrain {
+        0%   { background-position:   0px    0px; }
+        20%  { background-position: -85px   45px; }
+        40%  { background-position:  55px  -75px; }
+        60%  { background-position: -40px   70px; }
+        80%  { background-position:  75px   25px; }
+        100% { background-position: -20px  -30px; }
+      }
       /* Title card — driven by JS opacity so its fade is keyed to phase A. */
       #rb-cut-title { position: fixed; left: 0; right: 0; top: 34%; text-align: center; z-index: 62; pointer-events: none; opacity: 0;
         font: 800 clamp(40px, 7.4vw, 96px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .17em; text-transform: uppercase; color: #ffe6c6;
@@ -14642,7 +16299,10 @@ async function spawnEnemies(wave, options: any = {}) {
     document.head.appendChild(style);
     const top = document.createElement("div"); top.id = "rb-cut-top";
     const bottom = document.createElement("div"); bottom.id = "rb-cut-bottom";
+    const grade = document.createElement("div"); grade.id = "rb-cut-grade";
+    const grain = document.createElement("div"); grain.id = "rb-cut-grain";
     const vig = document.createElement("div"); vig.id = "rb-cut-vig";
+    document.body.append(grade, grain);
     const title = document.createElement("div"); title.id = "rb-cut-title"; title.textContent = "";
     const sub = document.createElement("div"); sub.id = "rb-cut-sub";
     document.body.append(top, bottom, vig, title, sub);
@@ -14656,6 +16316,98 @@ async function spawnEnemies(wave, options: any = {}) {
   function setCutsceneDomActive(on) {
     ensureCutsceneDom();
     document.body.classList.toggle("rb-cutscene", on);
+  }
+
+  // beginMission()/restartGame() do real async work (reset, spawn, terminal
+  // typing) before the intro/restart cutscene actually engages its own cover —
+  // without this, the raw world + HUD flash on screen for those in-between
+  // frames. Raising the same DOM cover a beat early (and tearing it down again
+  // if no cutscene ends up starting) closes that gap with zero visible seam,
+  // since startIntroCutscene() re-applies the identical state on top.
+  function showTransitionCover() {
+    ensureCutsceneDom();
+    setCutsceneDomActive(true);
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "1";
+  }
+  function hideTransitionCover() {
+    setCutsceneDomActive(false);
+    if (cutscene.blackEl) cutscene.blackEl.style.opacity = "0";
+  }
+
+  // ── Restart terminal ("RESTART UNKNW") ──────────────────────────────────────
+  // Plays once, only on restartGame() (never the first New Mission), before the
+  // normal intro cutscene. A green monospace line types itself out on an
+  // otherwise pure-black "monitor" — a beat of diegetic system-reboot flavour
+  // ahead of the Halo-style teleport-in. JS-created DOM/CSS, same reason as
+  // ensureCutsceneDom: shared by both HTML entry points with zero markup edits
+  // and zero shader/light cost.
+  //
+  // Sequencing for a clean cut into the intro: showRestartTerminal() ends with
+  // the overlay still fully opaque (typed line held on screen). Only AFTER the
+  // caller has started the real intro cutscene — which immediately paints its
+  // own opaque black cover (intro.blackQuad) behind everything — does
+  // hideRestartTerminal() fade our overlay out. Both layers are solid black, so
+  // the swap is invisible; fading ours out before the intro's cover exists would
+  // flash the frozen gameplay frame underneath for a beat.
+  const restartTerm: any = { domReady: false, root: null, textEl: null };
+  const RESTART_TERM_STRING = "RESTART UNKNW";
+  function sleep(ms) {
+    return new Promise<void>(resolve => setTimeout(resolve, ms));
+  }
+  function ensureRestartTerminalDom() {
+    if (restartTerm.domReady) return;
+    restartTerm.domReady = true;
+    const style = document.createElement("style");
+    style.textContent = `
+      #rb-restart-term { position: fixed; inset: 0; z-index: 75; background: #000;
+        display: flex; align-items: center; justify-content: center;
+        opacity: 0; pointer-events: none; transition: opacity .35s ease;
+        font: 400 clamp(20px, 3.2vw, 38px)/1.4 Consolas, "Courier New", ui-monospace, monospace; }
+      #rb-restart-term.active { opacity: 1; }
+      #rb-restart-term-inner { position: relative; color: #37ff6b; white-space: pre; letter-spacing: .08em;
+        text-shadow: 0 0 6px rgba(55,255,107,.85), 0 0 24px rgba(55,255,107,.45); }
+      #rb-restart-term-cursor { display: inline-block; width: .5em; height: 1em; margin-left: .06em;
+        background: #37ff6b; box-shadow: 0 0 8px rgba(55,255,107,.9); vertical-align: -0.15em;
+        animation: rbTermBlink .9s steps(1) infinite; }
+      @keyframes rbTermBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+      /* CRT scanlines + edge vignette so the type reads as "on a monitor" — pure
+         compositing, no shader program and no extra light. */
+      #rb-restart-term::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+        background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,.35) 3px, rgba(0,0,0,0) 4px);
+        mix-blend-mode: multiply; }
+      #rb-restart-term::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 55%, rgba(0,0,0,.78) 100%); }
+    `;
+    document.head.appendChild(style);
+    const root = document.createElement("div"); root.id = "rb-restart-term";
+    const inner = document.createElement("span"); inner.id = "rb-restart-term-inner";
+    const textEl = document.createElement("span"); textEl.id = "rb-restart-term-text";
+    const cursorEl = document.createElement("span"); cursorEl.id = "rb-restart-term-cursor";
+    inner.append(textEl, cursorEl);
+    root.appendChild(inner);
+    document.body.appendChild(root);
+    restartTerm.root = root;
+    restartTerm.textEl = textEl;
+  }
+  // Types RESTART_TERM_STRING onto the terminal and holds — resolves with the
+  // overlay still fully opaque. Caller starts the real cutscene, then fades this
+  // out via hideRestartTerminal().
+  async function showRestartTerminal() {
+    ensureRestartTerminalDom();
+    const { root, textEl } = restartTerm;
+    textEl.textContent = "";
+    root.classList.add("active");
+    await sleep(140); // a beat of plain black before the type starts
+    for (let i = 0; i < RESTART_TERM_STRING.length; i++) {
+      const ch = RESTART_TERM_STRING[i];
+      textEl.textContent += ch;
+      if (ch !== " ") playTone(1500 + Math.random() * 500, "square", 0.018, 0.045);
+      await sleep(46 + Math.random() * 58); // uneven keystroke cadence, not a metronome
+    }
+    await sleep(620); // hold on the completed line, cursor still blinking
+  }
+  function hideRestartTerminal() {
+    restartTerm.root?.classList.remove("active");
   }
 
   function captureCutsceneBlendFrom(pos, quat, fov) {
@@ -14702,7 +16454,16 @@ async function spawnEnemies(wave, options: any = {}) {
   function cancelCutscene() {
     if (!cutscene.active && !document.body.classList.contains("rb-cutscene")) return;
     cutscene.active = false;
+    // The cutscene owns the flashlight boot flicker; once it ends the beam is steady
+    // on for gameplay (clearing the boot returns the flashlight to normal behaviour).
+    lightingState.flashlightBoot = null;
     boostCutsceneKeyLight(false);
+    // A cancel mid-materialise must never strand a translucent/shrunken operator.
+    cutscene.introMode = false;
+    cutscene.introPlayerHidden = false;
+    intro.revealT = 1;
+    if (intro.revealRing) intro.revealRing.visible = false;
+    clearOperatorMaterialize();
     if (cutscene.titleEl) cutscene.titleEl.style.opacity = "0";
     if (cutscene.subEl) cutscene.subEl.style.opacity = "0";
     setCutsceneDomActive(false);
@@ -14776,6 +16537,21 @@ async function spawnEnemies(wave, options: any = {}) {
 
   // Writes a WORLD pose into the camera's pitch-local transform (no reparenting).
   function applyCutsceneWorldPose(pos, quat, fov) {
+    // Handheld micro-sway: a sub-0.1° low-frequency rotational drift layered on
+    // every authored shot so the camera reads like a real operator's rig, not a
+    // locked gimbal (the positional 'breathe' already gives translational life;
+    // this adds the rotational tell that sells "filmed"). Skipped during the live
+    // handoff (phase 2) so control returns exactly on the gameplay pose, and in
+    // test runs (which assert exact cutscene poses).
+    if (cutscene.phase !== 2 && !CUTSCENE_NO_SWAY) {
+      const ts = performance.now() * 0.001;
+      cutsceneSwayEuler.set(
+        Math.sin(ts * 1.3) * 0.0016 + Math.sin(ts * 2.7 + 1.0) * 0.0007,   // pitch
+        Math.sin(ts * 0.9 + 2.0) * 0.0016 + Math.sin(ts * 2.1) * 0.0007,   // yaw
+        Math.sin(ts * 0.7 + 0.5) * 0.0013,                                 // roll
+      );
+      quat.multiply(cutsceneSwayQuat.setFromEuler(cutsceneSwayEuler));
+    }
     pitch.updateWorldMatrix(true, false);
     camera.position.copy(pos);
     pitch.worldToLocal(camera.position);
@@ -14803,6 +16579,14 @@ async function spawnEnemies(wave, options: any = {}) {
 
     cutscene.t += dt;
     cutscene.phaseT += dt;
+
+    // Advance the flashlight boot flicker while it's powering up; once it stabilises
+    // clear the boot so the beam holds steady-on for the rest of the fight.
+    const fb = lightingState.flashlightBoot;
+    if (fb && fb.active) {
+      fb.t += dt;
+      if (fb.t >= FLASHLIGHT_BOOT_DUR) lightingState.flashlightBoot = null;
+    }
 
     // Title card: fades in ~0.4s into phase A, holds, fades out before phase B.
     if (cutscene.titleEl) {
@@ -14941,6 +16725,12 @@ async function spawnEnemies(wave, options: any = {}) {
       if (!cutscene.advanceLatch) {
         cutscene.advanceLatch = true;
         sfxCutsceneCut();
+        // THE BEAM CATCHES: the operator's flashlight finally guttering to life as
+        // the pack closes. Activate the armed boot (or spin up a fresh one if this
+        // cutscene was forced without arming, e.g. the dev-console trigger).
+        if (lightingState.flashlightBoot) { lightingState.flashlightBoot.active = true; lightingState.flashlightBoot.t = 0; }
+        else if (darkWaveActive) lightingState.flashlightBoot = { active: true, t: 0 };
+        sfxFlashlightBoot();
         // Enemy centroid at beat entry frames the shot.
         let cx = 0, cz = 0, n = 0;
         for (const e of liveEnemies) { if (e.mesh) { cx += e.mesh.position.x; cz += e.mesh.position.z; n++; } }
@@ -15065,14 +16855,25 @@ async function spawnEnemies(wave, options: any = {}) {
   // "cutscenes" dev-console category — recomputeIntroTimeline() re-reads them
   // from devVal() at the start of every intro run, so a saved/live-applied
   // preset takes effect on the next New Mission without a reload.
-  let INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.0;
+  // How long the operator takes to resolve out of the teleport column (seconds).
+  const INTRO_MATERIALIZE_DUR = 0.55;
+  // Where the teleport column's top is anchored (world Y). The beam always grows
+  // DOWN from this anchor to the floor as `strike` ramps — so this is effectively
+  // "how high up the beam starts". Was 7.4, almost level with the camera's
+  // tilt-up peak (COLUMN_TOP_Y below), so the crane-up nearly reached the beam's
+  // literal top and the column read as starting in mid-air instead of descending
+  // from somewhere unseen. Raised well above anything the tilt-up frustum reaches.
+  const TELEPORT_BEAM_TOP_Y = 34;
+  // C is 2.8 (was 2.0): the floor-level tilt-up / tilt-down choreography plus the
+  // materialise needs the room, or the operator resolves just as the beat cuts.
+  let INTRO_DUR_A = 3.4, INTRO_DUR_B = 2.2, INTRO_DUR_C = 2.8;
   let INTRO_DUR_C2 = 2.0, INTRO_DUR_GRAB = 2.0, INTRO_DUR_ZOOM = 0.3, INTRO_DUR_D = 0.45;
   let INTRO_T_B = INTRO_DUR_A, INTRO_T_C = INTRO_T_B + INTRO_DUR_B, INTRO_T_C2 = INTRO_T_C + INTRO_DUR_C;
   let INTRO_T_GRAB = INTRO_T_C2 + INTRO_DUR_C2, INTRO_T_ZOOM = INTRO_T_GRAB + INTRO_DUR_GRAB, INTRO_T_D = INTRO_T_ZOOM + INTRO_DUR_ZOOM;
   function recomputeIntroTimeline() {
     INTRO_DUR_A = devVal("cutscenes", "introDurA", 3.4);
     INTRO_DUR_B = devVal("cutscenes", "introDurB", 2.2);
-    INTRO_DUR_C = devVal("cutscenes", "introDurC", 2.0);
+    INTRO_DUR_C = devVal("cutscenes", "introDurC", 2.8);
     INTRO_DUR_C2 = devVal("cutscenes", "introDurC2", 2.0);
     INTRO_DUR_GRAB = devVal("cutscenes", "introDurGrab", 2.0);
     INTRO_DUR_ZOOM = devVal("cutscenes", "introDurZoom", 0.3);
@@ -15174,10 +16975,18 @@ async function spawnEnemies(wave, options: any = {}) {
       intro.beamTex.wrapS = THREE.RepeatWrapping; intro.beamTex.wrapT = THREE.RepeatWrapping;
       const beamMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, alphaMap: intro.beamTex, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       const beamCoreMat = new THREE.MeshBasicMaterial({ color: 0xf2ffff, transparent: true, opacity: 0, alphaMap: intro.beamTex, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
-      intro.beam = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 7.4, 18, 1, true), beamMat);
-      intro.beamCore = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, 7.4, 12, 1, true), beamCoreMat);
+      intro.beam = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, TELEPORT_BEAM_TOP_Y, 18, 1, true), beamMat);
+      intro.beamCore = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, TELEPORT_BEAM_TOP_Y, 12, 1, true), beamCoreMat);
+      // Re-tile the streak texture so it doesn't stretch thin over the taller column.
+      intro.beamTex.repeat.set(1, TELEPORT_BEAM_TOP_Y / 7.4);
       intro.beamRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.95, 40), beamMat.clone());
       intro.beamRing.rotation.x = -Math.PI / 2;
+      // Reveal shockwave: a separate ground ring that snaps outward the instant the
+      // operator materialises (the existing beamRing is already busy with the
+      // strike-in). Same material type — no new shader program.
+      intro.revealRing = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.78, 48), beamCoreMat.clone());
+      intro.revealRing.rotation.x = -Math.PI / 2;
+      intro.revealRing.material.alphaMap = null; // flat bright ring, not the streak texture
       // Rising halo rings — three thin loops climbing the column on a stagger.
       intro.riseRings = [];
       for (let i = 0; i < 3; i++) {
@@ -15188,7 +16997,7 @@ async function spawnEnemies(wave, options: any = {}) {
         scene.add(rr);
         intro.riseRings.push(rr);
       }
-      for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...intro.riseRings]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
+      for (const m of [intro.beam, intro.beamCore, intro.beamRing, intro.revealRing, ...intro.riseRings]) { m.visible = false; m.frustumCulled = false; scene.add(m); }
       // TRON cover: a camera-glued black quad that hides the real world while the
       // line grid draws in, then fades to reveal the rendered city.
       intro.blackQuad = new THREE.Mesh(
@@ -15200,6 +17009,114 @@ async function spawnEnemies(wave, options: any = {}) {
       intro.blackQuad.visible = false;
       camera.add(intro.blackQuad);
     } catch (e) { console.warn("intro fx:", e); }
+  }
+
+  // Operator materialise: fade + settle the third-person body in over the reveal
+  // window instead of snapping it visible (that hard pop is what read as janky —
+  // the beam VFX was doing all the work and the person just appeared).
+  // k = 0 (nothing) → 1 (fully solid). Only touches opacity/scale: `transparent`
+  // is a blend-state flag and `opacity` a uniform, so no shader relink.
+  function setOperatorMaterialize(k) {
+    const root = thirdPerson.root;
+    if (!root) return;
+    const solid = k >= 1;
+    root.traverse(obj => {
+      const mat = obj.material;
+      if (!mat) return;
+      const list = Array.isArray(mat) ? mat : [mat];
+      for (const m of list) {
+        if (!m) continue;
+        if (m.userData.__introBaseOpacity === undefined) {
+          m.userData.__introBaseOpacity = m.opacity ?? 1;
+          m.userData.__introBaseTransparent = !!m.transparent;
+        }
+        const base = m.userData.__introBaseOpacity;
+        m.transparent = solid ? m.userData.__introBaseTransparent : true;
+        m.opacity = solid ? base : base * k;
+      }
+    });
+    // Settle in from a slightly compressed pose as the light pours into the body.
+    const ease = k * k * (3 - 2 * k);
+    root.scale.setScalar(0.9 + 0.1 * ease);
+  }
+
+  // Drop the cached materialise baselines so a later reveal re-captures cleanly.
+  function clearOperatorMaterialize() {
+    const root = thirdPerson.root;
+    if (!root) return;
+    setOperatorMaterialize(1);
+    root.scale.setScalar(1);
+    root.traverse(obj => {
+      const mat = obj.material;
+      if (!mat) return;
+      const list = Array.isArray(mat) ? mat : [mat];
+      for (const m of list) if (m) delete m.userData.__introBaseOpacity;
+    });
+  }
+
+  // Teleport-in particle VFX (uses the pooled particle system — no lights, two
+  // draw calls total). Cyan to match the beam/rings (0x67e8f9). Two moments:
+  //   • emitTeleportArrival — one bright burst the instant the reveal fires.
+  //   • emitTeleportAssembly — a per-frame stream of buoyant motes rising up the
+  //     column and settling onto the operator, so the body reads as coalescing
+  //     out of light rather than just fading up. Density is highest at k=0 and
+  //     tapers to nothing as the body solidifies (k→1).
+  const INTRO_FX_CYAN = 0x67e8f9;
+  const introFxTmp = new THREE.Vector3();
+  const introFxUp = new THREE.Vector3(0, 1, 0);
+  function emitTeleportArrival(px, pz) {
+    if (!particleFX) return;
+    introFxTmp.set(px, 0.12, pz);
+    // Wide soft flash (uses the same hard-falloff shader as every impact) to sell
+    // the instant of strike, then the bright core + fountain of energy.
+    particleFX.emit("flash", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, scale: 3.2 });
+    particleFX.emit("energyCore", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, scale: 1.8 });
+    particleFX.emit("energy", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, intensity: 3.2, scale: 1.5 });
+    // A crisp ring of hard-edged sparks snapping outward at ground level — the
+    // `spark` preset's tight radial falloff reads as a proper shader glint next
+    // to the soft `ember` puffs, instead of everything being one soft blob.
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      introFxTmp.set(px + Math.cos(a) * 0.35, 0.1, pz + Math.sin(a) * 0.35);
+      introFxUp.set(Math.cos(a), 0.6, Math.sin(a)).normalize();
+      particleFX.emit("spark", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, intensity: 1.1, scale: 1.1 });
+      particleFX.emit("ember", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, intensity: 0.7, scale: 1.2 });
+    }
+    // A handful of sparks shooting straight up the column, echoing the beam itself.
+    for (let i = 0; i < 6; i++) {
+      introFxTmp.set(px + (Math.random() - 0.5) * 0.3, 0.15, pz + (Math.random() - 0.5) * 0.3);
+      particleFX.emit("spark", introFxTmp, introFxUp, { color: INTRO_FX_CYAN, intensity: 0.9, scale: 1.6 });
+    }
+    introFxUp.set(0, 1, 0);
+  }
+  function emitTeleportAssembly(px, pz, k) {
+    if (!particleFX) return;
+    const strength = 1 - k;               // fades as the operator solidifies
+    // Motes rising up a ~2.2 m column, jittered inward toward the body centreline.
+    for (let i = 0; i < 3; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 0.12 + Math.random() * 0.55;
+      const h = 0.1 + Math.random() * 2.1;
+      introFxTmp.set(px + Math.cos(ang) * rad, h, pz + Math.sin(ang) * rad);
+      particleFX.emit("ember", introFxTmp, introFxUp, {
+        color: INTRO_FX_CYAN, intensity: 0.55 * strength + 0.15, scale: 1.15,
+      });
+    }
+    // Crisp hard-edged sparks mixed in with the soft motes, so the coalescing
+    // body reads as glinting energy rather than a uniform haze.
+    if (Math.random() < 0.5) {
+      introFxTmp.set(px + (Math.random() - 0.5) * 0.9, 0.15 + Math.random() * 1.9, pz + (Math.random() - 0.5) * 0.9);
+      particleFX.emit("spark", introFxTmp, introFxUp, {
+        color: INTRO_FX_CYAN, intensity: 0.5 * strength + 0.1, scale: 0.85,
+      });
+    }
+    // Occasional bright spark streaking up through the forming body.
+    if (Math.random() < 0.6) {
+      introFxTmp.set(px + (Math.random() - 0.5) * 1.0, 0.2 + Math.random() * 1.7, pz + (Math.random() - 0.5) * 1.0);
+      particleFX.emit("energy", introFxTmp, introFxUp, {
+        color: INTRO_FX_CYAN, intensity: 0.5 * strength, scale: 0.9,
+      });
+    }
   }
 
   function buildIntroChoir() {
@@ -15233,6 +17150,9 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.phaseT = 0;      // reused as the intro clock
     cutscene.introPlayerHidden = true; // the operator hasn't teleported in yet
     intro.revealed = false;
+    intro.revealT = 1;                 // no materialise in flight until the reveal fires
+    if (intro.revealRing) intro.revealRing.visible = false;
+    clearOperatorMaterialize();        // start from a clean, fully-solid body
     intro.sweepDone = false;
     intro.beatLatch = 0;
     intro.gunFloorActive = false;
@@ -15258,10 +17178,16 @@ async function spawnEnemies(wave, options: any = {}) {
     cutscene.introPlayerHidden = false;
     if (intro.wireGroup) intro.wireGroup.visible = false;
     if (intro.frontierSoft) { intro.frontierSoft.visible = false; intro.frontierCore.visible = false; }
-    for (const m of [intro.beam, intro.beamCore, intro.beamRing, ...(intro.riseRings || [])]) if (m) m.visible = false;
+    for (const m of [intro.beam, intro.beamCore, intro.beamRing, intro.revealRing, ...(intro.riseRings || [])]) if (m) m.visible = false;
     if (intro.choir) for (const w of intro.choir) w.root.visible = false;
     if (intro.blackQuad) intro.blackQuad.visible = false;
     intro.gunFloorActive = false;
+    // Always hand back a fully solid, unit-scaled operator (a cutscene cut short
+    // mid-materialise must never leave the body translucent or shrunken).
+    intro.revealT = 1;
+    clearOperatorMaterialize();
+    if (intro.beam) intro.beam.scale.set(1, 1, 1);
+    if (intro.beamCore) intro.beamCore.scale.set(1, 1, 1);
     thirdPerson.cutsceneAction = null;
     if (cutscene.blackEl) cutscene.blackEl.style.opacity = "0";
     if (cutscene.subEl) cutscene.subEl.textContent = "";
@@ -15398,9 +17324,9 @@ async function spawnEnemies(wave, options: any = {}) {
       const strike = Math.min(1, c / 0.16);
       // The column blazes for the WHOLE shot — the hard cut to the arrival shot
       // interrupts it mid-stream (it never dies on screen).
-      const beamH = 7.4 * strike;
+      const beamH = TELEPORT_BEAM_TOP_Y * strike;
       for (const m of [intro.beam, intro.beamCore]) {
-        m.position.set(px, 7.4 - beamH / 2, pz);
+        m.position.set(px, TELEPORT_BEAM_TOP_Y - beamH / 2, pz);
         m.scale.set(1, strike, 1);
       }
       // Energy streams upward: scroll the alpha texture; the sheath thins after
@@ -15420,18 +17346,76 @@ async function spawnEnemies(wave, options: any = {}) {
         rr.scale.set(sc, sc, sc);
         rr.material.opacity = Math.sin(u * Math.PI) * 0.7 * strike;
       });
-      if (!intro.revealed && c > 0.45) {
+      // Reveal fires only AFTER the camera has tilted back down to the deck (see
+      // TILT_DOWN_END below), so the operator always materialises in frame.
+      if (!intro.revealed && c > 0.54) {
         intro.revealed = true;
-        cutscene.introPlayerHidden = false;
+        intro.revealT = 0;                 // drives the materialise ramp below
+        cutscene.introPlayerHidden = false; // body becomes visible but fully transparent
+        setOperatorMaterialize(0);
         intro.beamCore.material.opacity = 1;
+        if (intro.revealRing) intro.revealRing.visible = true;
         playEventSound("lightning", { volume: 0.35, rate: 1.4 });
+        emitTeleportArrival(px, pz);
       }
-      const orbAz = intro.camAz + c * 0.38; // slow reverent circle
-      cutsceneEyeTmp.set(px + Math.cos(orbAz) * intro.camDist, 1.0, pz + Math.sin(orbAz) * intro.camDist);
-      const tiltUp = cutsceneEaseCine(Math.min(1, c / 0.8));
-      cutsceneTargetTmp.set(px, 0.4 + tiltUp * 0.95, pz);
+      // MATERIALISE: the operator resolves out of the column over ~0.55s rather
+      // than snapping in, while the beam narrows (energy pouring into the body)
+      // and a shockwave ring snaps outward along the floor.
+      if (intro.revealed && (intro.revealT ?? 1) < 1) {
+        intro.revealT = Math.min(1, (intro.revealT || 0) + dt / INTRO_MATERIALIZE_DUR);
+        const k = intro.revealT;
+        // Flicker the last of the resolve so it reads as unstable matter settling.
+        const flicker = k > 0.75 ? 1 : Math.min(1, k * (0.72 + Math.random() * 0.5));
+        setOperatorMaterialize(Math.min(1, flicker));
+        emitTeleportAssembly(px, pz, k);
+        // Column collapses inward as the body solidifies.
+        const squeeze = 1 - 0.45 * k;
+        intro.beam.scale.set(squeeze, strike, squeeze);
+        intro.beamCore.scale.set(1 - 0.6 * k, strike, 1 - 0.6 * k);
+        if (intro.revealRing) {
+          const rk = Math.min(1, k * 1.35);
+          intro.revealRing.position.set(px, 0.08, pz);
+          intro.revealRing.scale.setScalar(0.5 + rk * 5.2);
+          intro.revealRing.material.opacity = 0.95 * Math.pow(1 - rk, 1.7);
+        }
+      }
+      // ── CAMERA — floor-level TILT (no shake, no orbit, no cuts) ─────────────
+      // The camera is set down ON the deck, because that is where the operator
+      // arrives (fallenIdle — he materialises lying on the floor). One planted
+      // position; the whole move is a TILT:
+      //   1) TILT UP    (0 → 0.26)     off the empty floor, up the column, to show
+      //                                the teleport coming down.
+      //   2) HOLD       (0.26 → 0.36)  on the head of the column.
+      //   3) TILT DOWN  (0.36 → 0.52)  follow it back down to the deck.
+      //   4) SETTLE     (0.52 → 1)     locked on the floor as the operator
+      //                                materialises in frame (reveal fires at 0.54).
+      const teleFov = intro.teleportFov ?? 45;
+      const TILT_UP_END = 0.26, TILT_HOLD_END = 0.36, TILT_DOWN_END = 0.52;
+      const DECK_Y = 0.30;      // camera height — right down on the floor
+      const COLUMN_TOP_Y = 6.6; // how far up the beam the tilt reaches
+      const FLOOR_LOOK_Y = 0.34;
+      let tgtY;
+      if (c < TILT_UP_END) {
+        tgtY = FLOOR_LOOK_Y + cutsceneEaseCine(c / TILT_UP_END) * (COLUMN_TOP_Y - FLOOR_LOOK_Y);
+      } else if (c < TILT_HOLD_END) {
+        tgtY = COLUMN_TOP_Y;
+      } else if (c < TILT_DOWN_END) {
+        const d = (c - TILT_HOLD_END) / (TILT_DOWN_END - TILT_HOLD_END);
+        tgtY = COLUMN_TOP_Y - cutsceneEaseCine(d) * (COLUMN_TOP_Y - FLOOR_LOOK_Y);
+      } else {
+        tgtY = FLOOR_LOOK_Y;
+      }
+      // Static azimuth, camera pinned to the deck. A very slow creep in over the
+      // whole beat keeps it alive without becoming a dolly move. Radius stays
+      // inside the wall clearance measured at beat start.
+      const camR = intro.camDist * (0.95 - cutsceneEaseCine(c) * 0.13);
+      cutsceneEyeTmp.set(px + Math.cos(intro.camAz) * camR, DECK_Y, pz + Math.sin(intro.camAz) * camR);
+      cutsceneTargetTmp.set(px, tgtY, pz);
       cutsceneLookQuat(cutsceneEyeTmp, cutsceneTargetTmp, cutsceneQuatTmp);
-      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, intro.teleportFov ?? 45);
+      // Wide enough while craned up to hold the column in frame, easing to a
+      // tighter lens as it settles on the body. No roll, no jitter.
+      const tiltUpAmt = Math.max(0, Math.min(1, (tgtY - FLOOR_LOOK_Y) / (COLUMN_TOP_Y - FLOOR_LOOK_Y)));
+      applyCutsceneWorldPose(cutsceneEyeTmp, cutsceneQuatTmp, teleFov + tiltUpAmt * 8);
     } else if (t < INTRO_T_GRAB) {
       // BEAT C2 — THE CHOIR ARRIVES, sun at their backs: three silhouettes
       // striding toward the operator out of the light.
@@ -15766,6 +17750,8 @@ async function spawnEnemies(wave, options: any = {}) {
     const lowEndWaveBudget = lowEndMode && game.wave >= 6 ? 3 : lowEndMode ? 2 : 1;
     let enemyIndex = 0;
 
+    updateSquadFormations();
+
     for (const enemy of liveEnemies) {
       ensureLiveEnemyVisible(enemy);
       const farEnemy = lowEndMode && game.wave >= 6 && enemyIndex > 2;
@@ -15950,6 +17936,22 @@ async function spawnEnemies(wave, options: any = {}) {
         enemy.lastSeenZ = pz + (enemyTarget.vz || 0) * tactics.predict;
         enemy.lastSeenTimer = 3.2;
         if (dist < enemy.aggroRange) enemy.aggroed = true;
+        // Human-like target acquisition: a freshly-sighted target isn't fired at
+        // instantly (that read as an aimbot snap). Once acquired, the clone's
+        // aim POINT also lags behind the true position via a damped chase
+        // instead of tracking px/pz exactly every frame.
+        if (isClonedGhost) {
+          if (!enemy._losPrev) {
+            enemy.reactionTimer = 0;
+            enemy.reactionDelay = 0.22 + Math.random() * 0.26;
+            enemy.aimTrackX = px;
+            enemy.aimTrackZ = pz;
+          } else {
+            enemy.reactionTimer = (enemy.reactionTimer || 0) + dt;
+            enemy.aimTrackX = dampValue(enemy.aimTrackX ?? px, px, 5.5, dt);
+            enemy.aimTrackZ = dampValue(enemy.aimTrackZ ?? pz, pz, 5.5, dt);
+          }
+        }
       } else if (!enemy.aggroed) {
         for (const ally of liveEnemies) {
           if (ally === enemy || !ally.aggroed) continue;
@@ -15961,9 +17963,22 @@ async function spawnEnemies(wave, options: any = {}) {
           break;
         }
       }
+      if (isClonedGhost && !los) enemy.reactionTimer = 0;
+      enemy._losPrev = los;
       const megaBlasting = updateNullCherubMegaBlast(enemy, dt, px, pz, dist, los, enemyTarget);
       if (game.state !== "playing") return;
-      if (!megaBlasting && enemy.ranged && enemy.aggroed && los && dist <= enemy.ranged.range && enemy.rangedCooldown <= 0) {
+      const reactionReady = !isClonedGhost || (enemy.reactionTimer || 0) >= (enemy.reactionDelay || 0);
+      // A clone running AWAY from the player holds fire — no shooting over the
+      // shoulder while fleeing. "Running away" = retreat intent OR a real velocity
+      // component pointing away from the player (dot(vel, dirToPlayer) < 0 at speed).
+      let cloneFleeing = false;
+      if (isClonedGhost) {
+        const toPX = px - enemy.mesh.position.x, toPZ = pz - enemy.mesh.position.z;
+        const vX = enemy.smoothVelX || 0, vZ = enemy.smoothVelZ || 0;
+        const movingAway = Math.hypot(vX, vZ) > 1.2 && (vX * toPX + vZ * toPZ) < 0;
+        cloneFleeing = enemy.aiRetreat === true || movingAway;
+      }
+      if (!megaBlasting && reactionReady && !cloneFleeing && enemy.ranged && enemy.aggroed && los && dist <= enemy.ranged.range && enemy.rangedCooldown <= 0) {
         if (isClonedGhost) fireClonedGhostShot(enemy, px, pz, enemyTarget);
         else fireEnemyShotgunBurst(enemy, px, pz, enemyTarget);
         if (game.state !== "playing") return;
@@ -15988,10 +18003,11 @@ async function spawnEnemies(wave, options: any = {}) {
             const fromX = enemy.mesh.position.x, fromZ = enemy.mesh.position.z;
             // Afterimage: a fading ring + a brief fizzing pillar where it WAS.
             const ghost = spawnTelegraphRing(fromX, fromZ, 0.7, 0xb28cff, 0.05, { peak: 0.4, pulse: false });
+            playSpell("afterimageFeint", fromX, fromZ);
             fadeTelegraphRing(ghost);
             enemyShotOriginTmp.set(fromX, 0.06, fromZ);
             teslaBranchTmp.set(fromX, 2.2, fromZ);
-            spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 0.5, { segments: 4, branches: 1, sourceBranches: 0, jitter: 0.24, lift: 0, life: 0.12, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS });
+            spawnLightningEffect(enemyShotOriginTmp, teslaBranchTmp, 0.5, { segments: 4, branches: 1, sourceBranches: 0, jitter: 0.24, lift: 0, life: 0.12, rings: false, electric: true, maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS, tint: getLightningTint(enemy) });
             enemy.mesh.position.x = hx;
             enemy.mesh.position.z = hz;
             enemy.navPath = [];
@@ -16022,6 +18038,7 @@ async function spawnEnemies(wave, options: any = {}) {
           enemy.liftDuration = Math.max(enemy.liftDuration || 0, 0.65);
           if (enemy.empRing) releaseTelegraphRing(enemy.empRing);
           enemy.empRing = spawnTelegraphRing(enemy.mesh.position.x, enemy.mesh.position.z, 0.3, 0x62ffd6, 0.6, { peak: 0.5 });
+          playSpell("nullField", enemy.mesh.position.x, enemy.mesh.position.z);
         }
       }
       // Warden signature: creeping artillery line (independent of the lance cooldown).
@@ -16066,6 +18083,7 @@ async function spawnEnemies(wave, options: any = {}) {
               selfCentred ? enemy.mesh.position.x : px,
               selfCentred ? enemy.mesh.position.z : pz,
               ringRadius, ringColor, _windUpDuration, { peak: 0.55 });
+            playSpell("lightningCast", selfCentred ? enemy.mesh.position.x : px, selfCentred ? enemy.mesh.position.z : pz);
           }
           enemy.lightningWindUp = Math.max(0, (enemy.lightningWindUp || 0) - dt);
           if (enemy.lightningWindUp <= 0) {
@@ -16276,7 +18294,20 @@ async function spawnEnemies(wave, options: any = {}) {
         }
       }
 
-      if (!megaBlasting && enemy.aggroed && dist > 1.28) {
+      // Pure melee enemies (Zombie — no .ranged/.lightning) used to stop closing at
+      // the same 1.28 "close range" band ranged/lightning casters use to back off
+      // from point-blank. There's no player-vs-enemy physical separation anywhere
+      // (only world-geometry collision), so nothing stopped a melee enemy from
+      // reaching true contact — 1.28 was simply too generous a stand-and-swing
+      // distance, freezing the zombie with a visible gap before its telegraph even
+      // started. NOTE: deriving this from getEnemyCollisionRadius() was tried and
+      // measured live at ~0.9 for the zombie model (that radius is sized generously
+      // for animated-limb wall clearance, not body-to-body proximity) — using it
+      // here would have made the gap *worse*, so this is a fixed contact distance
+      // instead. Ranged/lightning types keep the original 1.28 band unchanged
+      // (their own retreat logic, unrelated to melee contact).
+      const meleeCloseRange = (enemy.ranged || enemy.lightning) ? 1.28 : 0.85;
+      if (!megaBlasting && enemy.aggroed && dist > meleeCloseRange) {
         const movedDist = Math.hypot(enemy.mesh.position.x - enemy.lastRepathX, enemy.mesh.position.z - enemy.lastRepathZ);
         let siegeTooClose = false;
         let canDirectChase = false;
@@ -16343,7 +18374,7 @@ async function spawnEnemies(wave, options: any = {}) {
           }
 
           if ((nearPlayer || los) && enemy.strafeTimer <= 0) {
-            enemy.strafeDir *= -1;
+            enemy.strafeDir = pickSquadOrbitDir(enemy, px, pz);
             enemy.orbitDir = enemy.strafeDir;
             enemy.strafeTimer = isSmartBot ? 1.0 + Math.random() * 1.25 : 0.28 + Math.random() * 0.45;
           }
@@ -16449,7 +18480,7 @@ async function spawnEnemies(wave, options: any = {}) {
             enemy.stuckTimer = 0;
           }
         }
-      } else if (!megaBlasting && enemy.aggroed && dist <= 1.28) {
+      } else if (!megaBlasting && enemy.aggroed && dist <= meleeCloseRange) {
         if (!enemy.ranged && !enemy.lightning && enemy.attackCooldown <= 0) {
           // Melee wind-up telegraph: 0.28s warning before damage lands.
           // meleeWindUp counts DOWN; when it first hits zero, damage fires.
@@ -16563,7 +18594,22 @@ async function spawnEnemies(wave, options: any = {}) {
     const _inExtZone = yaw.position.z > 122;
     const flashlightEnabled = lightingState.flashlightOn && (game.state === "playing" || _inExtZone);
     const flashlightFlicker = Math.sin(performance.now() * 0.018) * 0.45 + Math.sin(performance.now() * 0.0047) * 0.3;
-    flashlight.intensity = flashlightEnabled ? 120 + flashlightFlicker * 2 : 0;
+    // Blackout power-up: while `flashlightBoot` is present the beam struggles to
+    // life instead of snapping on — dark while armed (waiting for the final shot),
+    // then a realistic failing-bulb flicker to solid once activated.
+    let flashlightLevel = flashlightEnabled ? 1 : 0;
+    const fboot = lightingState.flashlightBoot;
+    if (fboot && flashlightEnabled) flashlightLevel = fboot.active ? flashlightBootLevel(fboot.t) : 0;
+    // Normal waves: the beam is a subtle aid, not a floodlight — 20% power. Blackout
+    // waves (wave%10) keep the full beam, where it's effectively the only light.
+    const flashlightWaveMul = darkWaveActive ? 1 : 0.2;
+    // Cinematic's grade already lifts glow/bloom around bright sources, so the same
+    // raw intensity read as blown-out under it — 30% dimmer keeps the beam readable
+    // instead of flaring. Cinematic-only: unaffected outside cinematic mode.
+    const flashlightCinematicMul = cinematicState.enabled ? 0.7 : 1;
+    flashlight.intensity = flashlightLevel > 0
+      ? (120 + flashlightFlicker * 2) * flashlightLevel * flashlightWaveMul * flashlightCinematicMul
+      : 0;
     if (thirdPerson.enabled && thirdPerson.weapon?.muzzle) {
       thirdPerson.weapon.muzzle.getWorldPosition(flashlightMuzzleTmp);
       flashlightMuzzleTmp.applyMatrix4(camera.matrixWorldInverse);
@@ -16571,7 +18617,8 @@ async function spawnEnemies(wave, options: any = {}) {
     } else {
       flashlight.position.set(0.12, -0.05, -0.45);
     }
-    lensGlow.visible = lightingState.flashlightOn;
+    // Lens glow follows the actual beam (so it flickers/darkens with the boot too).
+    lensGlow.visible = lightingState.flashlightOn && flashlightLevel > 0.05;
 
     const flashT = gunState.muzzleTimer > 0 ? Math.min(1, gunState.muzzleTimer / weaponAnim.animSpec.muzzleFlashDuration) : 0;
     const baseGunColorHex = currentGun === GUNS.SHOTGUN ? 0xffb14d : currentGun === GUNS.SNIPER ? 0xffd37a : 0xffc24f;
@@ -16592,7 +18639,7 @@ async function spawnEnemies(wave, options: any = {}) {
     } else {
       gunFlash.position.set(0.12, -0.05, -0.45);
     }
-    const _flashlightExposureBump = flashlightEnabled ? 0.22 : 0;   // matches shootFlash*0.2 peak, slightly brighter
+    const _flashlightExposureBump = flashlightEnabled ? 0.22 * flashlightLevel : 0;   // matches shootFlash*0.2 peak, slightly brighter; scales with the boot
     const nextExposure = getBaseExposure() + Math.max(lightingState.shootFlash * 0.2, flashT * 0.12, lightingState.lightningFlash * 0.22, _flashlightExposureBump);
     if (Math.abs(nextExposure - renderer.toneMappingExposure) > 0.005) renderer.toneMappingExposure = nextExposure;
 
@@ -16881,7 +18928,10 @@ async function spawnEnemies(wave, options: any = {}) {
       ? (sprinting ? devVal("camera", "tpSprintFov", 70) : devVal("camera", "tpWalkFov", 63))
       : (sprinting ? devVal("camera", "fpSprintFov", 100) : devVal("camera", "fpWalkFov", 90));
     const cinFovOffset = cinematicState.enabled ? devVal("camera", "cinematicFovOffset", -4) : 0;
-    cameraFX.targetFov = (baseFov + cinFovOffset) + (gunSpec.adsFov - baseFov + cinFovOffset) * viewState.ads;
+    // The player's FOV offset moves the hip/sprint framing but is cancelled out
+    // as ADS blends in — scope magnification is a weapon stat, not a preference.
+    cameraFX.targetFov = (baseFov + cinFovOffset + userFovOffset)
+      + (gunSpec.adsFov - baseFov + cinFovOffset - userFovOffset) * viewState.ads;
     const prevFov = camera.fov;
     camera.fov += (cameraFX.targetFov - camera.fov) * Math.min(1, dt * 6);
     if (Math.abs(camera.fov - prevFov) > 0.01) camera.updateProjectionMatrix();
@@ -16893,6 +18943,13 @@ async function spawnEnemies(wave, options: any = {}) {
     if (Math.abs(camera.near - targetNear) > 0.002) {
       camera.near = targetNear;
       camera.updateProjectionMatrix();
+    }
+
+    // ADS focus vignette: darkens toward the edges as aim comes up, deepening
+    // further once the sniper is fully scoped (sells "looking through glass").
+    if (hud.adsVig) {
+      const sniperBoost = currentGun === GUNS.SNIPER ? Math.max(0, viewState.ads - 0.6) * 1.4 : 0;
+      hud.adsVig.style.opacity = String(Math.min(1, viewState.ads * 0.85 + sniperBoost));
     }
 
     const recoilSettle = viewState.ads
@@ -16907,9 +18964,42 @@ async function spawnEnemies(wave, options: any = {}) {
 
     const noiseT = performance.now() * 0.03;
     const shakeAmp = cameraFX.shake * 0.02 + cameraFX.damageShake * 0.035;
-    const shakeX = Math.sin(noiseT * 1.2) * shakeAmp;
-    const shakeY = Math.cos(noiseT * 0.9) * shakeAmp * 0.8;
-    const shakeZ = -Math.max(0, cameraFX.recoil) * 0.008 + Math.sin(noiseT * 1.8) * shakeAmp * 0.35;
+    let shakeX = Math.sin(noiseT * 1.2) * shakeAmp;
+    let shakeY = Math.cos(noiseT * 0.9) * shakeAmp * 0.8;
+    let shakeZ = -Math.max(0, cameraFX.recoil) * 0.008 + Math.sin(noiseT * 1.8) * shakeAmp * 0.35;
+
+    // ── Cinematic locomotion camera (Steadicam feel) ─────────────────────────────
+    // Movie-like motion while moving/running: a speed-scaled figure-8 float (X at the
+    // gait frequency, Y at double → a lazy ∞), a lateral lag that trails hard strafes,
+    // a subtle pull-back at speed, and a run cadence bob. Everything springs in/out so
+    // it never snaps, and it damps toward ~0 while aiming so ADS stays rock-steady.
+    // Driven off the player's actual world velocity, so it reacts to real acceleration.
+    {
+      const cRgtX = Math.cos(yaw.rotation.y), cRgtZ = -Math.sin(yaw.rotation.y); // right (x,z)
+      const vx = player.velX || 0, vz = player.velZ || 0;
+      const maxSpd = Math.max(1, player.sprintSpeed || player.speed || 6);
+      const speedNorm = Math.min(1, Math.hypot(vx, vz) / maxSpd);
+      const latNorm = clamp((vx * cRgtX + vz * cRgtZ) / maxSpd, -1, 1);
+      // Smooth the drivers (spring toward the live values).
+      cameraFX.cineSpeed  = dampValue(cameraFX.cineSpeed,  speedNorm, 6, dt);
+      cameraFX.cineLatLag = dampValue(cameraFX.cineLatLag, latNorm,   7, dt);
+      cameraFX.cineLean   = dampValue(cameraFX.cineLean,   latNorm,   5, dt);
+      // Gait phase advances faster the quicker you move (footfall cadence).
+      cameraFX.cinePhase += dt * (5 + cameraFX.cineSpeed * 7);
+      const ph = cameraFX.cinePhase;
+      const atten = (1 - viewState.ads * 0.85) * (game.state === "playing" ? 1 : 0);
+      const sp = cameraFX.cineSpeed;
+      // Figure-8 float (camera-local: +x right, +y up, +z back).
+      shakeX += Math.sin(ph)     * (0.006 + sp * 0.016) * atten;
+      shakeY += Math.sin(ph * 2) * (0.004 + sp * 0.010) * atten;
+      // Lateral whip: the camera trails the strafe, then catches up (spring lag).
+      shakeX += -cameraFX.cineLatLag * 0.03 * atten;
+      // Slight pull-back at speed — reads as urgency without touching FOV.
+      shakeZ += sp * 0.03 * atten;
+      // Rotation cadence (roll into the strafe + a gentle run nod), applied below.
+      cameraFX.cineRoll  = (cameraFX.cineLean * 0.05 + Math.sin(ph) * sp * 0.006) * atten;
+      cameraFX.cinePitch = Math.sin(ph * 2) * sp * 0.005 * atten;
+    }
     const useThirdPersonCamera = thirdPerson.enabled && thirdPerson.ready && !shouldUseFirstPersonAdsView();
     thirdPerson.viewBlend = useThirdPersonCamera ? 1 : 0;
     thirdPerson.switchPulse = Math.max(0, thirdPerson.switchPulse - dt * 5.2);
@@ -16934,9 +19024,9 @@ async function spawnEnemies(wave, options: any = {}) {
     const strafeLean = (weaponAnim?.strafeTilt || 0) * 0.32 * (1 - viewState.ads * 0.6);
     const landJoltPitch = (weaponAnim?.landJolt || 0) * 0.018 * (1 - viewState.ads * 0.5);
 
-    camera.rotation.x = scopeSwayX - Math.max(0, cameraFX.recoil) * 0.012 - landJoltPitch;
+    camera.rotation.x = scopeSwayX - Math.max(0, cameraFX.recoil) * 0.012 - landJoltPitch + (cameraFX.cinePitch || 0);
     camera.rotation.y = Math.PI * viewState.lookBack + scopeSwayY + bobLat * 0.012;
-    camera.rotation.z = cameraFX.roll * 0.035 + Math.sin(noiseT * 0.7) * cameraFX.shake * 0.015 + viewState.lookBack * 0.045 + strafeLean;
+    camera.rotation.z = cameraFX.roll * 0.035 + Math.sin(noiseT * 0.7) * cameraFX.shake * 0.015 + viewState.lookBack * 0.045 + strafeLean + (cameraFX.cineRoll || 0);
   }
 
   // ── Interact prompt pill ─────────────────────────────────────────────────────
@@ -17007,7 +19097,7 @@ async function spawnEnemies(wave, options: any = {}) {
   // points get it without markup edits. Rebuilt only on ownership/switch change.
   const WEAPON_SLOT_CODES = {
     pistol: "P", rifle: "AR", shotgun: "SG", sniper: "SR", smg: "SMG",
-    lmg: "LMG", dmr: "DMR", akimbo: "MP", railgun: "RL", flak: "FK",
+    lmg: "LMG", dmr: "DMR", akimbo: "MP", flak: "FK",
   };
   let weaponSlotsRow = null;
   let weaponSlotsSig = "";
@@ -17960,7 +20050,7 @@ async function spawnEnemies(wave, options: any = {}) {
     root.userData.clonedGhost = runtime;
 
     const weaponRig = createWeaponViewModel(GUNS.RIFLE, root);
-    configureThirdPersonWeaponTransform(weaponRig.gun);
+    configureThirdPersonWeaponTransform(weaponRig.gun, GUNS.RIFLE);
     weaponRig.gun.visible = true;
     runtime.weapon = weaponRig;
 
@@ -18282,6 +20372,7 @@ async function spawnEnemies(wave, options: any = {}) {
         rings: !!msg.rings,
         electric: msg.electric !== false,
         maxActive: LIGHTNING_MAX_VISIBLE_EFFECTS,
+        tint: getLightningTint(fxProxy),
       });
       lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.08);
     } else if (msg.fx === "tracer") {
@@ -18710,7 +20801,7 @@ async function spawnEnemies(wave, options: any = {}) {
     };
     if (closeBtn) closeBtn.onclick = () => {
       panel.classList.remove("active");
-      const activePanel = document.querySelector("[data-menu-panel].active")?.dataset.menuPanel || "briefing";
+      const activePanel = document.querySelector("[data-menu-panel].active")?.dataset.menuPanel || "root";
       setMenuPanel(activePanel);
     };
     if (modeBtn) modeBtn.onclick = () => {
@@ -18946,6 +21037,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const proxy = coopProxies.get(id);
     if (!proxy) return;
     setEnemyAlive(proxy, false);
+    stopZombieVoiceIfOwner(proxy);
     const idx = enemies.indexOf(proxy);
     if (idx >= 0) { enemies.splice(idx, 1); unregisterEnemy(proxy); }
     scene.remove(proxy.mesh);
@@ -19360,6 +21452,60 @@ async function spawnEnemies(wave, options: any = {}) {
     function isAncestor(root, node) { for (let p = node; p; p = p.parent) if (p === root) return true; return false; }
   };
 
+  // Particle-system diagnostics: live/capacity plus the per-layer state. The
+  // layer count IS the draw-call count for all particle FX in the game.
+  window.__rbParticles = function () {
+    const layers = (particleFX?.objects ?? []).map((o) => ({
+      name: o.name,
+      inScene: !!o.parent,
+      material: o.material?.type,
+      slots: o.geometry?.attributes?.position?.count ?? 0,
+    }));
+    const info = { live: particleFX?.count() ?? 0, capacity: particleFX?.capacity() ?? 0, layers };
+    console.log(`particles ${info.live}/${info.capacity} in ${layers.length} draw call(s)`);
+    for (const l of layers) console.log(`  ${l.name} ${l.material} slots=${l.slots} inScene=${l.inScene}`);
+    return info;
+  };
+
+  // Foot-lock IK diagnostic: per-foot lock state, blend weight, and the current
+  // world position of each foot (to confirm a planted foot holds still).
+  // Foot-lock IK: pass true/false to toggle live (persists across reloads via
+  // localStorage), or nothing to read per-foot lock state, blend weight and each
+  // foot's world position.
+  window.__rbFootIK = function (enable) {
+    if (enable === true || enable === false) {
+      FOOT_IK = enable;
+      try { localStorage.setItem("rb_foot_ik", enable ? "1" : "0"); } catch {}
+      if (!enable) {
+        thirdPerson.footIK.left.locked = false; thirdPerson.footIK.left.weight = 0;
+        thirdPerson.footIK.right.locked = false; thirdPerson.footIK.right.weight = 0;
+      }
+    }
+    const b = thirdPerson.aimBones;
+    const read = (bone) => { if (!bone) return null; const p = new THREE.Vector3(); bone.getWorldPosition(p); return [+p.x.toFixed(3), +p.y.toFixed(3), +p.z.toFixed(3)]; };
+    return {
+      enabled: FOOT_IK,
+      hasLegs: !!(b?.leftFoot && b?.rightFoot),
+      left: { ...thirdPerson.footIK.left, foot: read(b?.leftFoot) },
+      right: { ...thirdPerson.footIK.right, foot: read(b?.rightFoot) },
+    };
+  };
+
+  // Fire an effect a few metres in front of the camera — for eyeballing preset
+  // tuning without having to line up a real shot. e.g. __rbFx("explosion", 6).
+  window.__rbFx = function (kind = "bulletWall", distance = 4, opts = undefined) {
+    const dir = camera.getWorldDirection(new THREE.Vector3());
+    const at = camera.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, distance);
+    particleFX?.emit(kind, at, dir.clone().negate(), opts);
+    return at;
+  };
+
+  // Snapshot of three's program cache. Diff it across "New Mission" to find
+  // which material relinked when shader-stability.spec.cjs fails.
+  window.__rbPrograms = function () {
+    return (renderer.info?.programs ?? []).map((p) => p.cacheKey);
+  };
+
   window.__rbDraws = function () {
     const groups = new Map();
     let total = 0;
@@ -19407,6 +21553,22 @@ async function spawnEnemies(wave, options: any = {}) {
   };
 
   // View-mode diagnostic — confirms the game is third-person only (FP removed).
+  // Menu backdrop diagnostics: is the Halo orbit live, and did it manage to
+  // measure the statue (vs. falling back to hard-coded framing)?
+  window.__rbMenuCam = function () {
+    const info = {
+      active: menuBackdropActive(),
+      framed: menuBackdrop.framed,
+      subject: perkMachineState?.station ? (perkMachineState.station.name || "station") : null,
+      subjectHeight: +menuBackdrop.subjectHeight.toFixed(2),
+      groundY: +menuBackdrop.groundY.toFixed(2),
+      target: menuBackdrop.target.toArray().map(v => +v.toFixed(2)),
+      camera: menuCam.position.toArray().map(v => +v.toFixed(2)),
+    };
+    console.log("[menuCam]", info);
+    return info;
+  };
+
   window.__rbView = function () {
     return {
       thirdPersonOnly: THIRD_PERSON_ONLY,
@@ -19449,6 +21611,20 @@ async function spawnEnemies(wave, options: any = {}) {
     return counts;
   };
 
+  window.__rbSquads = function () {
+    const rows: any[] = [];
+    for (const enemy of liveEnemies) {
+      rows.push({
+        typeName: enemy.typeName,
+        squadSlot: enemy.squadSlot,
+        squadSize: enemy.squadSize,
+        squadAngle: Number.isFinite(enemy.squadAngle) ? +enemy.squadAngle.toFixed(2) : enemy.squadAngle,
+      });
+    }
+    console.table(rows);
+    return rows;
+  };
+
   // ── Physics debris (Phase 3 showcase) ──────────────────────────────────────
   // One InstancedMesh renders the whole Rapier debris pool (1 draw call, no
   // lights). Inactive slots are scaled to 0. Bodies are driven by updateDebris.
@@ -19461,9 +21637,32 @@ async function spawnEnemies(wave, options: any = {}) {
   function initPhysicsDebrisMesh() {
     if (!PHYSICS_DEBRIS || physicsDebrisMesh) return;
     initDebrisPool();
-    const geo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
-    // White base so per-instance instanceColor shows the true per-enemy tint.
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.35 });
+    // Spent shell casing (Y-axis aligned, matching the Rapier cylinder collider):
+    // slender, slightly tapered toward the neck like a real case. 12 sides so it
+    // reads round rather than faceted. Base length 0.06 m at scale 1 (CASING_SCALES
+    // brings each gun to a realistic size — a pistol case ~2 cm, a shotgun shell ~6.5 cm).
+    const geo = new THREE.CylinderGeometry(0.0095, 0.011, 0.06, 12);
+    // Vertex-colour "texture": the bright drawn-brass case body, a darker coppery
+    // extractor rim + primer at the base, and a faintly brighter case mouth — a cheap
+    // two-tone that reads as a real casing (multiplies with the brass instanceColor,
+    // so the tint stays correct). Values hover around 1.0 so the base stays brass.
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    let yMin = Infinity, yMax = -Infinity;
+    for (let i = 0; i < pos.count; i++) { const y = pos.getY(i); if (y < yMin) yMin = y; if (y > yMax) yMax = y; }
+    const yRange = Math.max(1e-6, yMax - yMin);
+    for (let i = 0; i < pos.count; i++) {
+      const t = (pos.getY(i) - yMin) / yRange; // 0 = base (rim/primer), 1 = case mouth
+      let r, g, b;
+      if (t < 0.16) { r = 0.62; g = 0.48; b = 0.34; }        // extractor groove + primer: darker copper
+      else if (t > 0.9) { r = 1.08; g = 1.06; b = 0.98; }    // case mouth: slightly brighter
+      else { r = 1.0; g = 1.0; b = 1.0; }                    // case body: full brass
+      colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    // White base so per-instance instanceColor shows the true brass tint; vertexColors
+    // adds the rim/primer shading. Shinier + smoother than before to read as polished brass.
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.28, metalness: 0.92, vertexColors: true });
     physicsDebrisMesh = new THREE.InstancedMesh(geo, mat, DEBRIS_POOL_SIZE);
     physicsDebrisMesh.frustumCulled = false;
     physicsDebrisMesh.castShadow = false;
@@ -19648,10 +21847,18 @@ async function spawnEnemies(wave, options: any = {}) {
       sfxDamage();
       if (died) endGame("dead");
     }
-    // Feel: fireball flash + shockwave ring + strong shake + boom.
+    // Feel: fireball flash + shockwave ring + strong shake + boom. The boom is a
+    // world event, so pan + attenuate it (same convention as spells/enemy fire) —
+    // a grenade lobbed across the arena reads off to the side and quieter, not
+    // flat-centre. The 0.9 cap (vs the old 0.95) also leaves low-end headroom for
+    // a point-blank self-detonation, whose sfxDamage() sub-bass fires the same frame.
     spawnExplosionFlash(x, y, z);
     cameraFX.shake = Math.min(1.5, cameraFX.shake + 1.25);
-    playEventSound("explosion", { volume: 0.95 });
+    const eDx = x - yaw.position.x, eDz = z - yaw.position.z;
+    const eDist = Math.max(1, Math.hypot(eDx, eDz));
+    const ePan = Math.max(-0.9, Math.min(0.9, eDx / Math.max(5, eDist)));
+    const eVol = Math.max(0.4, Math.min(0.9, 0.9 - eDist / 60));
+    playEventSound("explosion", { volume: eVol, pan: ePan });
   }
 
   function updateGrenades(dt) {
@@ -19704,6 +21911,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updatePhysicsDebris(dt);
       updateGrenades(dt);
       updateExplosionFlashes(dt);
+      updateWeaponSkinShader(dt);
 
       if (game.state === "playing") {
         if (mouse.down && gunState.fireCooldown <= 0 && !(cutscene.active && cutscene.phase < 2)) fireGun();
@@ -19772,6 +21980,7 @@ async function spawnEnemies(wave, options: any = {}) {
         updateDamageNumbers(dt);
         updateThirdPersonCharacter(dt, thirdPerson.lastMove);
         updateCameraFX(dt);
+        updateMenuBackdropCamera(dt);
         renderer.toneMappingExposure += (getBaseExposure() - renderer.toneMappingExposure) * Math.min(1, dt * 8);
         if (ovScanCanvas && !overlay?.classList.contains("hidden") && game.frame % 4 === 0) {
           renderOverlayScan();
@@ -19830,11 +22039,9 @@ async function spawnEnemies(wave, options: any = {}) {
     game.state = "transition";
     syncGameplayBodyClass();
     game.waveSpawning = false;
+    showTransitionCover(); // hide the world/HUD until the restart terminal/intro (or gameplay) takes over
     try {
-      for (const p of particles) {
-        recycleImpactParticle(p);
-      }
-      particles.length = 0;
+      particleFX?.clear();
 
       for (const t of tracers) {
         recycleTracer(t);
@@ -19850,10 +22057,21 @@ async function spawnEnemies(wave, options: any = {}) {
       resetPlayer();
       await spawnEnemies(1, { smooth: true, minDistance: 8, preferVisible: true });
       ensureAllLiveEnemiesVisible();
+      // Restart-only cold-open: a green terminal line ("RESTART UNKNW" typing
+      // itself out) plays ahead of the normal intro — never on the first New
+      // Mission, only here. Still inside game.state === "transition", so input
+      // stays frozen the same way it already is for the rest of this function.
+      // Gated on exactly the same conditions startIntroCutscene() itself checks,
+      // so the terminal never shows when the intro it leads into won't play.
+      const playsIntro = !isCoopGuest() && !window.location.search.includes("test=1")
+        && devVal("cutscenes", "introEnabled", true);
+      if (playsIntro) await showRestartTerminal();
       game.state = "playing";
       // Death is not an exit: every restart is a fresh insertion — the intro
       // (unskippable, like the blackout) plays again. Skipped under ?test=1.
-      if (!isCoopGuest()) startIntroCutscene();
+      const introStarted = !isCoopGuest() && startIntroCutscene();
+      if (playsIntro) { hideRestartTerminal(); await sleep(360); }
+      if (!introStarted) hideTransitionCover(); // no cutscene queued — reveal gameplay now
       syncGameplayBodyClass();
       updateHUD(0);
       renderMinimap(performance.now());
@@ -19861,6 +22079,7 @@ async function spawnEnemies(wave, options: any = {}) {
       console.error("Restart transition failed:", err);
       game.state = "playing";
       syncGameplayBodyClass();
+      hideTransitionCover();
     } finally {
       game.transitioning = false;
     }
@@ -19898,6 +22117,24 @@ async function spawnEnemies(wave, options: any = {}) {
           gunUp: UNIFIED_FP_GUN_UP, gunRight: UNIFIED_FP_GUN_RIGHT,
         };
       },
+      // DEV/TEST-ONLY: observation-only orbit camera around the player torso.
+      // Does NOT change the player's aim (yaw/pitch stay driven by tpTo). Pass
+      // { on:false } to restore the normal gameplay camera.
+      orbitCam: (opts: any = {}) => {
+        if (opts.azimuth   !== undefined) debugOrbit.azimuth = opts.azimuth;
+        if (opts.elevation !== undefined) debugOrbit.elevation = opts.elevation;
+        if (opts.dist      !== undefined) debugOrbit.dist = opts.dist;
+        if (opts.on        !== undefined) debugOrbit.active = !!opts.on;
+        return { ...debugOrbit };
+      },
+      // DEV/TEST-ONLY: distance between each hand bone and the gun grip it should
+      // hold (right hand→grip, left hand→foregrip). ~0 when the IK has landed.
+      ikGripDelta: () => (_ikGrips.valid ? {
+        rDelta: +_ikGrips.rDelta.toFixed(4),
+        lDelta: +_ikGrips.lDelta.toFixed(4),
+        rightGrip: _ikGrips.right.toArray().map(v => +v.toFixed(3)),
+        leftGrip: _ikGrips.left.toArray().map(v => +v.toFixed(3)),
+      } : null),
       tpTo: (x = 0, z = 40, yawRad = 0, pitchRad = 0) => {
         yaw.position.x = x;
         yaw.position.z = z;
@@ -20034,13 +22271,22 @@ async function spawnEnemies(wave, options: any = {}) {
       getRuntimeCounts: () => ({
         enemies: enemies.filter(e => e.alive).length,
         totalEnemyArray: enemies.length,
-        particles: particles.length,
+        particles: particleFX?.count() ?? 0,
         tracers: tracers.length,
         damageNumbers: damageNumbers.length,
         lightningEffects: lightningEffects.length,
         pendingEnemyDeaths: pendingEnemyDeaths.length,
         enemyRemovalQueue: enemyRemovalQueue.length,
       }),
+      // Balance-diagnostic: live spawn-mix breakdown (type name -> alive count).
+      getEnemyTypeCounts: () => {
+        const counts = {};
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          counts[e.typeName] = (counts[e.typeName] || 0) + 1;
+        }
+        return counts;
+      },
       getNearestEnemy: () => {
         let best = null;
         let bestDist = Infinity;
@@ -20335,7 +22581,8 @@ async function spawnEnemies(wave, options: any = {}) {
       return;
     }
 
-    if (e.code === "Escape") {
+    if (e.code === "Escape" || e.code === "Backspace") {
+      // Backspace also toggles pause (the browser back-nav default is suppressed).
       e.preventDefault();
       if (game.state === "playing") pauseGame();
       else if (game.state === "paused") resumeGame();
@@ -20376,6 +22623,17 @@ async function spawnEnemies(wave, options: any = {}) {
       return;
     }
 
+    // Ctrl+P — dev/test: unlock the whole weapon roster so every gun can be
+    // selected (Digit1-0) without rolling the mystery box. Lets you verify each
+    // weapon's third-person hold/fire animation directly.
+    if (e.ctrlKey && e.code === "KeyP") {
+      e.preventDefault();
+      if (e.repeat) return;
+      for (const g of Object.values(GUNS)) grantWeapon(g);
+      addKillFeed("ALL WEAPONS UNLOCKED (1-0 to switch)");
+      return;
+    }
+
     if (e.code === "KeyM") {
       if (e.repeat) return;
       toggleThirdPersonView();
@@ -20402,6 +22660,10 @@ async function spawnEnemies(wave, options: any = {}) {
       if (e.repeat) return;
       meleeAttack();
     }
+    if (e.code === "KeyI") {
+      if (e.repeat) return;
+      tryInspect();
+    }
     if (e.code === "KeyF") {
       lightingState.flashlightOn = !lightingState.flashlightOn;
       broadcastFlashlightFx();
@@ -20415,8 +22677,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (e.code === "Digit6") switchGun(GUNS.LMG);
     if (e.code === "Digit7") switchGun(GUNS.DMR);
     if (e.code === "Digit8") switchGun(GUNS.AKIMBO);
-    if (e.code === "Digit9") switchGun(GUNS.RAILGUN);
-    if (e.code === "Digit0") switchGun(GUNS.FLAK);
+    if (e.code === "Digit9") switchGun(GUNS.FLAK);
   });
 
   window.addEventListener("keyup", e => keys.delete(e.code));
@@ -20621,15 +22882,77 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   if (loadoutBtn) loadoutBtn.onclick = () => setMenuPanel("loadout");
+  if (briefingBtn) briefingBtn.onclick = () => setMenuPanel("briefing");
+  if (settingsBtn) settingsBtn.onclick = () => setMenuPanel("settings");
   if (intelBtn) intelBtn.onclick = () => setMenuPanel("intel");
   if (modelEditorBtn) modelEditorBtn.onclick = () => openModelEditor();
   if (launchLoadoutBtn) launchLoadoutBtn.onclick = () => {
     if (game.state === "paused") {
-      setMenuPanel("briefing");
+      setMenuPanel("root");
       return;
     }
     beginMission();
   };
+
+  // ── Halo shell: per-panel BACK affordance + list keyboard nav ─────────────
+  // Injected rather than authored in markup so both HTML entry points get it.
+  for (const panel of menuPanels || []) {
+    if (panel.querySelector(".halo-back")) continue;
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "halo-back";
+    back.textContent = "◀ Back";
+    back.addEventListener("click", () => { sfxMenuBack(); setMenuPanel("root"); });
+    panel.appendChild(back);
+  }
+
+  // Hovering an entry moves the Halo highlight to it (mouse and keyboard drive
+  // the same single selection, like a console menu with a cursor).
+  for (const item of document.querySelectorAll<HTMLElement>("#overlay .ov-nav-item")) {
+    item.addEventListener("mouseenter", () => {
+      if (item.classList.contains("active-nav")) return;
+      for (const el of document.querySelectorAll("#overlay .ov-nav-item")) el.classList.remove("active-nav");
+      item.classList.add("active-nav");
+      syncHaloNavDescription();
+      sfxMenuMove();
+    });
+  }
+
+  installSettingsScreen();
+  installIntelRecords();
+
+  document.addEventListener("keydown", event => {
+    if (overlay?.classList.contains("hidden")) return;
+    if (event.defaultPrevented) return;
+    const atRoot = (overlay?.dataset.panel || "root") === "root";
+
+    if (event.code === "Escape") {
+      // Esc backs out of a sub-screen first; only then does it resume/pause.
+      // Deliberately NOT gated on the focused element — Esc has to work while a
+      // settings slider or the multiplayer name field holds focus.
+      if (!atRoot) {
+        event.preventDefault();
+        // Capture phase + stopPropagation: the game's own Escape handler would
+        // otherwise resume/pause on the SAME press that closed the sub-screen.
+        event.stopPropagation();
+        sfxMenuBack();
+        setMenuPanel("root");
+      }
+      return;
+    }
+    if (!atRoot) return;
+    // Arrows/Enter belong to the focused control, not the list, when the player
+    // is in a field or on a slider.
+    const tag = (event.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+    if (event.code === "ArrowDown" || event.code === "ArrowUp") {
+      event.preventDefault();
+      moveHaloSelection(event.code === "ArrowDown" ? 1 : -1);
+    } else if (event.code === "Enter") {
+      event.preventDefault();
+      activateHaloSelection();
+    }
+  }, true);
 
   if (resumeBtn) resumeBtn.onclick = () => resumeGame();
   if (restartBtn) restartBtn.onclick = () => {
@@ -20647,7 +22970,7 @@ async function spawnEnemies(wave, options: any = {}) {
     quitToMenu();
   };
   if (quitBtn) quitBtn.onclick = () => setMenuPanel("quit");
-  if (quitCancelBtn) quitCancelBtn.onclick = () => setMenuPanel("briefing");
+  if (quitCancelBtn) quitCancelBtn.onclick = () => setMenuPanel("root");
   if (quitConfirmBtn) quitConfirmBtn.onclick = () => {
     if (game.state === "paused") {
       quitToMenu();

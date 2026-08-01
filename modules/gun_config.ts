@@ -10,7 +10,6 @@ export const GUNS = {
   LMG: "lmg",
   DMR: "dmr",
   AKIMBO: "akimbo",
-  RAILGUN: "railgun",
   FLAK: "flak",
 } as const;
 
@@ -51,6 +50,14 @@ export interface GunSpec {
   fireCycle: FireCycle;
   reloadStyle: ReloadStyle;
   equipTime: number;
+  inspectTime: number;
+  // Visual-only third-person viewmodel scale multiplier (on top of the shared
+  // 0.6 base). Guns are procedurally built at different real proportions (the
+  // SMG's stubby body is much shorter than the rifle's), and every weapon is
+  // calibrated into the same hand-grip anchor — a small gun ends up looking
+  // undersized/lost in the hand even though the grip itself lines up fine.
+  // Defaults to 1 (no change) for every gun that already reads correctly.
+  handScale: number;
   muzzleFlashScale: number;
   muzzleFlashTime: number;
   fireSound: string;
@@ -60,6 +67,13 @@ export interface GunSpec {
   // Optional / per-weapon behaviours
   gripStyle?: GripStyle;   // pistol only
   pierce?: boolean;        // railgun only
+  // Third-person clone-pose trim for LONG guns: pushes the gun forward along its
+  // barrel (and slightly down) at the hand-centre so the receiver/stock clears the
+  // operator's torso/head instead of clipping through it. Units are world-ish metres.
+  // Defaults to 0 (compact guns sit fine at the hand-centre). See the clone-faithful
+  // two-handed pose in updateThirdPersonWeaponPose.
+  tpBarrelPush?: number;   // long guns only (sniper/dmr/lmg)
+  tpBarrelDrop?: number;
 }
 
 /** Live per-instance gun state, seeded from a GunSpec by createGunState(). */
@@ -112,7 +126,7 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     //                "shells" repeated inserts, "topLoad" from above/behind).
     // equipTime    = weapon switch lower/raise duration (s, weight-scaled).
     // muzzleFlashScale/Time = flash sprite size mul + flash duration (s).
-    fireCycle: "rifle", reloadStyle: "mag", equipTime: 0.3,
+    fireCycle: "rifle", reloadStyle: "mag", equipTime: 0.3, inspectTime: 1.4, handScale: 1,
     muzzleFlashScale: 1, muzzleFlashTime: 0.08,
     fireSound: "rifle_fire", reloadSound: "reload_mag", equipSound: "equip_light",
     recoil: { kick: 42, kickDamping: 21, yaw: 76, yawDamping: 24, roll: 64, rollDamping: 22 },
@@ -134,7 +148,7 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.028,
     moveSpeedMul: 1, swayMul: 1, shakeMul: 1, driftMul: 1,
     bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
-    fireCycle: "pump", reloadStyle: "shells", equipTime: 0.36,
+    fireCycle: "pump", reloadStyle: "shells", equipTime: 0.36, inspectTime: 1.6, handScale: 1,
     muzzleFlashScale: 1.35, muzzleFlashTime: 0.105,
     fireSound: "shotgun_fire", reloadSound: "reload_shells", equipSound: "equip_heavy",
     recoil: { kick: 96, kickDamping: 14, yaw: 112, yawDamping: 18, roll: 98, rollDamping: 16 },
@@ -156,10 +170,11 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.045,
     moveSpeedMul: 1, swayMul: 1, shakeMul: 1, driftMul: 1,
     bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
-    fireCycle: "bolt", reloadStyle: "topLoad", equipTime: 0.42,
+    fireCycle: "bolt", reloadStyle: "topLoad", equipTime: 0.42, inspectTime: 1.7, handScale: 1,
     muzzleFlashScale: 0.95, muzzleFlashTime: 0.075,
     fireSound: "sniper_fire", reloadSound: "reload_topload", equipSound: "equip_heavy",
     recoil: { kick: 64, kickDamping: 18, yaw: 145, yawDamping: 20, roll: 88, rollDamping: 19 },
+    tpBarrelPush: 0.16, tpBarrelDrop: 0.09,
   },
   // ── Mystery-box roster (starter pistol + box pulls) ─────────────────────────
   pistol: {
@@ -179,7 +194,7 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.03,
     moveSpeedMul: 1.06, swayMul: 0.7, shakeMul: 0.7, driftMul: 0.8,
     bloomGrow: 0.004, bloomMax: 0.02, bloomDecay: 0.12,
-    fireCycle: "slide", reloadStyle: "mag", equipTime: 0.18,
+    fireCycle: "slide", reloadStyle: "mag", equipTime: 0.18, inspectTime: 1.1, handScale: 1,
     // gripStyle drives the third-person arm pose. "oneHand" = compact handgun
     // stance: the left (support) hand does NOT mirror the right's rifle raise and
     // takes only a fraction of the fire punch, so the arms don't splay on every
@@ -206,7 +221,15 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.03,
     moveSpeedMul: 1.05, swayMul: 0.85, shakeMul: 0.8, driftMul: 1.3,
     bloomGrow: 0.006, bloomMax: 0.045, bloomDecay: 0.16,
-    fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24,
+    // One-handed grip: the SMG joins the pistol/akimbo group and is held/aimed
+    // with the compact one-handed Pistol clip set (pistolRun/strafe/jump), NOT
+    // the two-handed rifle-carry layer.
+    gripStyle: "oneHand",
+    fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24, inspectTime: 1.2,
+    // The SMG's procedural model is genuinely stubbier than the rifle (short
+    // receiver, short mag), so at the shared 0.6 base scale it reads as lost
+    // in the two-handed grip. Bumped up ~22% for visual parity.
+    handScale: 1.22,
     muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
     fireSound: "smg_fire", reloadSound: "reload_mag", equipSound: "equip_light",
     recoil: { kick: 30, kickDamping: 24, yaw: 62, yawDamping: 26, roll: 52, rollDamping: 24 },
@@ -228,10 +251,11 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.034,
     moveSpeedMul: 0.85, swayMul: 1.5, shakeMul: 1.25, driftMul: 1.4,
     bloomGrow: 0.005, bloomMax: 0.05, bloomDecay: 0.08,
-    fireCycle: "drum", reloadStyle: "drum", equipTime: 0.5,
+    fireCycle: "drum", reloadStyle: "drum", equipTime: 0.5, inspectTime: 1.9, handScale: 1,
     muzzleFlashScale: 1.25, muzzleFlashTime: 0.09,
     fireSound: "lmg_fire", reloadSound: "reload_drum", equipSound: "equip_heavy",
     recoil: { kick: 52, kickDamping: 17, yaw: 92, yawDamping: 20, roll: 74, rollDamping: 19 },
+    tpBarrelPush: 0.12, tpBarrelDrop: 0.06,
   },
   dmr: {
     name: "Verdict DMR",
@@ -250,10 +274,11 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.04,
     moveSpeedMul: 0.97, swayMul: 1.1, shakeMul: 1.05, driftMul: 0.9,
     bloomGrow: 0.004, bloomMax: 0.02, bloomDecay: 0.2,
-    fireCycle: "bolt", reloadStyle: "mag", equipTime: 0.34,
+    fireCycle: "bolt", reloadStyle: "mag", equipTime: 0.34, inspectTime: 1.5, handScale: 1,
     muzzleFlashScale: 1, muzzleFlashTime: 0.085,
     fireSound: "dmr_fire", reloadSound: "reload_mag", equipSound: "equip_light",
     recoil: { kick: 55, kickDamping: 19, yaw: 108, yawDamping: 21, roll: 76, rollDamping: 20 },
+    tpBarrelPush: 0.1, tpBarrelDrop: 0.05,
   },
   akimbo: {
     name: "Gemini Machine Pistol",
@@ -275,33 +300,10 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     // Machine pistol is held one-handed like the Service Pistol (drives the TP
     // pistol locomotion clips + one-hand arm pose).
     gripStyle: "oneHand",
-    fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24,
+    fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24, inspectTime: 1.2, handScale: 1,
     muzzleFlashScale: 0.85, muzzleFlashTime: 0.06,
     fireSound: "akimbo_fire", reloadSound: "reload_mag", equipSound: "equip_light",
     recoil: { kick: 36, kickDamping: 22, yaw: 84, yawDamping: 24, roll: 66, rollDamping: 22 },
-  },
-  railgun: {
-    name: "Lancer Railgun",
-    magazine: 3,
-    ammo: 18,
-    fireRate: 1.45,
-    reloadTime: 1.9,
-    adsFov: 24,
-    adsInSpeed: 7.6,
-    adsOutSpeed: 6.6,
-    adsMovePenalty: 0.24,
-    damage: 430,
-    pellets: 1,
-    spread: 0.001,
-    tracerLen: 3.4,
-    tracerLife: 0.055,
-    moveSpeedMul: 0.82, swayMul: 1.6, shakeMul: 1.5, driftMul: 0.6,
-    bloomGrow: 0, bloomMax: 0, bloomDecay: 0.15,
-    pierce: true, // rail slug punches through every enemy on its line
-    fireCycle: "coil", reloadStyle: "topLoad", equipTime: 0.55,
-    muzzleFlashScale: 1.2, muzzleFlashTime: 0.14,
-    fireSound: "railgun_fire", reloadSound: "reload_topload", equipSound: "equip_heavy",
-    recoil: { kick: 78, kickDamping: 16, yaw: 150, yawDamping: 19, roll: 96, rollDamping: 18 },
   },
   flak: {
     name: "Mauler Auto-Shotgun",
@@ -320,7 +322,7 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.028,
     moveSpeedMul: 0.9, swayMul: 1.3, shakeMul: 1.3, driftMul: 1.2,
     bloomGrow: 0.01, bloomMax: 0.06, bloomDecay: 0.1,
-    fireCycle: "pump", reloadStyle: "drum", equipTime: 0.4,
+    fireCycle: "pump", reloadStyle: "drum", equipTime: 0.4, inspectTime: 1.7, handScale: 1,
     muzzleFlashScale: 1.4, muzzleFlashTime: 0.11,
     fireSound: "flak_fire", reloadSound: "reload_drum", equipSound: "equip_heavy",
     recoil: { kick: 84, kickDamping: 15, yaw: 104, yawDamping: 18, roll: 90, rollDamping: 17 },

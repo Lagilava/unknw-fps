@@ -74,15 +74,20 @@ export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, 
     action.enabled = true;
     actions[name] = action;
   }
-  // The attack swings as an upper-body layer over the running legs (see playUpper).
-  if (clips.attack) {
-    const upperClip = makeUpperBodyClip(clips.attack);
-    if (upperClip) {
-      const a = mixer.clipAction(upperClip);
-      a.loop = THREE.LoopOnce;
-      a.clampWhenFinished = false; // must release, or the last frame holds the arms
-      actions.attackUpper = a;
-    }
+  // Each attack CLIP (attack / attackBite / attackLunge / attackNeck) swings as an
+  // upper-body layer over the running legs (see playUpper). Building an *_upper
+  // variant for every one lets the melee pick a DIFFERENT swing each hit, so the
+  // horde reads as biting/lunging/clawing instead of the same slap on repeat.
+  const attackUpperNames: string[] = [];
+  for (const [name, clip] of Object.entries(clips)) {
+    if (!clip || !name.startsWith("attack")) continue;
+    const upperClip = makeUpperBodyClip(clip);
+    if (!upperClip) continue;
+    const a = mixer.clipAction(upperClip);
+    a.loop = THREE.LoopOnce;
+    a.clampWhenFinished = false; // must release, or the last frame holds the arms
+    actions[name + "Upper"] = a;
+    attackUpperNames.push(name + "Upper");
   }
 
   // ── Procedural turn/lean bones ──────────────────────────────────────────────
@@ -242,7 +247,12 @@ export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, 
     // this doubles as the "running melee": the legs keep the run cycle while the
     // arms lash out. (isAttacking pulses per wind-up; see the zref adapter.)
     if (isAttacking && !prevAttacking) {
-      if (!playUpper("attackUpper", 0.08) && actions.attack && elapsed >= onceLockUntil) {
+      // Randomise the swing so consecutive hits vary (bite / lunge / neck-bite /
+      // claw) instead of repeating one clip — the main reason the melee read "lame".
+      const pick = attackUpperNames.length
+        ? attackUpperNames[(Math.random() * attackUpperNames.length) | 0]
+        : "attackUpper";
+      if (!playUpper(pick, 0.08) && actions.attack && elapsed >= onceLockUntil) {
         playOnce("attack", 0.14); // fallback if the upper clip failed to build
       }
     }

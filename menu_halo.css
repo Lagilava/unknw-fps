@@ -1,0 +1,893 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   UNKNW — Halo: Combat Evolved style shell (main menu + loading screen)
+
+   Loaded AFTER the inline <style> in both HTML entry points, so everything here
+   is an intentional override of the older two-column menu. The panel INTERNALS
+   (.ov-panel-title, .flow-card, .mind-map, .loadout-card, #mp-panel …) are left
+   alone — only the shell around them is restyled.
+
+   Halo CE's menu is: a slow-drifting live 3D backdrop, a centred column of
+   wide-tracked uppercase labels, one bright highlighted row, and almost nothing
+   else. The 3D backdrop is the real game scene — see updateMenuBackdropCamera()
+   in three_fps_game.ts.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --halo-ink:       #dceeff;  /* idle label */
+  --halo-ink-dim:   #7f9bb4;  /* secondary text */
+  --halo-hot:       #ffffff;  /* highlighted label */
+  --halo-glow:      #66c8ff;  /* the blue everything bleeds */
+  --halo-glow-soft: rgba(102, 200, 255, 0.55);
+  --halo-rule:      rgba(120, 190, 240, 0.28);
+}
+
+/* ═══════════════ LOADING SCREEN — all black, UNKNW glowing blue ═══════════ */
+
+#loading-screen {
+  background: #000 !important;
+}
+/* Strip everything that is not the wordmark and the loading detail: grids,
+   glows, scanlines, rings, corner brackets, the eyebrow/divider, the stage
+   segment strip, the phase counter and the platform/build footer. */
+#loading-screen .ls-eyebrow,
+#loading-screen .ls-divider,
+#loading-screen .ls-grid,
+#loading-screen .ls-glow,
+#loading-screen .ls-scan,
+#loading-screen .ls-scanlines,
+#loading-screen .ls-vignette,
+#loading-screen .ls-rings-wrap,
+#loading-screen .ls-ring,
+#loading-screen .ls-bracket,
+#loading-screen .ls-bottom,
+#loading-screen .ls-sys,
+#loading-screen .ls-seg-row,
+#loading-screen .ls-seg,
+#loading-screen .ls-segs,
+#loading-screen .ls-detail,
+#loading-screen .ls-phase,
+#loading-screen #loading-phase,
+#loading-screen #loading-detail {
+  display: none !important;
+}
+
+/* No card, no blur, no border — just black. */
+#loading-screen .ls-content {
+  gap: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+#loading-screen .ls-title {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 900;
+  font-size: clamp(52px, 12vw, 110px);
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-shadow: none;
+  /* One word, one colour — the two spans are a legacy split. */
+  animation: none;
+}
+/* !important throughout: the legacy sheet sets this span's colour and stroke
+   with !important of its own, and both halves must read as one blue word. */
+#loading-screen .ls-title .ls-title-room,
+#loading-screen .ls-title .ls-title-breach {
+  display: inline !important;
+  margin: 0 !important;
+  color: #bfe6ff !important;
+  -webkit-text-stroke: 0 !important;
+  letter-spacing: 0.16em !important;
+  text-shadow:
+    0 0 8px  rgba(102, 200, 255, 0.95),
+    0 0 26px rgba(70, 170, 255, 0.75),
+    0 0 64px rgba(40, 130, 255, 0.45) !important;
+  animation: unknwPulse 3.4s ease-in-out infinite !important;
+}
+@keyframes unknwPulse {
+  0%, 100% { opacity: 0.92; text-shadow: 0 0 8px rgba(102,200,255,0.95), 0 0 26px rgba(70,170,255,0.75), 0 0 64px rgba(40,130,255,0.45); }
+  50%      { opacity: 1;    text-shadow: 0 0 12px rgba(140,220,255,1),   0 0 40px rgba(90,190,255,0.9),  0 0 96px rgba(50,150,255,0.6); }
+}
+
+/* Loading details, just below the wordmark. */
+#loading-screen .ls-progress-wrap {
+  width: min(420px, 84vw);
+  margin-top: 34px;
+}
+#loading-screen .ls-progress-header {
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+#loading-screen .ls-status-text,
+#loading-screen .ls-pct {
+  font-size: 10px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: rgba(150, 200, 235, 0.72);
+  text-shadow: 0 0 10px rgba(60, 150, 220, 0.4);
+}
+#loading-screen .ls-pct { color: rgba(190, 230, 255, 0.9); }
+#loading-screen .ls-track {
+  height: 1px;
+  background: rgba(90, 150, 195, 0.22);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+#loading-screen #loading-fill {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(80,180,255,0.5), #7fd0ff);
+  box-shadow: 0 0 10px rgba(102, 200, 255, 0.9);
+  border-radius: 0;
+}
+
+/* ═══════════════ MAIN MENU — Halo CE shell ═══════════════════════════════ */
+
+/* Transparent: the live game scene renders behind it (menu backdrop camera). */
+#overlay {
+  background: transparent !important;
+  display: block !important;
+}
+
+/* The old menu was opaque, so the HUD underneath never showed. It does now —
+   and health bars / ammo / minimap behind a main menu look like a bug. The
+   engine puts `gameplay-view` on <body> only while playing or transitioning
+   (syncGameplayBodyClass), which is exactly when the HUD should be up. */
+body:not(.gameplay-view) #hud,
+body:not(.gameplay-view) #crosshair,
+body:not(.gameplay-view) #damage-vignette,
+body:not(.gameplay-view) #touch-controls {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Atmosphere over the 3D: a deep blue wash, heavy vignette, faint scanlines. */
+.ov-bg-glow {
+  opacity: 1 !important;
+  background:
+    linear-gradient(180deg, rgba(2,8,18,0.86) 0%, rgba(2,8,18,0.30) 34%, rgba(2,8,18,0.34) 62%, rgba(1,5,12,0.92) 100%),
+    radial-gradient(ellipse 78% 64% at 50% 48%, rgba(0,0,0,0) 38%, rgba(0,4,10,0.72) 100%),
+    radial-gradient(ellipse 60% 44% at 50% 26%, rgba(60,150,230,0.14) 0%, transparent 70%) !important;
+}
+.ov-bg-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(140, 200, 245, 0.035) 0px,
+    rgba(140, 200, 245, 0.035) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
+
+/* ── The centred column ──────────────────────────────────────────────────── */
+
+.ov-left {
+  position: absolute !important;
+  inset: 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  z-index: 2;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  padding: 5vh 24px 4vh !important;
+  overflow: visible !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.ov-left::before { display: none !important; }
+
+/* Legacy-entry-point chrome that has no place in the Halo shell. */
+.ov-status-strip,
+.ov-right-glow,
+.ov-bracket,
+.ov-brief-line { display: none !important; }
+
+/* A sub-screen is open → the root column steps back (Halo replaces the list). */
+#overlay:not([data-panel="root"]) .ov-left {
+  opacity: 0;
+  transform: scale(0.985);
+  pointer-events: none;
+}
+#overlay.hidden .ov-left { transform: none; opacity: 0; }
+
+/* ── Wordmark ────────────────────────────────────────────────────────────── */
+
+.ov-logo {
+  margin: 0 0 clamp(28px, 5vh, 56px) !important;
+  text-align: center;
+}
+.ov-eyebrow {
+  justify-content: center;
+  font-size: 8px !important;
+  letter-spacing: 0.62em !important;
+  color: rgba(150, 195, 230, 0.6) !important;
+  margin-bottom: 18px !important;
+}
+.ov-eyebrow::before { display: none; }
+
+.ov-title {
+  font-size: clamp(46px, 8.5vw, 92px) !important;
+  letter-spacing: 0.18em;
+  line-height: 1 !important;
+}
+.ov-title .t-room,
+.ov-title .t-breach {
+  display: inline !important;
+  margin: 0 !important;
+  letter-spacing: 0.18em !important;
+  color: #d8efff !important;
+  text-shadow:
+    0 0 10px rgba(102, 200, 255, 0.85),
+    0 0 34px rgba(60, 160, 245, 0.6),
+    0 0 90px rgba(30, 110, 220, 0.35) !important;
+}
+
+.ov-tagline {
+  margin-top: 16px !important;
+  font-size: 9px !important;
+  letter-spacing: 0.42em !important;
+  color: rgba(140, 185, 220, 0.55) !important;
+}
+
+/* ── The list ────────────────────────────────────────────────────────────── */
+
+.ov-nav {
+  flex: 0 0 auto !important;
+  gap: 0 !important;
+  align-items: stretch;
+  width: min(420px, 86vw);
+  padding: 18px 0;
+  border-top: 1px solid var(--halo-rule);
+  border-bottom: 1px solid var(--halo-rule);
+  position: relative;
+}
+/* Halo's bracket corners on the list frame. */
+.ov-nav::before,
+.ov-nav::after {
+  content: '';
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--halo-glow-soft), transparent);
+  opacity: 0.5;
+}
+.ov-nav::before { top: -4px; }
+.ov-nav::after  { bottom: -4px; }
+
+.ov-nav-item {
+  justify-content: center !important;
+  gap: 0 !important;
+  padding: 11px 20px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: none !important;
+  transform: none !important;
+  transition: background 0.16s linear, box-shadow 0.16s linear;
+}
+/* The old left accent bar becomes Halo's full-width highlight sweep. */
+.ov-nav-item::before {
+  left: 0 !important;
+  right: 0 !important;
+  width: auto !important;
+  transform: none !important;
+  opacity: 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(70, 165, 240, 0.16) 22%,
+    rgba(120, 205, 255, 0.24) 50%,
+    rgba(70, 165, 240, 0.16) 78%,
+    transparent 100%) !important;
+  transition: opacity 0.16s linear;
+}
+.ov-nav-item:hover::before,
+.ov-nav-item.active-nav::before { opacity: 1; transform: none !important; }
+
+.ov-nav-item:hover,
+.ov-nav-item.active-nav,
+.ov-nav-item.nav-primary:hover,
+.ov-nav-item.nav-primary.active-nav {
+  background: none !important;
+  border: 0 !important;
+  transform: none !important;
+  box-shadow:
+    inset 0  1px 0 rgba(130, 205, 255, 0.35),
+    inset 0 -1px 0 rgba(130, 205, 255, 0.35);
+}
+
+.ov-nav-num { display: none !important; }
+
+.ov-nav-text {
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(13px, 1.5vw, 17px) !important;
+  font-weight: 600;
+  letter-spacing: 0.3em !important;
+  color: rgba(178, 208, 232, 0.72) !important;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+  transition: color 0.16s linear, text-shadow 0.16s linear;
+  /* letter-spacing pads the right edge; nudge back so labels read centred */
+  margin-right: -0.3em;
+}
+.ov-nav-item:hover .ov-nav-text,
+.ov-nav-item.active-nav .ov-nav-text {
+  color: var(--halo-hot) !important;
+  text-shadow: 0 0 14px rgba(120, 205, 255, 0.9), 0 0 34px rgba(70, 170, 250, 0.5);
+}
+
+/* Halo's selection chevrons, drawn from the old arrow span + a mirrored one. */
+.ov-nav-arrow {
+  position: absolute;
+  right: 14px;
+  margin: 0 !important;
+  font-size: 9px !important;
+  color: transparent;
+  transform: none !important;
+  transition: color 0.16s linear, opacity 0.16s linear;
+  opacity: 0;
+}
+.ov-nav-item:hover .ov-nav-arrow,
+.ov-nav-item.active-nav .ov-nav-arrow {
+  color: var(--halo-glow) !important;
+  opacity: 1;
+  transform: none !important;
+}
+.ov-nav-item::after {
+  content: '\25C0';
+  position: absolute;
+  left: 14px;
+  font-size: 9px;
+  color: var(--halo-glow);
+  opacity: 0;
+  transition: opacity 0.16s linear;
+}
+.ov-nav-item:hover::after,
+.ov-nav-item.active-nav::after { opacity: 1; }
+
+.ov-nav-item.hidden-menu { display: none !important; }
+
+/* Descriptor line under the list — reflects the highlighted entry. */
+.halo-desc {
+  margin-top: 22px;
+  min-height: 2.4em;
+  width: min(560px, 88vw);
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(150, 195, 228, 0.62);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+  transition: opacity 0.16s linear;
+}
+
+/* ── Footer corners ──────────────────────────────────────────────────────── */
+
+.ov-footer {
+  position: absolute !important;
+  left: 0; right: 0; bottom: 0;
+  margin: 0 !important;
+  padding: 0 clamp(18px, 3vw, 44px) clamp(16px, 3vh, 32px) !important;
+  border: 0 !important;
+}
+.ov-footer span {
+  font-size: 8px !important;
+  letter-spacing: 0.34em !important;
+  color: rgba(130, 175, 210, 0.45) !important;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+/* ═══════════════ SUB-SCREENS ═════════════════════════════════════════════ */
+
+.ov-right {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3;
+  display: block !important;
+  padding: 0 !important;
+  transform: none !important;
+  transition: opacity 0.28s ease !important;
+}
+#overlay[data-panel="root"] .ov-right {
+  opacity: 0;
+  pointer-events: none;
+}
+#overlay.hidden .ov-right { transform: none !important; opacity: 0; }
+
+/* Panels stay absolutely positioned (they are alternates, not a stack) and are
+   centred by left/right + margin:auto against a max-width. */
+.ov-panel {
+  position: absolute !important;
+  top: clamp(14px, 3vh, 40px) !important;
+  bottom: clamp(14px, 3vh, 40px) !important;
+  left: clamp(14px, 3vw, 48px) !important;
+  right: clamp(14px, 3vw, 48px) !important;
+  margin: 0 auto !important;
+  max-width: 1020px;
+  height: auto;
+  padding: clamp(22px, 3vw, 40px) clamp(20px, 3vw, 44px) 34px !important;
+  background: linear-gradient(180deg, rgba(4, 12, 22, 0.93), rgba(2, 7, 14, 0.96)) !important;
+  border: 1px solid var(--halo-rule);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 24px 90px rgba(0, 0, 0, 0.75),
+    inset 0 0 90px rgba(30, 100, 170, 0.08);
+  transform: translateY(10px) !important;
+}
+.ov-panel.active { transform: none !important; }
+
+/* Back affordance, injected by the game (see installHaloMenuShell). */
+.halo-back {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 5;
+  padding: 7px 14px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(190, 222, 245, 0.8);
+  background: rgba(8, 18, 30, 0.8);
+  border: 1px solid var(--halo-rule);
+  cursor: pointer;
+  transition: color 0.16s, border-color 0.16s, box-shadow 0.16s;
+}
+.halo-back:hover {
+  color: #fff;
+  border-color: var(--halo-glow-soft);
+  box-shadow: 0 0 18px rgba(80, 180, 255, 0.28);
+}
+
+/* ═══════════════ INTEL RECORDS ═══════════════════════════════════════════
+   A recovered-document terminal: an index rail of file codes on the left, the
+   selected record rendered as a scanned document on the right. Each record is a
+   different KIND of document (incident log, works drawing, field survey, signal
+   intercept, asset tag, observation series, personnel roster, threat
+   assessment) so no two read in the same voice.
+
+   Tier colour system: every entry/record carries data-tier="site|signal|hostile"
+   which drives a local --intel-accent (+ glow/dim/bg variants). Site stays the
+   shell's own cyan; Signal (the Echo) reads violet, a transmission colour with
+   no threat charge; Hostiles read red, matching the danger vocabulary the rest
+   of the HUD already uses. It's a triage read of the rail, not just decoration:
+   colour is visible on the rest-state border, not only on hover/active.       */
+
+.intel-entry, .intel-record {
+  --intel-accent:      var(--halo-glow);
+  --intel-accent-glow: rgba(102, 200, 255, 0.30);
+  --intel-accent-dim:  rgba(102, 200, 255, 0.35);
+  --intel-accent-bg:   rgba(102, 200, 255, 0.12);
+}
+.intel-entry[data-tier="signal"], .intel-record[data-tier="signal"] {
+  --intel-accent:      #b98cff;
+  --intel-accent-glow: rgba(185, 140, 255, 0.32);
+  --intel-accent-dim:  rgba(185, 140, 255, 0.4);
+  --intel-accent-bg:   rgba(185, 140, 255, 0.13);
+}
+.intel-entry[data-tier="hostile"], .intel-record[data-tier="hostile"] {
+  --intel-accent:      #ff6b6b;
+  --intel-accent-glow: rgba(255, 107, 107, 0.32);
+  --intel-accent-dim:  rgba(255, 107, 107, 0.4);
+  --intel-accent-bg:   rgba(255, 107, 107, 0.13);
+}
+
+.intel-shell {
+  display: grid;
+  grid-template-columns: minmax(210px, 250px) 1fr;
+  gap: 0;
+  margin-top: 16px;
+  border: 1px solid rgba(120, 190, 240, 0.18);
+  background: rgba(4, 10, 18, 0.5);
+  min-height: 460px;
+}
+
+/* ── Index rail ──────────────────────────────────────────────────────────── */
+
+.intel-rail {
+  border-right: 1px solid rgba(120, 190, 240, 0.18);
+  padding: 0 0 14px;
+  background: rgba(3, 8, 15, 0.7);
+}
+.intel-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(120, 190, 240, 0.18);
+}
+.intel-case {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: rgba(190, 225, 248, 0.85);
+}
+.intel-class {
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: #ff8b8b;
+  border: 1px solid rgba(255, 120, 120, 0.4);
+  padding: 2px 6px;
+}
+.intel-group {
+  padding: 14px 14px 6px;
+  font-size: 8px;
+  letter-spacing: 0.36em;
+  text-transform: uppercase;
+  color: rgba(120, 165, 200, 0.5);
+}
+.intel-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 14px;
+  text-align: left;
+  font-family: inherit;
+  background: none;
+  border: 0;
+  /* Dim tier colour shows at rest — a triage read before you've opened anything. */
+  border-left: 2px solid var(--intel-accent-dim);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.intel-entry:hover { background: rgba(70, 150, 220, 0.08); border-left-color: var(--intel-accent); }
+.intel-entry.is-active {
+  background: var(--intel-accent-bg);
+  border-left-color: var(--intel-accent);
+}
+.intel-code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: rgba(120, 170, 208, 0.7);
+  flex: 0 0 auto;
+}
+.intel-entry.is-active .intel-code { color: var(--intel-accent); }
+.intel-name {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(196, 222, 242, 0.78);
+  line-height: 1.35;
+}
+.intel-entry.is-active .intel-name { color: #fff; }
+
+/* ── Document pane ───────────────────────────────────────────────────────── */
+
+.intel-doc {
+  position: relative;
+  padding: 22px clamp(18px, 2.4vw, 32px) 26px;
+  overflow: hidden;
+}
+/* Faint horizontal scan bands — reads as a document under a scanner. */
+.intel-doc::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(120, 190, 240, 0.035) 0px,
+    rgba(120, 190, 240, 0.035) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+/* Faint analog grain on top of the scanlines — reads as a degraded transmission
+   rather than a clean UI panel, and costs nothing to run (static SVG, no JS). */
+.intel-doc::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/rect%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.intel-record { display: none; position: relative; }
+.intel-record.is-active { display: block; animation: intelIn 0.22s ease both; }
+@keyframes intelIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Tier verdict stamp — the case-file punchline, canted like a rubber stamp,
+   anchored to the kicker row so it never collides with the title at narrow
+   widths. Pure CSS: text comes from the record's own data-stamp attribute. */
+.intel-record[data-stamp]::before {
+  content: attr(data-stamp);
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  right: clamp(18px, 2.4vw, 32px);
+  padding: 4px 10px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--intel-accent);
+  border: 1px solid var(--intel-accent);
+  border-radius: 2px;
+  transform: rotate(-4deg);
+  opacity: 0.82;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.intel-doc-kicker {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(130, 180, 215, 0.6);
+  padding-bottom: 8px;
+  padding-right: 90px; /* clears the stamp */
+  border-bottom: 1px solid rgba(120, 190, 240, 0.16);
+}
+.intel-doc-title {
+  margin: 12px 0 14px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(19px, 2.4vw, 27px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #eaf5ff;
+  text-shadow: 0 0 26px var(--intel-accent-glow);
+}
+
+/* Metadata strip — the "stamped" part of the file. */
+.intel-meta {
+  display: grid;
+  /* Four fields per record — 125px keeps them on one row in the document pane
+     instead of wrapping 3 + 1 with a dead cell. */
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 1px;
+  margin: 0 0 18px;
+  background: rgba(120, 190, 240, 0.14);
+  border: 1px solid rgba(120, 190, 240, 0.14);
+}
+.intel-meta > div {
+  padding: 8px 10px;
+  background: rgba(6, 14, 24, 0.92);
+}
+.intel-meta dt {
+  font-size: 8px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(120, 165, 200, 0.6);
+  margin-bottom: 4px;
+}
+.intel-meta dd {
+  margin: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: rgba(206, 230, 248, 0.9);
+}
+
+.intel-body p {
+  margin: 0 0 11px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: rgba(196, 218, 236, 0.82);
+  max-width: 68ch;
+}
+.intel-body p:last-child { margin-bottom: 0; }
+.intel-body em { color: #cfe8ff; font-style: italic; }
+.intel-body strong {
+  color: var(--intel-accent);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+/* Verbatim excerpt — the texture that makes it read as recovered, not written. */
+.intel-excerpt {
+  margin: 18px 0 0;
+  padding: 12px 16px;
+  border-left: 2px solid var(--intel-accent);
+  background: rgba(8, 20, 34, 0.75);
+}
+.intel-excerpt-tag {
+  font-size: 8px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: rgba(130, 180, 215, 0.6);
+  margin-bottom: 8px;
+}
+.intel-excerpt p {
+  margin: 0 0 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: rgba(214, 234, 250, 0.88);
+}
+.intel-excerpt p:last-child { margin-bottom: 0; }
+.intel-excerpt .tc {
+  color: var(--intel-accent);
+  margin-right: 10px;
+  opacity: 0.85;
+}
+
+/* The Choir's three sub-entries. */
+.intel-subgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+.intel-sub {
+  padding: 11px 13px;
+  border: 1px solid rgba(120, 190, 240, 0.16);
+  background: rgba(7, 16, 27, 0.72);
+}
+.intel-sub strong {
+  display: block;
+  margin-bottom: 6px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--intel-accent);
+}
+.intel-sub span {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: rgba(190, 214, 234, 0.78);
+}
+
+@media (max-width: 780px) {
+  .intel-shell { grid-template-columns: 1fr; }
+  .intel-rail {
+    border-right: 0;
+    border-bottom: 1px solid rgba(120, 190, 240, 0.18);
+    display: flex;
+    flex-wrap: wrap;
+    padding: 8px;
+  }
+  .intel-rail-head, .intel-group { display: none; }
+  .intel-entry { width: auto; border-left: 0; border-bottom: 2px solid var(--intel-accent-dim); }
+  .intel-entry.is-active { border-bottom-color: var(--intel-accent); }
+  .intel-name { display: none; }
+  .intel-record[data-stamp]::before { top: 4px; right: 4px; font-size: 9px; padding: 3px 7px; }
+  .intel-doc-kicker { padding-right: 76px; }
+}
+
+/* ═══════════════ SETTINGS SCREEN ═════════════════════════════════════════ */
+
+.set-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 22px;
+  margin-top: 18px;
+}
+.set-group {
+  border: 1px solid rgba(120, 190, 240, 0.16);
+  background: rgba(6, 14, 24, 0.6);
+  padding: 16px 18px 18px;
+}
+.set-group-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--halo-glow);
+  padding-bottom: 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(120, 190, 240, 0.18);
+}
+.set-row {
+  display: grid;
+  grid-template-columns: 1fr minmax(96px, 1.15fr) 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px dashed rgba(120, 190, 240, 0.09);
+}
+.set-row:last-child { border-bottom: 0; }
+.set-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(196, 222, 242, 0.82);
+}
+.set-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: rgba(140, 180, 210, 0.5);
+  line-height: 1.5;
+}
+.set-val {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-align: right;
+  color: var(--halo-glow);
+}
+.set-row input[type="range"] {
+  width: 100%;
+  accent-color: #4fb6f5;
+  background: transparent;
+  cursor: pointer;
+}
+.set-choice {
+  display: flex;
+  gap: 4px;
+}
+.set-choice button {
+  flex: 1;
+  padding: 6px 4px;
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(180, 212, 236, 0.72);
+  background: rgba(10, 22, 36, 0.8);
+  border: 1px solid rgba(120, 190, 240, 0.18);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.set-choice button:hover { color: #fff; border-color: var(--halo-glow-soft); }
+.set-choice button.on {
+  color: #041018;
+  background: linear-gradient(180deg, #86d3ff, #3ea4e8);
+  border-color: #86d3ff;
+  box-shadow: 0 0 16px rgba(80, 180, 255, 0.35);
+}
+.set-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(120, 190, 240, 0.16);
+}
+.set-note {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(150, 195, 228, 0.55);
+}
+
+/* ═══════════════ RESPONSIVE ══════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+  .ov-nav { width: min(360px, 90vw); }
+  .halo-desc { display: none; }
+}
+@media (max-height: 620px) {
+  .ov-logo { margin-bottom: 18px !important; }
+  .ov-nav-item { padding: 8px 20px !important; }
+  .halo-desc { display: none; }
+}
+@media (max-width: 720px) {
+  .ov-panel { padding: 44px 16px 28px !important; }
+  .set-groups { grid-template-columns: 1fr; }
+}
