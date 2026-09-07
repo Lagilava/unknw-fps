@@ -23338,9 +23338,50 @@ async function spawnEnemies(wave, options: any = {}) {
     warmEnemyShaders();
     await waitFrame();
 
+    // Compile both first-person and over-shoulder view variants while the
+    // loading screen is still active; gameplay makes the third-person rig
+    // visible immediately after mission start.
+    setLoadingProgress("Warming camera views", 0.895);
+    await warmFirstUseCameraViews();
+    if (thirdPerson.root) {
+      const wasVisible = thirdPerson.root.visible;
+      thirdPerson.root.visible = true;
+      setOperatorMaterialize(0);
+      compileSceneForCurrentRenderer();
+      setOperatorMaterialize(1);
+      compileSceneForCurrentRenderer();
+      thirdPerson.root.visible = wasVisible;
+      applyViewModeVisibility();
+    }
+
     setLoadingProgress("Compiling scene materials", 0.9);
     await waitFrame();
     compileAllWarmables();
+
+    // Render the exact visible handoff state once. The first mission frame
+    // reveals the primed enemies and player rig together; compiling while they
+    // are hidden does not populate every material variant used by that frame.
+    const primedVisibility = enemies.map(enemy => ({
+      enemy,
+      mesh: enemy.mesh.visible,
+      hpBar: enemy.hpBar?.mesh?.visible,
+    }));
+    const playerVisibility = thirdPerson.root?.visible;
+    for (const { enemy } of primedVisibility) {
+      enemy.mesh.visible = true;
+      if (enemy.hpBar?.mesh) enemy.hpBar.mesh.visible = true;
+    }
+    if (thirdPerson.root) {
+      thirdPerson.root.visible = true;
+      applyViewModeVisibility();
+    }
+    renderScene();
+    for (const { enemy, mesh, hpBar } of primedVisibility) {
+      enemy.mesh.visible = mesh;
+      if (enemy.hpBar?.mesh) enemy.hpBar.mesh.visible = hpBar;
+    }
+    if (thirdPerson.root) thirdPerson.root.visible = playerVisibility;
+    applyViewModeVisibility();
 
     setLoadingProgress("Warming render frames", 0.94);
     setWeaponWarmupVisibility(false);

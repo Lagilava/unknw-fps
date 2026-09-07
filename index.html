@@ -2876,10 +2876,19 @@
     if (document.body.dataset.rbReady === '1') revealMenu();
   }, 1200);
 
-  // Hard fallback: don't leave the user stranded
-  setTimeout(() => {
-    if (!introDone) revealMenu();
-  }, 10000);
+  // Keep the menu gated until boot completes so a mission cannot start against
+  // a partially built world. Surface a broken boot only after a generous cap.
+  const fallbackStartedAt = Date.now();
+  const tryFallbackReveal = () => {
+    if (introDone) return;
+    const ready = document.body.dataset.rbReady === '1';
+    if (!ready && Date.now() - fallbackStartedAt < 120000) {
+      window.setTimeout(tryFallbackReveal, 250);
+      return;
+    }
+    revealMenu();
+  };
+  window.setTimeout(tryFallbackReveal, 5200);
 
   // If something else hides the loading screen, show the menu
   const loadingObserver = new MutationObserver(() => {
