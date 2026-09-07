@@ -37,6 +37,12 @@ Starting a mission plays a directed intro cutscene — the district draws itself
 
 ## Quick start
 
+### Requirements
+
+- Node.js 20.19+ (or 22.12+) and npm
+- A Chromium-based browser with WebGL; WebGPU is used automatically where supported
+- About 150 MB of asset downloads on the first multiplayer load
+
 ```bash
 npm install
 npm run dev        # Vite dev server → http://localhost:3000
@@ -44,10 +50,14 @@ npm run dev        # Vite dev server → http://localhost:3000
 
 Then open `http://localhost:3000/` and hit **New Mission**. First boot takes 15–60 s (world build, enemy pools, shader warm-up); the menu unlocks only when it's genuinely ready.
 
+The normal Vite entry point is `index.html`. The file `first_person_shooter_room_game (1).html` is a legacy standalone entry point retained for Playwright coverage and offline testing; it is served by the test server rather than Vite.
+
 ```bash
 npm run build      # self-contained static site in dist/
 npm run typecheck  # tsc --noEmit
 ```
+
+For internet multiplayer on Windows, run `Start Internet Multiplayer.bat`. It starts the local server and a Cloudflare tunnel; install `cloudflared` first or place the executable beside the batch file. For peer-to-peer connections that fail behind strict NAT, copy `turn-config.example.txt` to the ignored `turn-config.txt`, fill in the relay values, and restart the multiplayer launcher. Never commit relay credentials.
 
 ## Controls
 
