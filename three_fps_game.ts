@@ -102,6 +102,7 @@ declare module "three" {
   const { OutputPass } = await import("three/examples/jsm/postprocessing/OutputPass.js");
   const { AfterimagePass } = await import("three/examples/jsm/postprocessing/AfterimagePass.js");
   const { UnrealBloomPass } = await import("three/examples/jsm/postprocessing/UnrealBloomPass.js");
+  const { FXAAShader } = await import("three/examples/jsm/shaders/FXAAShader.js");
   THREE.Cache.enabled = true;
   RectAreaLightUniformsLib.init();
 
@@ -413,6 +414,12 @@ declare module "three" {
   // from saved settings further down, once localStorage has been read.
   let userBrightness = 1;
   let baseToneMappingExposure = BASE_TONE_MAPPING_EXPOSURE;
+  // Player contrast/saturation (Settings → Video) stack on top of the signature
+  // grade's own contrast()/saturate() as extra chained CSS filter functions —
+  // 1 is a no-op, so the default look is byte-for-byte what applyCinematicSettings
+  // already produces on its own.
+  let userContrast = 1;
+  let userSaturation = 1;
   // Player FOV offset (Settings → Video), added on top of the per-stance FOV.
   let userFovOffset = 0;
 
@@ -1564,6 +1571,12 @@ declare module "three" {
   if (typeof savedSettings?.fovOffset === "number") {
     userFovOffset = Math.max(-10, Math.min(20, savedSettings.fovOffset));
   }
+  if (typeof savedSettings?.contrast === "number") {
+    userContrast = Math.max(0.7, Math.min(1.4, savedSettings.contrast));
+  }
+  if (typeof savedSettings?.saturation === "number") {
+    userSaturation = Math.max(0.7, Math.min(1.4, savedSettings.saturation));
+  }
   const validLoadouts = new Set(Object.values(GUNS));
   // Progression: the loadout is always the starter pistol — every other gun is
   // acquired in-run from the mystery box, so it can no longer be picked here.
@@ -1702,6 +1715,13 @@ declare module "three" {
     // longer forces a resolution cut — its GPU cost is paid in framerate instead.
     enabled: savedSettings?.cinematic !== false,
   };
+  // FXAA (cheap post-process AA, ~0.1ms) is independent of cinematic FX — it
+  // needs the composer too, so ensureCinematicComposer() is shared by both and
+  // builds itself whenever either is enabled. WebGPU has no composer here, so
+  // this only ever applies on the WebGL path (native MSAA covers WebGPU).
+  const antialiasState: any = {
+    enabled: savedSettings?.antialiasing !== false,
+  };
   // Resolved cinematic tuning (the non-shader bits: exposure, chroma, bloom, motion
   // blur, CSS companion). Defaults mirror the built-in grade; applyDevCinematic()
   // overlays the "cinematic" dev-console category on top. Referenced by
@@ -1733,8 +1753,6 @@ declare module "three" {
       "radial-gradient(ellipse 116% 96% at 50% 50%, rgba(0,0,0,0) 30%, rgba(44,22,10,0.34) 66%, rgba(18,8,3,0.78) 100%)",
       // Pastel dream cast — peach top fading to a faint magenta/violet base
       "linear-gradient(176deg, rgba(255,176,138,0.07), rgba(0,0,0,0) 45%, rgba(150,110,180,0.06))",
-      // VHS scan-lines — a touch heavier than before for analogue texture
-      "repeating-linear-gradient(0deg, rgba(0,0,0,0.05) 0 1px, rgba(255,255,255,0.012) 1px 3px)",
     ].join(", "),
     mixBlendMode: "normal",
   });
@@ -2014,6 +2032,7 @@ declare module "three" {
   let cinematicPass = null;
   let afterimagePass = null;
   let bloomPass = null;
+  let fxaaPass = null;
   let darkWaveActive = false;
   // Bloom is inherently a blurred, additive glow composited over the sharp base
   // image — running its internal downsample/blur chain at a lower resolution
@@ -2033,8 +2052,28 @@ declare module "three" {
       Math.max(1, Math.round(window.innerHeight * effRatio * BLOOM_RES_SCALE))
     );
   }
+  function applyFxaaResolution() {
+    if (!fxaaPass) return;
+    const effRatio = basePixelRatio * quality.scale;
+    fxaaPass.material.uniforms["resolution"].value.set(
+      1 / Math.max(1, window.innerWidth * effRatio),
+      1 / Math.max(1, window.innerHeight * effRatio)
+    );
+  }
+  function applyAntialiasSettings() {
+    if (antialiasState.enabled) ensureCinematicComposer();
+    if (fxaaPass) {
+      fxaaPass.enabled = antialiasState.enabled;
+      applyFxaaResolution();
+    }
+  }
+  function setUserAntialiasing(v) {
+    antialiasState.enabled = !!v;
+    applyAntialiasSettings();
+    saveSettings({ antialiasing: antialiasState.enabled });
+  }
   function ensureCinematicComposer() {
-    if (rendererBackend !== "webgl" || composer || !cinematicState.enabled) return;
+    if (rendererBackend !== "webgl" || composer || (!cinematicState.enabled && !antialiasState.enabled)) return;
     try {
       composer = new EffectComposer(renderer);
       const renderPass = new RenderPass(scene, camera);
@@ -2064,24 +2103,32 @@ declare module "three" {
       // Grade + chromatic aberration are one ShaderPass now (see CinematicGradeShader's
       // uChromaOffset/uChromaIntensity) — used to be two full-screen passes.
       cinematicPass = new ShaderPass(CinematicGradeShader);
+      // Cheap edge-smoothing pass (FXAA), independent of cinematic FX. Sits after
+      // the grade so it smooths the final image rather than pre-grade edges.
+      fxaaPass = new ShaderPass(FXAAShader);
       const outputPass = new OutputPass();
       composer.addPass(renderPass);
       composer.addPass(afterimagePass);
       composer.addPass(bloomPass);
       composer.addPass(cinematicPass);
+      composer.addPass(fxaaPass);
       composer.addPass(outputPass);
       composer.setPixelRatio(basePixelRatio * quality.scale);
       composer.setSize(window.innerWidth, window.innerHeight);
       applyBloomResolution();
+      applyFxaaResolution();
       cinematicPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
       applyDevCinematic(); // seed grade/bloom/chroma uniforms from the dev-console category
+      applyAntialiasSettings();
     } catch (e) {
       console.warn('Failed to initialize cinematic postprocessing composer:', e);
       composer = null;
       cinematicPass = null;
       afterimagePass = null;
       bloomPass = null;
+      fxaaPass = null;
       cinematicState.enabled = false;
+      antialiasState.enabled = false;
     }
   }
   ensureCinematicComposer();
@@ -2128,6 +2175,11 @@ declare module "three" {
       // Pulled back to a much lighter touch that still reads as "graded" without
       // dominating the frame.
       : "contrast(1.05) saturate(2.25) brightness(0.80) sepia(0.38) hue-rotate(-7deg)";
+    // Player contrast/saturation stack as additional chained filter functions;
+    // 1/1 is a no-op so this never changes the default look above.
+    if (userContrast !== 1 || userSaturation !== 1) {
+      canvas.style.filter += " contrast(" + userContrast + ") saturate(" + userSaturation + ")";
+    }
     cinematicOverlay.style.opacity = cinematicState.enabled ? "1" : "0";
     for (const toggle of cinematicControls.toggles) toggle.checked = cinematicState.enabled;
     for (const value of cinematicControls.values) value.textContent = cinematicState.enabled ? "ON" : "OFF";
@@ -2286,7 +2338,7 @@ declare module "three" {
       sanitizeWebGPUMaterials(scene);
       webgpuMaterialSanitizeNextRender = false;
     }
-    if (cinematicState.enabled) ensureCinematicComposer();
+    if (cinematicState.enabled || antialiasState.enabled) ensureCinematicComposer();
     if (cinematicPass) {
       cinematicPass.enabled = cinematicState.enabled;
       cinematicPass.uniforms.time.value = performance.now() * 0.001;
@@ -2310,7 +2362,7 @@ declare module "three" {
     // The menu backdrop swaps the CAMERA, never the pipeline: it still goes
     // through the composer when post is on, so every pass is compiled and warm
     // before the first gameplay frame (see cinematicRenderPass).
-    const useComposer = cinematicState.enabled && composer && rendererBackend !== "webgpu";
+    const useComposer = (cinematicState.enabled || antialiasState.enabled) && composer && rendererBackend !== "webgpu";
     if (menuBackdropActive()) {
       if (menuBackdrop.warmFrames < MENU_WARM_FRAMES) {
         menuBackdrop.warmFrames++;
@@ -2345,11 +2397,13 @@ declare module "three" {
       // composer.setSize() just reset bloom back to full resolution — reassert
       // its cheaper internal size (see applyBloomResolution).
       applyBloomResolution();
+      applyFxaaResolution();
     }
     if (cinematicPass) cinematicPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
   }
 
   applyCinematicSettings();
+  applyAntialiasSettings();
   applyRenderScale();
 
   function setCinematicEnabled(enabled, options: any = {}) {
@@ -2404,31 +2458,21 @@ declare module "three" {
     maybeAutoFallbackRenderer();
     maybePerfGovernor();
 
-    // Cinematic's post-FX (bloom/chroma/afterimage — 3-4 full-screen passes) is
-    // GPU fill cost, exactly what this governor reacts to. Beta feedback: players
-    // turn cinematic on for the *look* and don't want it silently undone by a
-    // resolution cut. So while cinematic is enabled, resolution is only allowed
-    // to recover upward, never step down — the FPS hit from cinematic is paid in
-    // framerate, not sharpness. (Sustained hitches still drop scale below, via
-    // recoverFromFrameHitch — that's a stutter safety net, a different problem.)
-    const allowScaleDown = !cinematicState.enabled;
+    // Beta feedback: players don't want render resolution silently cut for
+    // performance — a scale drop should only ever come from an explicit choice
+    // in Settings (setUserRenderScaleCap). This governor is therefore recovery-only:
+    // it can raise scale back toward the user's cap as fps improves, but it must
+    // never lower it. (Other levers — shadows via maybePerfGovernor, the WebGPU→WebGL
+    // fallback — still react to sustained low fps; those aren't resolution.)
     let nextScale = quality.scale;
     if (mobileMode) {
-      // Wide dead-band + gentle, infrequent steps → at most one realloc every
-      // few seconds, and none at all while FPS sits in a comfortable band.
-      if (quality.lastFps < 30) { if (allowScaleDown) nextScale -= 0.12; }
-      else if (quality.lastFps < 45) { if (allowScaleDown) nextScale -= 0.06; }
-      else if (quality.lastFps > 58) nextScale += 0.05;
+      if (quality.lastFps > 58) nextScale += 0.05;
     } else {
-      const heavyFramePenalty = rendererBackend === "webgpu" ? 0.12 : 0.14;
-      if (quality.lastFps < 42) { if (allowScaleDown) nextScale -= lowEndMode ? heavyFramePenalty * 1.15 : heavyFramePenalty; }
-      else if (quality.lastFps < 48) { if (allowScaleDown) nextScale -= lowEndMode ? 0.1 : 0.08; }
-      else if (quality.lastFps < 55) { if (allowScaleDown) nextScale -= lowEndMode ? 0.05 : 0.035; }
       // Recover below the 60Hz vsync cap. requestAnimationFrame cannot report more than
       // ~60fps, so the old `> 61` test never fired: render scale only ever ratcheted
       // down, and one transient hitch left the game permanently blurry. The 55..57 gap
       // is the dead band that keeps this from oscillating.
-      else if (quality.lastFps > 57 && !lowEndMode) nextScale += 0.03;
+      if (quality.lastFps > 57 && !lowEndMode) nextScale += 0.03;
       else if (quality.lastFps > 57 && lowEndMode) nextScale += 0.012;
     }
 
@@ -2529,22 +2573,9 @@ declare module "three" {
     quality.hitchCooldown = 0.45;
     quality.hitchCount++;
 
-    // Same rule as updateAdaptiveQuality's allowScaleDown: while cinematic is on,
-    // its post-FX cost is paid in framerate, not sharpness. Without this guard a
-    // single hitch (shadows are a common trigger — a shadow-casting mesh entering
-    // view, or the autoUpdate shadow-map re-render) would cut render scale here,
-    // and since cinematic's extra passes often keep steady-state fps just under
-    // the 57fps recovery threshold in updateAdaptiveQuality, that cut never
-    // healed back — reading as "cinematic + shadows permanently drops resolution".
-    if (!cinematicState.enabled) {
-      const pressure = rawDt > 0.18 ? 0.18 : rawDt > 0.12 ? 0.13 : 0.08;
-      const nextScale = Math.max(quality.minScale, quality.scale - pressure);
-      if (nextScale < quality.scale - 0.005) {
-        quality.scale = nextScale;
-        applyRenderScale();
-      }
-    }
-
+    // Render scale is player-controlled only (Settings → resolution cap) — a
+    // hitch must never silently drop it. Non-resolution levers (effect count,
+    // particle budget below) still shed load on a hitch.
     const maxEffects = lowEndMode ? 4 : 6;
     while (lightningEffects.length > maxEffects) recycleLightningEffect(lightningEffects.shift());
     // Particles cost fill, not draw calls, so pressure trims the live count
@@ -4574,43 +4605,48 @@ function createLightningEffect() {
       return arm;
     }
 
-    // Per-gun grip offsets in gun-local space (+X = muzzle, +Y = up). Tune in playtest.
+    // Per-gun grip anchors in gun-local space (+X = muzzle, +Y = up). Each
+    // point is on the grip geometry itself: `right` is always the trigger grip
+    // and `left` is a pump/handguard contact when the weapon is two-handed.
+    // Keeping these explicit prevents a hand from hovering under a rail or
+    // clipping through a magazine when the weapon models differ in length.
     const layout = {
       [GUNS.RIFLE]: {
-        right: { pos: { x: -0.1, y: -0.25, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.36, y: -0.1, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.12, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.37, y: -0.03, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.SHOTGUN]: {
-        right: { pos: { x: -0.06, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.36, y: -0.13, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.36, y: -0.01, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.SNIPER]: {
-        right: { pos: { x: -0.1, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
-        left: { pos: { x: 0.12, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.12, y: -0.17, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
+        left: { pos: { x: 0.45, y: -0.01, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.PISTOL]: {
-        right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.0, y: -0.26, z: 0.04 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.07, y: -0.17, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        // The support hand cups the firing hand/frame, never the magazine.
+        left: { pos: { x: -0.02, y: -0.14, z: -0.02 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.SMG]: {
-        right: { pos: { x: -0.08, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.22, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.1, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.32, y: -0.01, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.LMG]: {
-        right: { pos: { x: -0.12, y: -0.26, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.4, y: -0.14, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.24, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.42, y: -0.03, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.DMR]: {
-        right: { pos: { x: -0.1, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
-        left: { pos: { x: 0.3, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.12, y: -0.18, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.5 } },
+        left: { pos: { x: 0.45, y: -0.01, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.AKIMBO]: {
-        right: { pos: { x: -0.08, y: -0.22, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.02, y: -0.24, z: 0.04 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: -0.08, y: -0.2, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: -0.02, y: -0.16, z: -0.02 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
       [GUNS.FLAK]: {
-        right: { pos: { x: -0.08, y: -0.24, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
-        left: { pos: { x: 0.34, y: -0.12, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
+        right: { pos: { x: 0.25, y: -0.1, z: 0.02 }, rot: { x: 0.15, y: -0.25, z: 0.55 } },
+        left: { pos: { x: 0.16, y: -0.19, z: 0.0 }, rot: { x: -0.15, y: 0.25, z: 0.5 } },
       },
     };
     const cfg = layout[gunType] || layout[GUNS.RIFLE];
@@ -5913,6 +5949,10 @@ function createLightningEffect() {
       if (!rawClip) continue;
       let clip = makeInPlaceClipForModel(rawClip, model);
       if (!clip.tracks.length) continue;
+      // "Rifle Run" is the always-aiming two-handed run/sprint pose — it isn't
+      // arm-stripped (the gun needs the real hand pose), so this is the one place
+      // to calm its baked-in torso pump.
+      if (name === "rifleRun") dampenTorsoBounce(clip, TP_TORSO_BOUNCE_RE, 0.5);
       // Unarmed locomotion: drop the swinging arm/hand/shoulder tracks — the
       // upper-body rifle-carry layer below poses the arms instead, so the gun
       // (anchored to the hand midpoint) stays held while walking/sprinting.
@@ -6447,13 +6487,15 @@ function createLightningEffect() {
                           + punch * PUNCH_SPINE_FACTOR + swaySpine, -spineClamp, spineClamp);
 
     const oneHand = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
-    // CLONE-FAITHFUL two-handed: real two-handed guns replicate the clone-NPC pose
-    // 1:1 (updateClonedGhostWeaponPose) — the arms just play the mixamo clip, the
+    // CLONE-FAITHFUL pose: every weapon replicates the clone-NPC pose 1:1
+    // (updateClonedGhostWeaponPose) — the arms just play the mixamo clip, the
     // WHOLE model bends for pitch (updateThirdPersonCharacter), and the gun rotates
     // at the hand-centre. So NONE of the procedural spine-pitch / arm-aim / arm-pitch
-    // below runs for them: that is the "extra stuff" that morphed the arms unnaturally.
-    // One-handed sidearms and unified-FP keep the procedural pose.
-    const twoHandClone = !oneHand && !unifiedFp;
+    // below runs. Sidearms used to get a bespoke one-arm-tucked pose here — that read
+    // as a one-hand-only hold and fought the clone-faithful two-hand grip everything
+    // else uses, so pistols/SMGs/akimbo now take the exact same path as rifles. Only
+    // unified-FP keeps the procedural pose (tight eye-camera clamps, different rig need).
+    const twoHandClone = !unifiedFp;
 
     // Spine leans into the aim direction (applied FIRST so the arm solve below
     // measures the torso-pitched pose). One-handed / unified-FP only.
@@ -6793,21 +6835,20 @@ function createLightningEffect() {
       inspectEnv = Math.max(0, Math.min(riseEnv, fallEnv));
       inspectSpin = Math.sin(t * Math.PI * 2) * inspectEnv;
     }
-    // ONE-HANDED sidearms are parented to the hand (handFit) — they're small and
-    // read as held. TWO-HANDED guns use the clone-NPC DIRECT pose (legacy branch
-    // below): gun at the hand-centre with a fixed forward+pitch rotation, NOT
-    // parented. This is deliberate: a parented rifle SWINGS with the run animation
-    // (the barrel follows the walk-cycle hand instead of the aim), which looked
-    // badly wrong while moving. The direct pose keeps the gun aimed forward at all
-    // times, moving or standing — the clones prove it reads correctly.
-    const gunHandParented = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
+    // Hand-fit parenting is the default for any gun that has been calibrated to a
+    // clean aim pose. One-handed sidearms are the smallest/most obvious case, but
+    // real rifles and shotguns also need to stay attached to the firing hand so the
+    // barrel follows aim instead of drifting to the torso-root during movement.
+    // The root pose is only a fallback for an uncalibrated weapon before the fit is
+    // captured; once the fit exists, the gun should stay in the hand.
+    const gunHandParented = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
+      && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
     // TWO-HANDED clone-faithful path: parented to the body ROOT and posed exactly
     // like updateClonedGhostWeaponPose (hand-centre in root-local space + fixed
-    // rotation). Only for real two-handed guns and NOT in unified-FP (which keeps
-    // its own world-space viewmodel placement in the legacy branch below).
-    const twoHandRootPose = !gunHandParented && !unifiedFpActive;
-    const gunParented = gunHandParented && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
-      && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
+    // rotation). This is only a fallback until a clean hand-fit has been captured;
+    // after calibration, the gun remains attached to the right hand.
+    const twoHandRootPose = !gunHandParented && !unifiedFpActive && !(thirdPerson.weapon?.handFit);
+    const gunParented = gunHandParented;
     if (GUN_IN_HAND && !gunParented && !twoHandRootPose && gun.parent && gun.parent !== scene) scene.attach(gun);
     if (gunParented) {
       if (gun.parent !== thirdPerson.rightHand) thirdPerson.rightHand.add(gun);
@@ -6820,9 +6861,16 @@ function createLightningEffect() {
       // local +X) and level the muzzle. rotateZ was -0.42 which over-lowered the
       // muzzle so one-handed barrels pointed at the FLOOR at level look; reduced so
       // the sidearm points roughly forward when the player looks straight.
-      gun.rotateZ(-0.16);
-      gun.translateX(-0.12);
-      gun.translateY(-0.04);
+      // ONE-HAND ONLY: this was tuned against the pistol's right-hand-anchored
+      // capture pose. Two-handed guns capture from the hand-CENTRE pose instead
+      // (see the gripAnchor branch below), so this offset has no matching geometry
+      // there — applying it to rifles/shotguns dragged the grip off the palm and
+      // is exactly what read as "not centered in the hand".
+      if (GUN_SPECS[currentGun]?.gripStyle === "oneHand") {
+        gun.rotateZ(-0.16);
+        gun.translateX(-0.12);
+        gun.translateY(-0.04);
+      }
       // Subtle additive feel in gun-local space — the hand itself already
       // carries recoil/sway/lag through the arm solve, so keep these small.
       if (thirdPerson.equip > 0) {
@@ -6926,13 +6974,6 @@ function createLightningEffect() {
         .addScaledVector(forward, TWO_HAND_GUN_FWD)
         .addScaledVector(right, TWO_HAND_GUN_RIGHT);
       gripAnchor.y += TWO_HAND_GUN_UP;
-    }
-    // One-handed (pistol) grip: the gun lives in the RIGHT (firing) hand, not the
-    // two-hand centre — with the support hand tucked lower (see the oneHand branch
-    // in applyThirdPersonArmPose), the centre sags and the pistol would float
-    // between the hands instead of sitting in the grip.
-    if (GUN_SPECS[currentGun]?.gripStyle === "oneHand" && !reloadActive) {
-      gripAnchor.lerp(rightHandTmp, 0.85);
     }
     if (reloadActive) {
       // Left-hand cradle point: at the support hand, nudged slightly forward/up so the
@@ -7071,11 +7112,25 @@ function createLightningEffect() {
       thirdPerson.weapon.gun.rotation.x -= tpPackBump * 0.22;
     }
 
-    // Calibration capture (once per weapon): with the legacy pose applied while
-    // AIMING at near-level pitch — arms raised, gun aligned with the view — the
-    // gun's current world transform IS the correct in-hand pose. attach() to the
-    // hand bone converts it to the equivalent hand-local transform, which we
-    // record as this weapon's permanent fit (research: seed-via-attach pattern).
+    // ── IK the hands onto the (now fully-posed) two-handed gun's grip points ──────
+    // Runs last so it reads the final gun transform. Solves each arm so the hand
+    // bone lands on its grip (right = grip/trigger, left = foregrip along barrel).
+    if (useTwoHandIKPose && rightReady && leftReady) {
+      solveTwoHandGripIK(thirdPerson.aimBlend);
+    }
+    }
+
+    // Calibration capture (once per weapon): with whichever pose branch above just
+    // ran (legacy gripAnchor, OR the clone-faithful twoHandRootPose — both produce
+    // a full world transform every frame) applied while AIMING at near-level pitch
+    // — arms raised, gun aligned with the view — the gun's current world transform
+    // IS the correct in-hand pose. attach() to the hand bone converts it to the
+    // equivalent hand-local transform, which we record as this weapon's permanent
+    // fit (research: seed-via-attach pattern). Runs OUTSIDE the if/else chain (not
+    // nested in the legacy branch) because gunHandParented/twoHandRootPose both key
+    // off `!!thirdPerson.weapon.handFit` — nesting this inside one specific branch
+    // would make that branch unreachable pre-calibration and handFit could never be
+    // set (the chicken-and-egg that left every gun un-parented and off-center).
     //
     // CRITICAL — the pose MUST be settled before capture. The always-aim change
     // holds aimBlend≈1 at all times, so the old gate (aimBlend>0.75) fired within
@@ -7087,9 +7142,10 @@ function createLightningEffect() {
     // as the STARTER it calibrates at boot, long after its equip settled to 0.
     // So require equip fully finished (and not inspecting) — capture only from the
     // same clean, settled stance the pistol always got.
-    if (gunHandParented && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
+    const shouldCaptureHandFit = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
         && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3
-        && thirdPerson.equip < 0.02 && !thirdPerson.inspecting) {
+        && thirdPerson.equip < 0.02 && !thirdPerson.inspecting;
+    if (shouldCaptureHandFit) {
       // Deterministic: 3 consecutive stable aiming frames, then capture (the old
       // one-frame |pitch|<0.12 gate could stall for seconds of live play).
       thirdPerson.weapon._fitFrames = (thirdPerson.weapon._fitFrames || 0) + 1;
@@ -7102,13 +7158,6 @@ function createLightningEffect() {
       thirdPerson.weapon._fitFrames = 0;
     }
 
-    // ── IK the hands onto the (now fully-posed) two-handed gun's grip points ──────
-    // Runs last so it reads the final gun transform. Solves each arm so the hand
-    // bone lands on its grip (right = grip/trigger, left = foregrip along barrel).
-    if (useTwoHandIKPose && rightReady && leftReady) {
-      solveTwoHandGripIK(thirdPerson.aimBlend);
-    }
-    }
     const tpMats = thirdPerson.weapon.gun.userData.packMats;
     const tpGlowBase = thirdPerson.weapon.gun.userData.packGlowBase || 0;
     if (tpMats && (tpGlowBase > 0 || tpPackBump > 0)) {
@@ -7569,6 +7618,7 @@ function createLightningEffect() {
       "Maya|base",
       "unknown material type",
       "Vertex has more than 4 skinning weights",
+      "ShininessExponent map is not supported",
     ];
     console.warn = (...args) => {
       const text = args.map(arg => String(arg)).join(" ");
@@ -7860,7 +7910,7 @@ function createLightningEffect() {
         PLAYER_CHARACTER_FBX = gltf.scene;
       } catch (glbErr) {
         console.warn("Pete.glb could not be loaded; trying the original FBX.", glbErr);
-        PLAYER_CHARACTER_FBX = await fbxLoader.loadAsync(new URL(PLAYER_MODEL_PATH, window.location.href).href);
+        PLAYER_CHARACTER_FBX = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(PLAYER_MODEL_PATH, window.location.href).href));
       }
       // FBX2glTF (used to convert Pete's raw FBX into a scale-consistent GLB — see
       // scripts/convert-pete.mjs) dedupes bone names on conversion, turning
@@ -7918,7 +7968,7 @@ function createLightningEffect() {
           console.warn(`${PLAYER_ANIMATION_GLTF_PATHS[key]} could not be loaded; trying FBX animation.`, glbErr);
         }
         if (!clip) {
-          const animFbx = await fbxLoader.loadAsync(new URL(path, window.location.href).href);
+          const animFbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
           clip = animFbx.animations?.[0] ?? null;
         }
         if (clip) PLAYER_CHARACTER_ANIMS[key] = clip;
@@ -7971,7 +8021,7 @@ function createLightningEffect() {
     const entries = Object.entries(ZOMBIE_ANIMATION_PATHS);
     await Promise.all(entries.map(async ([key, path]) => {
       try {
-        const fbx = await fbxLoader.loadAsync(new URL(path, window.location.href).href);
+        const fbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
         const rawClip = fbx.animations?.[0] ?? null;
         if (!rawClip) return;
         // CRITICAL: Mixamo clips carry a Hips.position track in CENTIMETRES (~100),
@@ -8763,22 +8813,26 @@ function createLightningEffect() {
     else                  { enemy.aiPhase = "orbit";  enemy.aiAdvanceMul = 0.5;  enemy.aiLateralMul = 1.0;  enemy.aiRetreat = false; }
   }
 
-  // Null Cherub: void artillery. Holds a bombardment band (~8–15 m) and drifts
+  // Null Cherub: void artillery. Holds a bombardment band (~8–15 m) and weaves
   // laterally while its strikes rain, gives ground when the player closes — UNLESS
   // its EMP is charged, in which case it deliberately holds/advances into point-blank
   // range to bait the player into the blast. Channeling itself halts movement (the
   // mover is skipped while megaBlasting), which reads as a committed casting stance.
+  // The "hold" band used to be near-stationary (advance 0.4) — with nothing else to
+  // do between casts it just sat there, which is what read as boring/inert. It now
+  // keeps closing at a real clip even while holding the band, just with heavy
+  // lateral weave layered on top, so it's still bearing down on the player.
   function updateCherubCombatState(enemy, dist, los, dt) {
     if (!enemy.aggroed) {
-      enemy.aiPhase = "drift"; enemy.aiAdvanceMul = 0.5; enemy.aiLateralMul = 0.3;
+      enemy.aiPhase = "drift"; enemy.aiAdvanceMul = 0.7; enemy.aiLateralMul = 0.4;
       enemy.aiRetreat = false;
       return;
     }
     const empReady = !!enemy.emp && (enemy.empCooldown || 0) <= 0;
-    if (empReady && dist < 7)  { enemy.aiPhase = "bait";     enemy.aiAdvanceMul = 1.15; enemy.aiLateralMul = 0.25; enemy.aiRetreat = false; }
-    else if (dist < 7.5)       { enemy.aiPhase = "fallback"; enemy.aiAdvanceMul = 0.9;  enemy.aiLateralMul = 0.6;  enemy.aiRetreat = los; }
-    else if (dist > 15)        { enemy.aiPhase = "close";    enemy.aiAdvanceMul = 0.95; enemy.aiLateralMul = 0.25; enemy.aiRetreat = false; }
-    else                       { enemy.aiPhase = "hold";     enemy.aiAdvanceMul = 0.4;  enemy.aiLateralMul = 0.85; enemy.aiRetreat = false; }
+    if (empReady && dist < 7)  { enemy.aiPhase = "bait";     enemy.aiAdvanceMul = 1.4;  enemy.aiLateralMul = 0.3;  enemy.aiRetreat = false; }
+    else if (dist < 7.5)       { enemy.aiPhase = "fallback"; enemy.aiAdvanceMul = 0.85; enemy.aiLateralMul = 0.75; enemy.aiRetreat = los; }
+    else if (dist > 15)        { enemy.aiPhase = "close";    enemy.aiAdvanceMul = 1.3;  enemy.aiLateralMul = 0.3;  enemy.aiRetreat = false; }
+    else                       { enemy.aiPhase = "hold";     enemy.aiAdvanceMul = 0.85; enemy.aiLateralMul = 1.0;  enemy.aiRetreat = false; }
   }
 
   // Brain dispatcher — one specialised brain per enemy type.
@@ -9039,11 +9093,51 @@ function createLightningEffect() {
     return inPlaceClip;
   }
 
+  // Mixamo's "Rifle Run" bakes a big vertical spine/chest pump into every stride —
+  // fine for a soldier sprinting flat-out, but at our normal jog pace it reads as
+  // the upper body hopping/jumping instead of running. Halves the torso's
+  // rotational excursion around its own cycle-average pose (legs/arms/hands are
+  // untouched) so the stride stays but the bounce calms down.
+  function dampenTorsoBounce(clip, nodeNameRe, factor = 0.5) {
+    for (const track of clip.tracks) {
+      if (!(track instanceof THREE.QuaternionKeyframeTrack)) continue;
+      const nodeName = getAnimationTrackNodeName(track.name);
+      if (!nodeName || !nodeNameRe.test(nodeName)) continue;
+      const values = track.values;
+      const count = values.length / 4;
+      if (count < 2) continue;
+      // Cheap cycle-average quaternion: sum components then normalize. Valid for
+      // the small periodic oscillation a running spine track has (no risk of the
+      // antipodal-sum cancellation that breaks this for large/varied rotations).
+      let sx = 0, sy = 0, sz = 0, sw = 0;
+      for (let i = 0; i < count; i++) {
+        const o = i * 4;
+        sx += values[o]; sy += values[o + 1]; sz += values[o + 2]; sw += values[o + 3];
+      }
+      const mean = new THREE.Quaternion(sx, sy, sz, sw).normalize();
+      const orig = new THREE.Quaternion();
+      const damped = new THREE.Quaternion();
+      for (let i = 0; i < count; i++) {
+        const o = i * 4;
+        orig.set(values[o], values[o + 1], values[o + 2], values[o + 3]);
+        damped.copy(mean).slerp(orig, 1 - factor);
+        values[o] = damped.x; values[o + 1] = damped.y; values[o + 2] = damped.z; values[o + 3] = damped.w;
+      }
+    }
+  }
+  const TP_TORSO_BOUNCE_RE = /spine|chest/i;
+
   const ENEMY_TYPES = [
     { name: "Siege Drone", hp: 820, speed: 8.2, damage: [8, 12], attackRate: 1.2, color: 0x77cfff, emissive: 0x0a5cff, scale: 1.12, xp: 4, aura: null, angelModel: true, lightning: { range: 18.0, radius: 1.35, damage: [16, 24], strikes: [1, 1], streamInterval: [0.09, 0.15], damageInterval: 0.24, playerBias: 0.95, cooldown: 2.9 }, glow: 1.9 },
     { name: CLONED_GHOST_TYPE_NAME, hp: 270, speed: window.SJM?.config?.ghostSpeed ?? 7.5, damage: [5, 8], attackRate: 1.25, color: 0xff9b47, emissive: 0x7a3010, scale: 1, xp: 9, clonedGhost: true, ranged: { range: 29, cooldown: 0.9, pellets: 1, spread: 0.018, damage: [5, 8], gunType: GUNS.RIFLE, burst: [1, 2], burstGap: 0.12, aimJitter: 0.3, lead: 0.09 }, glow: 1.05 },
     { name: "Blink Seraph", hp: 560, speed: 4.8, damage: [7, 11], attackRate: 1.35, color: 0xb28cff, emissive: 0x6e31ff, scale: 0.96, xp: 6, angelModel: true, variant: "blink", lightning: { range: 10.8, radius: 0.95, damage: [10, 14], strikes: [1, 1], streamInterval: [0.1, 0.17], damageInterval: 0.28, playerBias: 0.60 }, teleport: { cooldown: 6, minRange: 4.8, maxRange: 8.2 }, glow: 1.6 },
-    { name: "Null Cherub", hp: 700, speed: 3.5, damage: [5, 8], attackRate: 1.8, color: 0x62ffd6, emissive: 0x00aa88, scale: 1.04, xp: 7, angelModel: true, variant: "null", emp: { cooldown: 7, radius: 4.4, damage: [13, 18], staminaDamage: 34 }, megaBlast: { range: 24, duration: 3.2, cooldown: 6, damagePerSecond: [13, 18], staminaDamagePerSecond: 18, damageInterval: 0.18 }, glow: 1.45 },
+    // Speed bumped from the original 3.5 — by far the slowest thing in the game
+    // (Drone 8.2, Ghost 7.5, Zombie 6.5, even Seraph 4.8) meant it could be kited
+    // by just backpedaling, which combined with its passive hold/fallback AI and
+    // the lowest-intensity movement profile in getDroneAnimProfile made it read as
+    // an inert statue between casts. EMP/megaBlast cooldowns trimmed too so the
+    // player faces its kit more often instead of standing around waiting it out.
+    { name: "Null Cherub", hp: 700, speed: 5.6, damage: [5, 8], attackRate: 1.8, color: 0x62ffd6, emissive: 0x00aa88, scale: 1.04, xp: 7, angelModel: true, variant: "null", emp: { cooldown: 5.5, radius: 4.4, damage: [13, 18], staminaDamage: 34 }, megaBlast: { range: 24, duration: 3.2, cooldown: 4.6, damagePerSecond: [13, 18], staminaDamagePerSecond: 18, damageInterval: 0.18 }, glow: 1.45 },
     // Melee zombie — no lightning/ranged/emp, so the generic melee system (dist ≤ 1.28,
     // 0.28s wind-up) drives its attack. Skinned Mixamo rig via modules/zombie_character.js.
     { name: "Zombie", hp: 240, speed: 6.5, damage: [11, 17], attackRate: 0.55, color: 0x7a8a55, emissive: 0x1d2a10, scale: 1.0, xp: 5, zombieModel: true, glow: 0.6 },
@@ -9106,7 +9200,11 @@ function createLightningEffect() {
     if (typeName === "Siege Drone") return { spinMul: 0.34, wobbleAmp: 0.01, strafe: 0.05, zigzagAmp: 0.018, zigzagSpeed: 1.0, orbit: 0.07, orbitRange: 7.0, lungeBoost: 0.5, speedWaveAmp: 0.02, hoverBase: 1.02 };
     if (typeName === CLONED_GHOST_TYPE_NAME) return { spinMul: 0.1, wobbleAmp: 0.0, strafe: 0.06, zigzagAmp: 0.022, zigzagSpeed: 0.6, orbit: 0.04, orbitRange: 3.5, lungeBoost: 0.8, speedWaveAmp: 0.03, hoverBase: 0 };
     if (typeName === "Blink Seraph") return { spinMul: 0.92, wobbleAmp: 0.04, strafe: 0.5, zigzagAmp: 0.034, zigzagSpeed: 1.72, orbit: 0.58, orbitRange: 10.4, lungeBoost: 0.2, speedWaveAmp: 0.06, hoverBase: 1.08 };
-    if (typeName === "Null Cherub") return { spinMul: 0.34, wobbleAmp: 0.015, strafe: 0.16, zigzagAmp: 0.01, zigzagSpeed: 0.78, orbit: 0.14, orbitRange: 6.1, lungeBoost: 0.045, speedWaveAmp: 0.012, hoverBase: 0.98 };
+    // Was the lowest-intensity profile in this table (strafe 0.16, orbit 0.14,
+    // lungeBoost 0.045 vs. the Seraph's 0.5/0.58/0.2) — it barely moved between
+    // casts and read as static/boring. Brought up closer to the Seraph's energy
+    // so it keeps weaving and closing instead of hovering in place.
+    if (typeName === "Null Cherub") return { spinMul: 0.5, wobbleAmp: 0.026, strafe: 0.34, zigzagAmp: 0.024, zigzagSpeed: 1.15, orbit: 0.32, orbitRange: 8.2, lungeBoost: 0.16, speedWaveAmp: 0.032, hoverBase: 1.02 };
     // Zombie: relentless straight-ahead shamble — minimal strafe/orbit, no hover.
     if (typeName === "Zombie") return { spinMul: 0.1, wobbleAmp: 0.0, strafe: 0.05, zigzagAmp: 0.022, zigzagSpeed: 0.55, orbit: 0.04, orbitRange: 4.5, lungeBoost: 0.12, speedWaveAmp: 0.03, hoverBase: 0 };
     return { spinMul: 0.34, wobbleAmp: 0.024, strafe: 0.035, zigzagAmp: 0.008, zigzagSpeed: 0.72, orbit: 0.055, orbitRange: 11.2, lungeBoost: 0.055, speedWaveAmp: 0.014, hoverBase: 1.02 };
@@ -12266,7 +12364,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function applyCoopTargetDamage(targetInfo, amount, options: any = {}) {
     if (targetInfo && targetInfo.local === false && isCoopHost() && targetInfo.id) {
-      net.send({
+      const msg: any = {
         t: "edamage",
         id: myNetId,
         seq: nextNetSeq(),
@@ -12274,7 +12372,14 @@ async function spawnEnemies(wave, options: any = {}) {
         target: targetInfo.id,
         dmg: +Math.max(0, amount || 0).toFixed(2),
         stamina: +Math.max(0, options.staminaDamage || 0).toFixed(2),
-      });
+      };
+      // Attacker/strike position, so the guest's damage vignette can point back at the
+      // source instead of always flashing dead-center for host-authoritative hits.
+      if (Number.isFinite(options.sx) && Number.isFinite(options.sz)) {
+        msg.ex = +options.sx.toFixed(2);
+        msg.ez = +options.sz.toFixed(2);
+      }
+      net.send(msg);
       return false;
     }
     damagePlayer(amount, options);
@@ -12327,12 +12432,12 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   // Shared "the player just got zapped" feedback.
-  function wardenAttackHitFeedback(targetInfo, shake) {
+  function wardenAttackHitFeedback(targetInfo, shake, sx, sz) {
     if (targetInfo && targetInfo.local === false) return;
     cameraFX.damageShake = Math.min(1, cameraFX.damageShake + shake);
     player.killStreak = 0;
     updateStreak();
-    showDamageFlash();
+    showDamageFlash(Number.isFinite(sx) && Number.isFinite(sz) ? { dir: computeDamageDir(sx, sz) } : {});
     sfxDamage();
     if (player.hp <= 0 && !player.unlimitedHealth) endGame("dead");
   }
@@ -12394,8 +12499,8 @@ async function spawnEnemies(wave, options: any = {}) {
       if (hitDist < radius) {
         const damageT = 1 - hitDist / radius;
         const dmg = (spec.damage[0] + Math.floor(Math.random() * (spec.damage[1] - spec.damage[0] + 1))) * (0.9 + damageT * 0.7);
-        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 16 * damageT });
-        if (localHit) wardenAttackHitFeedback(targetInfo, 0.7 + damageT * 0.5);
+        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 16 * damageT, sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
+        if (localHit) wardenAttackHitFeedback(targetInfo, 0.7 + damageT * 0.5, enemy.mesh.position.x, enemy.mesh.position.z);
         enemy.lightningDamageTimer = spec.damageInterval ?? 0.4;
       }
     }
@@ -12433,9 +12538,9 @@ async function spawnEnemies(wave, options: any = {}) {
       if (hitDist < novaRadius) {
         const damageT = 1 - hitDist / novaRadius;
         const dmg = (spec.damage[0] + Math.floor(Math.random() * (spec.damage[1] - spec.damage[0] + 1))) * (0.5 + damageT * 0.9);
-        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 30 * damageT });
+        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 30 * damageT, sx: cx, sz: cz });
         if (localHit) {
-          wardenAttackHitFeedback(targetInfo, 0.85 + damageT * 0.55);
+          wardenAttackHitFeedback(targetInfo, 0.85 + damageT * 0.55, cx, cz);
           // Knockback: shove the player straight away from the Warden. The smoothed
           // player velocity integrates the impulse, so it reads as a real blast.
           const push = 6 + damageT * 4;
@@ -12531,9 +12636,9 @@ async function spawnEnemies(wave, options: any = {}) {
       const hd = Math.hypot(px - s.x, pz - s.z);
       if (hd < 2.2) {
         const dmg = (24 + Math.random() * 10) * (0.6 + (1 - hd / 2.2) * 0.5);
-        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 14 });
+        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 14, sx: s.x, sz: s.z });
         if (localHit) {
-          wardenAttackHitFeedback(targetInfo, 0.8);
+          wardenAttackHitFeedback(targetInfo, 0.8, s.x, s.z);
           if (player.hp <= 0 && !player.unlimitedHealth) { endGame("dead"); return; }
         }
       } else if (hd < 8) {
@@ -12625,10 +12730,10 @@ async function spawnEnemies(wave, options: any = {}) {
       const hd = Math.hypot(px - enemy.mesh.position.x, pz - enemy.mesh.position.z);
       if (hd < 2.0) {
         const dmg = 14 + Math.random() * 6;
-        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 18 });
+        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: 18, sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
         if (localHit) {
           cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.5);
-          showDamageFlash({ opacity: 0.6, duration: 0.3, danger: true });
+          showDamageFlash({ opacity: 0.6, duration: 0.3, danger: true, dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
           if (player.hp <= 0 && !player.unlimitedHealth) { endGame("dead"); return true; }
         }
       }
@@ -12787,12 +12892,12 @@ async function spawnEnemies(wave, options: any = {}) {
       if (hitDist < strikeRadius) {
         const dr = spec.damagePerSecond || [12, 16];
         const dmg = (dr[0] + Math.random() * Math.max(0, dr[1] - dr[0])) * (0.55 + (1 - hitDist / strikeRadius) * 0.5);
-        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: (spec.staminaDamagePerSecond || 0) * 0.22 });
+        const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: (spec.staminaDamagePerSecond || 0) * 0.22, sx: sxp, sz: szp });
         if (localHit) {
           cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.42);
           player.killStreak = 0;
           updateStreak();
-          showDamageFlash({ opacity: 0.82, duration: 0.36, danger: true });
+          showDamageFlash({ opacity: 0.82, duration: 0.36, danger: true, dir: computeDamageDir(sxp, szp) });
           if (player.hp <= 0 && !player.unlimitedHealth) { endGame("dead"); return true; }
         }
       }
@@ -12843,7 +12948,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (dist <= spec.radius && clearBlastPath) {
       const damageT = 1 - dist / spec.radius;
       const dmg = (spec.damage[0] + Math.floor(Math.random() * (spec.damage[1] - spec.damage[0] + 1))) * (0.55 + damageT * 0.65);
-      const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: spec.staminaDamage * (0.45 + damageT * 0.75) });
+      const localHit = applyCoopTargetDamage(targetInfo, dmg, { staminaDamage: spec.staminaDamage * (0.45 + damageT * 0.75), sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
       if (localHit) {
         // NULL debuff: sprint and reload are disabled for 2.5s (checked in the
         // movement + reload code) — the Cherub un-equips you, it doesn't out-DPS you.
@@ -12851,7 +12956,7 @@ async function spawnEnemies(wave, options: any = {}) {
         cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.46 + damageT * 0.34);
         player.killStreak = 0;
         updateStreak();
-        showDamageFlash({ opacity: 0.5, duration: 0.4, danger: true });
+        showDamageFlash({ opacity: 0.5, duration: 0.4, danger: true, dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
         sfxDamage();
         addKillFeed("NULL FIELD — SYSTEMS SUPPRESSED");
         if (player.hp <= 0 && !player.unlimitedHealth) endGame("dead");
@@ -13149,12 +13254,12 @@ async function spawnEnemies(wave, options: any = {}) {
       const playerGunType = spec.gunType || GUNS.RIFLE;
       const playerBulletDamage = allGuns[playerGunType]?.damage ?? GUN_SPECS[playerGunType]?.damage ?? GUN_SPECS[GUNS.RIFLE].damage;
       const damage = playerBulletDamage / 10;
-      const localHit = applyCoopTargetDamage(targetInfo, damage);
+      const localHit = applyCoopTargetDamage(targetInfo, damage, { sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
       if (localHit) {
         cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.14);
         player.killStreak = 0;
         updateStreak();
-        showDamageFlash({ opacity: 0.58, duration: 0.18, danger: true });
+        showDamageFlash({ opacity: 0.58, duration: 0.18, danger: true, dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
         sfxDamage();
         if (player.hp <= 0 && !player.unlimitedHealth) endGame("dead");
       }
@@ -13220,12 +13325,12 @@ async function spawnEnemies(wave, options: any = {}) {
     }
 
     if (totalDamage > 0) {
-      const localHit = applyCoopTargetDamage(targetInfo, totalDamage);
+      const localHit = applyCoopTargetDamage(targetInfo, totalDamage, { sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
       if (localHit) {
         cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.38);
         player.killStreak = 0;
         updateStreak();
-        showDamageFlash({ opacity: 0.72, duration: 0.24, danger: true });
+        showDamageFlash({ opacity: 0.72, duration: 0.24, danger: true, dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
         sfxDamage();
         if (player.hp <= 0 && !player.unlimitedHealth) endGame("dead");
       }
@@ -14786,6 +14891,18 @@ async function spawnEnemies(wave, options: any = {}) {
     saveSettings({ fovOffset: userFovOffset }); // picked up by updateCameraFX
   }
 
+  function setUserContrast(v) {
+    userContrast = Math.max(0.7, Math.min(1.4, v));
+    applyCinematicSettings();
+    saveSettings({ contrast: userContrast });
+  }
+
+  function setUserSaturation(v) {
+    userSaturation = Math.max(0.7, Math.min(1.4, v));
+    applyCinematicSettings();
+    saveSettings({ saturation: userSaturation });
+  }
+
   function currentRendererPref() {
     try {
       const v = localStorage.getItem("rb_renderer");
@@ -14882,6 +14999,33 @@ async function spawnEnemies(wave, options: any = {}) {
     const syncs: Array<() => void> = [];
 
     // ── Video ──────────────────────────────────────────────────────────────
+    // Bundles the existing individual levers rather than adding a parallel
+    // "low quality" code path elsewhere — toggling it just drives the same
+    // setters the other rows use, so it can never drift out of sync with them.
+    let performanceModeOn = !!savedSettings?.performanceMode;
+    syncs.push(bindSettingChoice("opt-perfmode",
+      () => (performanceModeOn ? "on" : "off"),
+      value => {
+        performanceModeOn = value === "on";
+        saveSettings({ performanceMode: performanceModeOn });
+        if (performanceModeOn) {
+          setUserRenderScaleCap(0.65);
+          setUserAntialiasing(false);
+          if (cinematicState.enabled && cinematicCheckbox) {
+            cinematicCheckbox.checked = false;
+            cinematicCheckbox.dispatchEvent(new Event("change"));
+          }
+        } else {
+          setUserRenderScaleCap(1);
+          setUserAntialiasing(true);
+          if (!cinematicState.enabled && cinematicCheckbox) {
+            cinematicCheckbox.checked = true;
+            cinematicCheckbox.dispatchEvent(new Event("change"));
+          }
+        }
+        syncSettingsControls();
+      }));
+
     syncs.push(bindSettingChoice("opt-renderer", currentRendererPref, value => {
       try { localStorage.setItem("rb_renderer", value); localStorage.removeItem("rb_force_webgl"); } catch (_) {}
       const note = document.getElementById("settings-note");
@@ -14897,6 +15041,16 @@ async function spawnEnemies(wave, options: any = {}) {
     syncs.push(bindSettingSlider("opt-brightness",
       () => Math.round(userBrightness * 100),
       pct => setUserBrightness(pct / 100),
+      pct => pct + "%"));
+
+    syncs.push(bindSettingSlider("opt-contrast",
+      () => Math.round(userContrast * 100),
+      pct => setUserContrast(pct / 100),
+      pct => pct + "%"));
+
+    syncs.push(bindSettingSlider("opt-saturation",
+      () => Math.round(userSaturation * 100),
+      pct => setUserSaturation(pct / 100),
       pct => pct + "%"));
 
     syncs.push(bindSettingSlider("opt-fov",
@@ -14922,6 +15076,10 @@ async function spawnEnemies(wave, options: any = {}) {
       () => (perfOverlay.visible ? "on" : "off"),
       value => { if ((value === "on") !== perfOverlay.visible) perfOverlay.toggle(); }));
 
+    syncs.push(bindSettingChoice("opt-aa",
+      () => (antialiasState.enabled ? "on" : "off"),
+      value => setUserAntialiasing(value === "on")));
+
     // ── Audio ──────────────────────────────────────────────────────────────
     syncs.push(bindSettingSlider("opt-vol-master",
       () => Math.round(masterVolume * 100),
@@ -14941,12 +15099,17 @@ async function spawnEnemies(wave, options: any = {}) {
 
     // ── Reset ──────────────────────────────────────────────────────────────
     document.getElementById("settingsResetBtn")?.addEventListener("click", () => {
+      performanceModeOn = false;
+      saveSettings({ performanceMode: false });
       setUserRenderScaleCap(1);
       setUserBrightness(1);
+      setUserContrast(1);
+      setUserSaturation(1);
       setUserFovOffset(0);
       setMasterVolume(1);
       for (const cat of AUDIO_CATEGORIES) setCategoryVolume(cat, 1);
       setMuteWhenUnfocused(false);
+      setUserAntialiasing(true);
       if (perfOverlay.visible) perfOverlay.toggle();
       if (hud.sensSlider) {
         hud.sensSlider.value = "1.0";
@@ -18154,9 +18317,9 @@ async function spawnEnemies(wave, options: any = {}) {
           if (player.auraDamageTick <= 0) {
             player.auraDamageTick = 0.34;
             const auraDamage = auraTypeMul * (0.55 + auraT * 0.95);
-          const localHit = applyCoopTargetDamage(enemyTarget, auraDamage);
+          const localHit = applyCoopTargetDamage(enemyTarget, auraDamage, { sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
           if (localHit) {
-            showDamageFlash();
+            showDamageFlash({ dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
             if (player.hp <= 0 && !player.unlimitedHealth) {
               endGame("dead");
               return;
@@ -18506,12 +18669,12 @@ async function spawnEnemies(wave, options: any = {}) {
             enemy.attackCooldown = enemy.attackRate;
             enemy.attackPulse = 1;
             const dmg = enemy.damage[0] + Math.floor(Math.random() * (enemy.damage[1] - enemy.damage[0] + 1));
-            const localHit = applyCoopTargetDamage(enemyTarget, dmg);
+            const localHit = applyCoopTargetDamage(enemyTarget, dmg, { sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
             if (localHit) {
               cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.55);
               player.killStreak = 0;
               updateStreak();
-              showDamageFlash();
+              showDamageFlash({ dir: computeDamageDir(enemy.mesh.position.x, enemy.mesh.position.z) });
               sfxDamage();
               if (player.hp <= 0 && !player.unlimitedHealth) {
                 endGame("dead");
@@ -18751,15 +18914,23 @@ async function spawnEnemies(wave, options: any = {}) {
     if (weaponAnim.baseSlideRot) weapon.slide.rotation.copy(weaponAnim.baseSlideRot);
     restoreWeaponRigAnimParts(weapon, "animBase");
 
+    // Per-category ADS pose: sniper scopes (gun vanishes into the eye), shotgun
+    // keeps its own bucket, and sidearms (pistol/SMG/akimbo) get a dedicated
+    // close-to-eye bucket instead of reusing the rifle's shoulder-stock offsets —
+    // a pistol raised to eye level sits centered and closer to camera (larger z),
+    // with far less lateral/roll offset than a two-handed long gun.
+    const oneHandAds = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
     const aimPose = currentGun === GUNS.SNIPER
       ? { x: 0, y: 0, z: 0, ry: 0, rz: 0 }
       : currentGun === GUNS.SHOTGUN
         ? { x: -0.045, y: 0.04, z: 0.12, ry: -0.045, rz: -0.015 }
-        : { x: -0.055, y: 0.045, z: 0.14, ry: -0.055, rz: -0.015 };
+        : oneHandAds
+          ? { x: -0.015, y: 0.058, z: 0.24, ry: -0.015, rz: -0.006 }
+          : { x: -0.055, y: 0.045, z: 0.14, ry: -0.055, rz: -0.015 };
     weapon.gun.position.x += aimBlend * aimPose.x;
     weapon.gun.position.y += aimBlend * aimPose.y;
     weapon.gun.position.z += aimBlend * aimPose.z;
-    weapon.gun.rotation.x -= pitch.rotation.x * (currentGun === GUNS.SNIPER ? 0.92 : currentGun === GUNS.SHOTGUN ? 0.78 : 0.88) * (0.45 + aimBlend * 0.55);
+    weapon.gun.rotation.x -= pitch.rotation.x * (currentGun === GUNS.SNIPER ? 0.92 : currentGun === GUNS.SHOTGUN ? 0.78 : oneHandAds ? 0.7 : 0.88) * (0.45 + aimBlend * 0.55);
     weapon.gun.position.y += pitch.rotation.x * 0.06;
     weapon.gun.position.z -= Math.abs(pitch.rotation.x) * 0.04;
     weapon.gun.rotation.y += aimBlend * aimPose.ry;
@@ -19117,8 +19288,8 @@ async function spawnEnemies(wave, options: any = {}) {
       chip.title = GUN_SPECS[gunType]?.name || gunType;
       chip.style.cssText =
         "display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:16px;" +
-        "padding:0 5px;border-radius:2px;border:1px solid rgba(120,150,170,0.28);" +
-        "background:rgba(10,18,26,0.6);color:#5c7480;transition:color .15s,background .15s,border-color .15s;";
+        "padding:0 5px;border:1px solid rgba(120,190,240,0.22);" +
+        "background:rgba(8,14,22,0.6);color:#5c7480;transition:color .15s,background .15s,border-color .15s;";
       weaponSlotsRow.appendChild(chip);
     }
     endBlock.appendChild(weaponSlotsRow);
@@ -19136,14 +19307,14 @@ async function spawnEnemies(wave, options: any = {}) {
       const owned = ownsWeapon(g);
       const equipped = g === currentGun;
       if (equipped) {
-        chip.style.color = "#06121a";
-        chip.style.background = "linear-gradient(180deg,#67e8f9,#22d3ee)";
-        chip.style.borderColor = "#22d3ee";
-        chip.style.boxShadow = "0 0 9px rgba(34,211,238,0.55)";
+        chip.style.color = "#04121a";
+        chip.style.background = "linear-gradient(180deg,#9fdcff,#66c8ff)";
+        chip.style.borderColor = "#66c8ff";
+        chip.style.boxShadow = "0 0 9px rgba(102,200,255,0.55)";
       } else if (owned) {
         chip.style.color = "#c8dbe6";
-        chip.style.background = "rgba(14,30,40,0.78)";
-        chip.style.borderColor = "rgba(103,232,249,0.4)";
+        chip.style.background = "rgba(14,26,38,0.78)";
+        chip.style.borderColor = "rgba(120,190,240,0.4)";
         chip.style.boxShadow = "none";
       } else {
         chip.style.color = "#4a5c66";
@@ -19789,6 +19960,20 @@ async function spawnEnemies(wave, options: any = {}) {
     hud.hitMarker?.classList.add("active");
   }
 
+  // Player-relative direction for the damage vignette: [right(-1..1), forward(-1..1)]
+  // relative to yaw facing (same forward/right convention used by movement/aim
+  // elsewhere in this file), so the flash leans toward the side the hit came from.
+  function computeDamageDir(sx, sz) {
+    const dx = sx - yaw.position.x;
+    const dz = sz - yaw.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.05) return null;
+    const nx = dx / dist, nz = dz / dist;
+    const fx = -Math.sin(yaw.rotation.y), fz = -Math.cos(yaw.rotation.y);
+    const rx = Math.cos(yaw.rotation.y), rz = -Math.sin(yaw.rotation.y);
+    return [nx * rx + nz * rz, nx * fx + nz * fz];
+  }
+
   function showDamageFlash(options: any = {}) {
     const duration = options.duration ?? 0.22;
     const opacity = options.opacity ?? 1;
@@ -20319,7 +20504,8 @@ async function spawnEnemies(wave, options: any = {}) {
     cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.42);
     player.killStreak = 0;
     updateStreak();
-    showDamageFlash({ opacity: 0.72, duration: 0.24, danger: true });
+    const dir = Number.isFinite(msg.ex) && Number.isFinite(msg.ez) ? computeDamageDir(msg.ex, msg.ez) : null;
+    showDamageFlash({ opacity: 0.72, duration: 0.24, danger: true, dir });
     sfxDamage();
     updateHUD(0);
     if (player.hp <= 0 && !player.unlimitedHealth) endGame("dead");
@@ -21283,7 +21469,12 @@ async function spawnEnemies(wave, options: any = {}) {
   function applyPvpDamage(dmg, fromId, hs) {
     if (gameMode !== "pvp" || player.pvpDead || player.unlimitedHealth) return;
     player.hp -= dmg;
-    player.hurtTimer = Math.max(player.hurtTimer, 0.5);
+    cameraFX.damageShake = Math.min(1, cameraFX.damageShake + (hs ? 0.5 : 0.32));
+    const attacker = remotePlayers.get(fromId);
+    const ax = attacker?.root?.position?.x ?? attacker?.target?.x;
+    const az = attacker?.root?.position?.z ?? attacker?.target?.z;
+    const dir = Number.isFinite(ax) && Number.isFinite(az) ? computeDamageDir(ax, az) : null;
+    showDamageFlash({ opacity: hs ? 0.82 : 0.62, duration: hs ? 0.32 : 0.22, danger: true, dir });
     sfxDamage();
     if (player.hp <= 0) {
       beginNetworkedPlayerDeath(PVP_RESPAWN_SECONDS, "YOU WERE FRAGGED");
@@ -21536,6 +21727,8 @@ async function spawnEnemies(wave, options: any = {}) {
     const reloadT = thirdPerson.reloadTimer > 0 ? +(1 - thirdPerson.reloadTimer / dur).toFixed(2) : 0;
     const wp = new THREE.Vector3();
     const at = (o) => { if (!o) return null; o.getWorldPosition(wp); return { x: +wp.x.toFixed(2), y: +wp.y.toFixed(2), z: +wp.z.toFixed(2) }; };
+    const gun = w && w.gun;
+    const parentName = gun && gun.parent ? (gun.parent.name || gun.parent.type || "unknown") : null;
     return {
       reloading: thirdPerson.reloadTimer > 0,
       reloadT,
@@ -21547,8 +21740,10 @@ async function spawnEnemies(wave, options: any = {}) {
       leftHand: at(thirdPerson.leftHand),
       rightUpperArm: at(thirdPerson.aimBones?.rightUpperArm),
       leftUpperArm: at(thirdPerson.aimBones?.leftUpperArm),
-      gunPos: at(w && w.gun),
+      gunPos: at(gun),
       gun: currentGun,
+      gunParent: parentName,
+      handFit: !!(w && w.handFit),
     };
   };
 
@@ -21843,7 +22038,7 @@ async function spawnEnemies(wave, options: any = {}) {
       player.grounded = false;
       const died = damagePlayer(GRENADE_PLAYER_DAMAGE * falloff);
       cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.7 * falloff);
-      showDamageFlash();
+      showDamageFlash({ dir: computeDamageDir(x, z) });
       sfxDamage();
       if (died) endGame("dead");
     }
@@ -22681,6 +22876,28 @@ async function spawnEnemies(wave, options: any = {}) {
   });
 
   window.addEventListener("keyup", e => keys.delete(e.code));
+
+  // ── Mouse-wheel weapon cycling ───────────────────────────────────────────────
+  // Cycles through OWNED guns only (locked slots are skipped, same gate switchGun
+  // already enforces) in roster order, wrapping around. passive:false + preventDefault
+  // stops the page itself from scrolling while the pointer is locked in-game.
+  let wheelSwitchAccum = 0;
+  window.addEventListener("wheel", e => {
+    if (game.state !== "playing" || !document.pointerLockElement) return;
+    e.preventDefault();
+    wheelSwitchAccum += e.deltaY;
+    const step = 60; // ~one notch on most mice/trackpads
+    while (Math.abs(wheelSwitchAccum) >= step) {
+      const dir = wheelSwitchAccum > 0 ? 1 : -1;
+      wheelSwitchAccum -= dir * step;
+      const roster = Object.values(GUNS);
+      const owned = roster.filter(ownsWeapon);
+      if (owned.length < 2) continue;
+      const idx = owned.indexOf(currentGun);
+      const next = owned[(idx + dir + owned.length) % owned.length];
+      switchGun(next);
+    }
+  }, { passive: false });
 
   const clickToPlayEl = document.getElementById("click-to-play");
 

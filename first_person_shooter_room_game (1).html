@@ -158,6 +158,17 @@
     z-index: 5;
     isolation: isolate;
   }
+  /* Light blue HUD-wide tint — a soft screen-blend wash over every readout so the
+     whole HUD reads as one cohesive cool-blue system (Halo-style), not per-panel
+     tweaks that drift out of sync as new HUD pieces get added. */
+  #hud::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(120, 190, 240, 0.05);
+    mix-blend-mode: screen;
+    pointer-events: none;
+  }
 
   /* ── Crosshair ── */
   #xhair {
@@ -246,9 +257,9 @@
     font-size: 10px;
     letter-spacing: 0.18em;
     color: var(--text-hi);
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    border-top: 2px solid var(--accent);
+    background: rgba(10,18,30,0.94);
+    border: 1px solid rgba(120,190,240,0.28);
+    border-top: 2px solid var(--halo-glow, var(--accent));
     border-radius: var(--r-sm);
     padding: 6px 22px;
     backdrop-filter: blur(8px);
@@ -274,9 +285,9 @@
     letter-spacing: 0.22em;
     padding: 4px 14px;
     border-radius: var(--r-sm);
-    background: var(--surface);
-    border: 1px solid var(--line);
-    color: var(--accent-hot);
+    background: rgba(10,18,30,0.94);
+    border: 1px solid rgba(120,190,240,0.3);
+    color: var(--halo-glow, var(--accent-hot));
     text-transform: uppercase;
     backdrop-filter: blur(6px);
   }
@@ -286,9 +297,9 @@
     letter-spacing: 0.18em;
     padding: 4px 16px;
     border-radius: var(--r-sm);
-    background: linear-gradient(90deg, rgba(8,12,18,0.72), rgba(16,22,32,0.78), rgba(8,12,18,0.72));
-    border: 1px solid var(--line);
-    color: var(--accent-hot);
+    background: linear-gradient(90deg, rgba(10,18,30,0.72), rgba(20,34,52,0.78), rgba(10,18,30,0.72));
+    border: 1px solid rgba(120,190,240,0.3);
+    color: var(--halo-glow, var(--accent-hot));
     text-transform: uppercase;
     backdrop-filter: blur(6px);
   }
@@ -418,9 +429,9 @@
     opacity: 0.97;
     background: transparent;
     box-shadow:
-      0 0 0 1px rgba(34,211,238,0.10),
+      0 0 0 1px rgba(120,190,240,0.20),
       0 12px 30px rgba(0,0,0,0.45),
-      0 0 22px rgba(34,211,238,0.10);
+      0 0 22px rgba(102,200,255,0.12);
   }
 
   /* ═══════════════════════════════════════════════════
@@ -434,8 +445,8 @@
     justify-content: space-between;
     padding: 0 28px 20px;
     background: linear-gradient(to top,
-      rgba(0,0,0,0.92) 0%,
-      rgba(0,0,0,0.50) 50%,
+      rgba(2,6,14,0.92) 0%,
+      rgba(4,10,20,0.50) 50%,
       transparent 100%);
     pointer-events: none;
     gap: 16px;
@@ -447,9 +458,9 @@
     gap: 6px;
     min-width: 190px;
     padding: 13px 18px 15px;
-    background: rgba(8,12,18,0.88);
-    border: 1px solid var(--line-strong);
-    border-top: 2px solid var(--accent);
+    background: rgba(12,20,34,0.88);
+    border: 1px solid rgba(120,190,240,0.25);
+    border-top: 2px solid var(--halo-glow, var(--accent));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
@@ -470,7 +481,7 @@
   .hud-label {
     font-size: 9.5px;
     letter-spacing: 0.22em;
-    color: var(--accent-dim);
+    color: var(--halo-ink-dim, var(--accent-dim));
     text-transform: uppercase;
     font-weight: 600;
   }
@@ -479,9 +490,9 @@
     font-family: var(--font-display);
     font-size: 30px;
     font-weight: 800;
-    color: var(--text-hi);
+    color: var(--halo-hot, var(--text-hi));
     line-height: 1;
-    text-shadow: 0 0 18px rgba(34,211,238,0.20), 0 1px 2px rgba(0,0,0,0.55);
+    text-shadow: 0 0 18px var(--halo-glow-soft, rgba(34,211,238,0.20)), 0 1px 2px rgba(0,0,0,0.55);
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
   }
@@ -504,10 +515,12 @@
     to   { opacity: 0.55; }
   }
 
+  /* Segmented Halo-style meter: a tick every 10% reads as discrete shield
+     cells rather than a smooth progress bar. */
   #hp-bar-wrap {
-    width: 152px; height: 6px;
+    width: 152px; height: 7px;
     background: rgba(255,255,255,0.06);
-    border-radius: 3px;
+    border: 1px solid rgba(120,190,240,0.25);
     margin-top: 7px;
     overflow: hidden;
     position: relative;
@@ -518,6 +531,12 @@
     transition: width 0.18s, background 0.18s;
     box-shadow: 0 0 8px rgba(92,176,70,0.55);
   }
+  #hp-bar-wrap::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(90deg, rgba(0,0,0,0.5) 0 1px, transparent 1px calc(10% - 1px));
+    pointer-events: none;
+  }
 
   #stamina-bar-wrap { display: none; }
   #stamina-bar { display: none; }
@@ -525,7 +544,7 @@
   #reload-bar-wrap {
     width: 116px; height: 5px;
     background: rgba(255,255,255,0.06);
-    border-radius: 3px;
+    border: 1px solid rgba(120,190,240,0.22);
     margin-top: 8px;
     opacity: 0;
     transition: opacity 0.1s;
@@ -534,8 +553,8 @@
   #reload-bar-wrap.active { opacity: 1; }
   #reload-bar {
     height: 100%;
-    background: linear-gradient(90deg, #0e7490, var(--accent-hot));
-    box-shadow: 0 0 8px rgba(34,211,238,0.65);
+    background: linear-gradient(90deg, #1c6f9e, var(--halo-glow, var(--accent-hot)));
+    box-shadow: 0 0 8px rgba(102,200,255,0.55);
     transition: width 0.04s linear;
   }
 
@@ -2839,7 +2858,7 @@
         <div class="ov-wave-card">
           <div class="ov-wc-num">01</div>
           <div class="ov-wc-label">Alpha Wave</div>
-          <div class="ov-wc-desc">5 Siege Drones - establish sightlines and build early XP.</div>
+          <div class="ov-wc-desc">3 Siege Drones - establish sightlines and build early XP.</div>
         </div>
         <div class="ov-wave-card">
           <div class="ov-wc-num">02</div>
@@ -2871,6 +2890,17 @@
           <div class="set-group-title">Video</div>
 
           <div class="set-row">
+            <span class="set-label">Performance Mode
+              <span class="set-hint">One-click low-end preset: caps resolution, disables cinematic FX and anti-aliasing.</span>
+            </span>
+            <span class="set-choice" id="opt-perfmode">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-perfmode-val"></span>
+          </div>
+
+          <div class="set-row">
             <span class="set-label">Renderer
               <span class="set-hint">Auto picks WebGL on desktop, WebGPU on mobile. Reloads the page.</span>
             </span>
@@ -2897,11 +2927,34 @@
           </div>
 
           <div class="set-row">
+            <span class="set-label">Contrast</span>
+            <input type="range" id="opt-contrast" min="70" max="140" step="5" value="100" aria-label="Contrast">
+            <span class="set-val" id="opt-contrast-val">100%</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Saturation</span>
+            <input type="range" id="opt-saturation" min="70" max="140" step="5" value="100" aria-label="Saturation">
+            <span class="set-val" id="opt-saturation-val">100%</span>
+          </div>
+
+          <div class="set-row">
             <span class="set-label">Field Of View
               <span class="set-hint">Offset applied on top of the per-stance FOV.</span>
             </span>
             <input type="range" id="opt-fov" min="-10" max="20" step="1" value="0" aria-label="Field of view offset">
             <span class="set-val" id="opt-fov-val">+0°</span>
+          </div>
+
+          <div class="set-row">
+            <span class="set-label">Anti-Aliasing
+              <span class="set-hint">FXAA edge smoothing. Cheap — negligible GPU cost.</span>
+            </span>
+            <span class="set-choice" id="opt-aa">
+              <button type="button" data-value="off">Off</button>
+              <button type="button" data-value="on">On</button>
+            </span>
+            <span class="set-val" id="opt-aa-val"></span>
           </div>
 
           <div class="set-row">

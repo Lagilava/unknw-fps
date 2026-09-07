@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refined Fire Animation</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #050505; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="fireCanvas"></canvas>
+  <script>
+    const canvas = document.getElementById('fireCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let width, height, centerX, baseY;
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      centerX = width / 2;
+      baseY = height - 100;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Simplex-like noise for organic wind
+    class Noise {
+      constructor() {
+        this.perm = new Uint8Array(512);
+        for (let i = 0; i < 256; i++) this.perm[i] = i;
+        for (let i = 255; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [this.perm[i], this.perm[j]] = [this.perm[j], this.perm[i]];
+        }
+        for (let i = 0; i < 256; i++) this.perm[i + 256] = this.perm[i];
+      }
+      fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+      lerp(a, b, t) { return a + t * (b - a); }
+      grad(hash, x, y) {
+        const h = hash & 3;
+        const u = h < 2 ? x : y;
+        const v = h < 2 ? y : x;
+        return ((h & 1) ? -u : u) + ((h & 2) ? -2 * v : 2 * v);
+      }
+      noise2D(x, y) {
+        const X = Math.floor(x) & 255;
+        const Y = Math.floor(y) & 255;
+        const xf = x - Math.floor(x);
+        const yf = y - Math.floor(y);
+        const u = this.fade(xf);
+        const v = this.fade(yf);
+        const A = this.perm[X] + Y;
+        const B = this.perm[X + 1] + Y;
+        return this.lerp(
+          this.lerp(this.grad(this.perm[A], xf, yf), this.grad(this.perm[B], xf - 1, yf), u),
+          this.lerp(this.grad(this.perm[A + 1], xf, yf - 1), this.grad(this.perm[B + 1], xf - 1, yf - 1), u),
+          v
+        );
+      }
+    }
+    const noise = new Noise();
+
+    class FlameParticle {
+      constructor(layer) {
+        this.layer = layer; // 0 = core, 1 = mid, 2 = outer
+        this.reset(true);
+      }
+
+      reset(initial = false) {
+        const spread = this.layer === 0 ? 30 : this.layer === 1 ? 60 : 100;
+        this.x = centerX + (Math.random() - 0.5) * spread;
+        this.y = baseY + (Math.random() - 0.5) * 20;
+        this.vx = (Math.random() - 0.5) * 0.3;
+        this.vy = -(Math.random() * 2 + 1.5) * (this.layer === 0 ? 0.7 : 1);
+        this.life = (Math.random() * 50 + 30) * (this.layer === 0 ? 1.2 : 1);
+        this.maxLife = this.life;
+        this.baseSize = this.layer === 0 ? 35 : this.layer === 1 ? 25 : 18;
+        this.size = this.baseSize * (0.8 + Math.random() * 0.4);
+        this.noiseOffset = Math.random() * 1000;
+        this.noiseSpeed = 0.02 + Math.random() * 0.02;
+        if (!initial) this.life = Math.random() * this.maxLife;
+      }
+
+      update(time) {
+        const n = noise.noise2D(this.noiseOffset + time * this.noiseSpeed, this.y * 0.01);
+        this.vx += n * 0.15;
+        this.vx *= 0.95;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life -= 0.6;
+        this.size *= 0.992;
+
+        if (this.life <= 0 || this.size < 2) {
+          this.reset();
+        }
+      }
+
+      draw() {
+        const t = this.life / this.maxLife;
+        let r, g, b, a;
+
+        if (this.layer === 0) {
+          // Core: white -> yellow -> orange
+          if (t > 0.7) { r = 255; g = 240; b = 200; a = 0.9; }
+          else if (t > 0.4) { r = 255; g = 200; b = 80; a = 0.8; }
+          else { r = 255; g = 120; b = 30; a = t * 2; }
+        } else if (this.layer === 1) {
+          // Mid: yellow -> orange -> red
+          if (t > 0.7) { r = 255; g = 180; b = 50; a = 0.7; }
+          else if (t > 0.4) { r = 255; g = 100; b = 20; a = 0.6; }
+          else { r = 200; g = 60; b = 10; a = t * 1.5; }
+        } else {
+          // Outer: orange -> red -> dark smoke
+          if (t > 0.7) { r = 255; g = 100; b = 20; a = 0.5; }
+          else if (t > 0.3) { r = 220; g = 50; b = 10; a = 0.4; }
+          else { r = 80; g = 30; b = 10; a = t * 0.8; }
+        }
+
+        const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size);
+        grad.addColorStop(0, `rgba(${r},${g},${b},${a})`);
+        grad.addColorStop(0.3, `rgba(${Math.floor(r*0.9)},${Math.floor(g*0.7)},${Math.floor(b*0.3)},${a*0.7})`);
+        grad.addColorStop(0.7, `rgba(${Math.floor(r*0.5)},${Math.floor(g*0.2)},${Math.floor(b*0.1)},${a*0.3})`);
+        grad.addColorStop(1, `rgba(${Math.floor(r*0.1)},${Math.floor(g*0.05)},${Math.floor(b*0.02)},0)`);
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        // Teardrop shape using bezier
+        const s = this.size;
+        ctx.moveTo(this.x, this.y - s);
+        ctx.bezierCurveTo(this.x + s*0.8, this.y - s*0.3, this.x + s*0.6, this.y + s*0.5, this.x, this.y + s*0.3);
+        ctx.bezierCurveTo(this.x - s*0.6, this.y + s*0.5, this.x - s*0.8, this.y - s*0.3, this.x, this.y - s);
+        ctx.fill();
+      }
+    }
+
+    class Spark {
+      constructor() {
+        this.reset(true);
+      }
+      reset(initial = false) {
+        this.x = centerX + (Math.random() - 0.5) * 50;
+        this.y = baseY - Math.random() * 30;
+        this.vx = (Math.random() - 0.5) * 2;
+        this.vy = -(Math.random() * 4 + 3);
+        this.life = Math.random() * 50 + 30;
+        this.maxLife = this.life;
+        this.size = Math.random() * 2.5 + 0.5;
+        this.brightness = Math.random() * 0.5 + 0.5;
+        if (!initial) this.life = Math.random() * this.maxLife;
+      }
+      update() {
+        this.x += this.vx + noise.noise2D(this.x * 0.01, this.life * 0.01) * 0.5;
+        this.y += this.vy;
+        this.vy += 0.03;
+        this.life -= 0.8;
+        if (this.life <= 0) this.reset();
+      }
+      draw() {
+        const t = this.life / this.maxLife;
+        const a = t * this.brightness;
+        ctx.fillStyle = `rgba(255, ${Math.floor(180 + t*75)}, ${Math.floor(80 + t*100)}, ${a})`;
+        ctx.shadowColor = `rgba(255, 200, 100, ${a*0.5})`;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    class Smoke {
+      constructor() {
+        this.reset(true);
+      }
+      reset(initial = false) {
+        this.x = centerX + (Math.random() - 0.5) * 80;
+        this.y = baseY - Math.random() * 100 - 50;
+        this.vx = (Math.random() - 0.5) * 0.5;
+        this.vy = -(Math.random() * 1 + 0.5);
+        this.life = Math.random() * 120 + 80;
+        this.maxLife = this.life;
+        this.size = Math.random() * 40 + 20;
+        if (!initial) this.life = Math.random() * this.maxLife;
+      }
+      update() {
+        this.x += this.vx + noise.noise2D(this.y * 0.005, Date.now() * 0.0001) * 0.3;
+        this.y += this.vy;
+        this.size += 0.15;
+        this.life -= 0.4;
+        if (this.life <= 0) this.reset();
+      }
+      draw() {
+        const t = this.life / this.maxLife;
+        const a = t * 0.08;
+        const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size);
+        grad.addColorStop(0, `rgba(60, 55, 50, ${a})`);
+        grad.addColorStop(0.5, `rgba(40, 38, 35, ${a*0.5})`);
+        grad.addColorStop(1, `rgba(20, 20, 20, 0)`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Build layered particle system
+    const coreFlames = Array.from({ length: 80 }, () => new FlameParticle(0));
+    const midFlames = Array.from({ length: 120 }, () => new FlameParticle(1));
+    const outerFlames = Array.from({ length: 100 }, () => new FlameParticle(2));
+    const sparks = Array.from({ length: 25 }, () => new Spark());
+    const smoke = Array.from({ length: 15 }, () => new Smoke());
+
+    function drawGroundGlow() {
+      const grad = ctx.createRadialGradient(centerX, baseY + 20, 0, centerX, baseY + 20, 250);
+      grad.addColorStop(0, 'rgba(255, 80, 10, 0.25)');
+      grad.addColorStop(0.3, 'rgba(255, 50, 5, 0.12)');
+      grad.addColorStop(0.6, 'rgba(150, 30, 5, 0.04)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    function drawLogs() {
+      ctx.save();
+      // Log 1
+      ctx.translate(centerX - 30, baseY + 15);
+      ctx.rotate(-0.25);
+      drawLog(90, 18, '#3d2817', '#2a1b0f');
+      ctx.restore();
+
+      ctx.save();
+      // Log 2
+      ctx.translate(centerX + 25, baseY + 18);
+      ctx.rotate(0.2);
+      drawLog(85, 16, '#4a3020', '#2a1b0f');
+      ctx.restore();
+
+      ctx.save();
+      // Log 3 (top)
+      ctx.translate(centerX, baseY + 5);
+      ctx.rotate(0.05);
+      drawLog(70, 14, '#5c3a28', '#3d2817');
+      ctx.restore();
+
+      // Embers on logs
+      for (let i = 0; i < 8; i++) {
+        const ex = centerX + (Math.random() - 0.5) * 100;
+        const ey = baseY + 10 + Math.random() * 10;
+        const pulse = Math.sin(Date.now() * 0.003 + i) * 0.3 + 0.7;
+        const grad = ctx.createRadialGradient(ex, ey, 0, ex, ey, 8);
+        grad.addColorStop(0, `rgba(255, 100, 20, ${0.6 * pulse})`);
+        grad.addColorStop(1, 'rgba(255, 50, 10, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(ex, ey, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawLog(w, h, color, darkColor) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(-w/2, -h/2, w, h, 4);
+      ctx.fill();
+      // Bark texture
+      ctx.fillStyle = darkColor;
+      ctx.fillRect(-w/2 + 3, -h/2 + 2, w - 6, h - 4);
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      ctx.fillRect(-w/2 + 3, -h/2 + 2, w - 6, 2);
+      // End caps
+      ctx.fillStyle = '#5c3a28';
+      ctx.beginPath();
+      ctx.ellipse(-w/2, 0, 4, h/2 - 1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(w/2, 0, 4, h/2 - 1, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    let time = 0;
+    function animate() {
+      time++;
+
+      // Heavy trail for smooth motion
+      ctx.fillStyle = 'rgba(5, 5, 5, 0.25)';
+      ctx.fillRect(0, 0, width, height);
+
+      drawGroundGlow();
+
+      // Draw back-to-front for depth
+      smoke.forEach(s => { s.update(); s.draw(); });
+      outerFlames.forEach(p => { p.update(time); p.draw(); });
+      midFlames.forEach(p => { p.update(time); p.draw(); });
+      coreFlames.forEach(p => { p.update(time); p.draw(); });
+      sparks.forEach(s => { s.update(); s.draw(); });
+      drawLogs();
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>

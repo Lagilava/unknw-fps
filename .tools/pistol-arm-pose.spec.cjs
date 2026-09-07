@@ -1,10 +1,10 @@
 const { test, expect } = require("@playwright/test");
 const URL = "http://127.0.0.1:8000/first_person_shooter_room_game%20(1).html?test=1";
 
-// The pistol uses a ONE-HANDED grip: firing must NOT raise/punch both arms
-// symmetrically (the old "flail"). The support (left) upper arm should sit LOWER
-// than the shooting (right) upper arm through the shot, and never mirror it.
-test("pistol fire keeps a one-handed stance (left arm does not mirror the right)", async ({ page }) => {
+// Pistols now use the same clone-faithful TWO-HANDED pose as every other
+// weapon (no more bespoke one-arm-tucked IK) — the support (left) hand should
+// stay close to the shooting (right) hand through the shot, not sag below it.
+test("pistol fire keeps a two-handed stance (left hand tracks the right)", async ({ page }) => {
   test.setTimeout(240000);
   await page.addInitScript(() => { for (const k of ["rb-dev-store-v1","rb-dev-active-v1","rb-dev-starter-installed"]) localStorage.removeItem(k); });
   await page.goto(URL, { waitUntil: "domcontentloaded" });
@@ -46,11 +46,12 @@ test("pistol fire keeps a one-handed stance (left arm does not mirror the right)
   console.log("PISTOL ARM SAMPLES " + JSON.stringify(samples));
   expect(samples.length).toBeGreaterThan(6);
 
-  // One-handed proof: the support (left) hand must sit clearly BELOW the shooting
-  // (right) hand — a two-handed rifle grip holds them at near-identical heights
-  // (dY≈0), so a consistent positive height offset shows the left arm is on its
-  // own lowered support pose instead of flailing symmetrically with the right.
+  // Two-handed proof: the support (left) hand stays close in height AND span to
+  // the shooting (right) hand, like every other weapon's clone-faithful grip —
+  // not sagging into its own lowered one-handed tuck.
   const avgDY = samples.reduce((a, s) => a + s.dY, 0) / samples.length;
-  console.log("PISTOL avg right-left hand dY = " + avgDY.toFixed(3));
-  expect(avgDY).toBeGreaterThan(0.04);
+  const avgSpan = samples.reduce((a, s) => a + s.span, 0) / samples.length;
+  console.log("PISTOL avg right-left hand dY = " + avgDY.toFixed(3) + ", span = " + avgSpan.toFixed(3));
+  expect(Math.abs(avgDY)).toBeLessThan(0.04);
+  expect(avgSpan).toBeLessThan(0.25);
 });

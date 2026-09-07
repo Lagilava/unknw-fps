@@ -13,6 +13,11 @@ test-results/
 # Use turn-config.example.txt (committed) as the template.
 turn-config.txt
 
+# Local tunnel helper and exporter cache
+cloudflared.exe
+.tools/cloudflared.exe
+assets/.export-cache.json
+
 # ── Legacy / superseded snapshots kept locally, not part of the shipped game ──
 three_fps_game.v4.js
 three_fps_game_perf.js
