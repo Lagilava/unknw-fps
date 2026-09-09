@@ -658,7 +658,7 @@
       // golden-hour shadows stay long/dramatic but readable for gameplay.
       const sunDir = new THREE.Vector3(0.751, 0.242, -0.615).normalize();
       // Shadows only on medium/high tier (low tier disables them for performance).
-      const sunShadows = profile.tier !== "low";
+      const sunShadows = true; // Shadow removal requires the player's performance-prompt choice.
       // No shadows → lean on fill for even light across the whole scene.
       // With shadows → keep fill low so the cast shadows read as contrast.
       scene.add(new THREE.AmbientLight(0xffdfc0, sunShadows ? 0.10 : 0.24));

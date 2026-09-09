@@ -1,4 +1,11 @@
-﻿﻿﻿import {
+import { createEncounterDirector } from "./modules/encounter_director";
+import { showShadowPerformancePrompt } from "./modules/shadow_performance_prompt";
+import { createBlackoutAtmosphere } from "./modules/blackout_atmosphere";
+﻿import { createBoltCore, createAbilityImpacts } from "./modules/ability_fx";
+import { createGameHud } from "./modules/game_hud";
+import { createWeaponHud } from "./modules/weapon_hud";
+import { AIM_PROFILES, getWeaponAdsFov, createAimSight } from "./modules/weapon_ads";
+﻿﻿import {
   ANGEL_DRONE_TEXTURE_PATHS,
   EXTERIOR_CITY_MODEL_PATH,
   PLAYER_ANIMATION_GLTF_PATHS,
@@ -501,18 +508,16 @@ declare module "three" {
     if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = baseToneMappingExposure;
     if ('useLegacyLights' in renderer) renderer.useLegacyLights = false;
     if (renderer.shadowMap) {
-      // Shadows are a significant per-fragment GPU cost (every lit surface samples
-      // the shadow map each frame). Disabled on mobile; on desktop the dev
-      // Performance setting ("off" forces off, "on" forces on) and the adaptive
-      // perf governor (below) can drop them when the frame rate stays low.
+      // Shadows stay enabled unless explicitly switched off in settings or
+      // accepted in the performance prompt, including on mobile devices.
       const devShadows = devVal("quality", "shadows", "auto");
-      renderer.shadowMap.enabled = !mobileMode && devShadows !== "off";
+      renderer.shadowMap.enabled = devShadows !== "off";
       if ('type' in renderer.shadowMap) renderer.shadowMap.type = lowEndMode ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
       // Shadow update policy: low-end keeps the static one-shot bake (no per-frame
       // shadow draws; characters simply don't cast there). Everything else updates
       // per-frame so the player/enemies/cars cast MOVING shadows — the depth-only
       // caster pass is cheap now that the static world is merged/instanced, and the
-      // perf governor below can still drop shadows entirely if the frame rate tanks.
+      // performance prompt can offer to disable shadows if the frame rate tanks.
       renderer.shadowMap.autoUpdate = !lowEndMode;
     }
   } catch (e) {
@@ -725,7 +730,7 @@ declare module "three" {
           // blowing the whole below-horizon half of the dome out to white
           // whenever the camera is above rooftop height.)
           float band = exp(-max(el, 0.0) * 5.2) * exp(min(el, 0.0) * 7.0);
-          float overhead = smoothstep(0.55, 0.15, el); // extra kill above ~33 deg
+          float overhead = 1.0 - smoothstep(0.15, 0.55, el); // extra kill above ~33 deg
 
           // ── Rolling flame licks: FBM advected upward + sideways drift, domain-warped ──
           vec2 fp = vec2(cyl.x + cyl.y * 0.7, el * 6.0);
@@ -739,7 +744,7 @@ declare module "three" {
 
           // ── Curling smoke: slower, darker FBM layer occluding the glow ──
           float smoke = fbm(fp * 1.1 + vec2(uTime * 0.05, -uTime * 0.16) + 47.0);
-          float smokeMask = smoothstep(0.35, 0.85, smoke) * smoothstep(0.75, 0.2, el) * 0.65;
+          float smokeMask = smoothstep(0.35, 0.85, smoke) * (1.0 - smoothstep(0.2, 0.75, el)) * 0.65;
 
           // ── Fire colour ramp (ember red -> orange -> hot yellow core) ──
           float heat = lick * band;
@@ -760,7 +765,7 @@ declare module "three" {
           off.x += sin(uTime * (0.5 + h) + h * 6.28) * 0.18; // lateral drift
           float d = length(fpart - off);
           float twinkle = 0.55 + 0.45 * sin(uTime * (2.0 + h * 5.0) + h * 40.0);
-          float ember = smoothstep(0.10 + h * 0.06, 0.0, d) * step(0.72, h) * twinkle;
+          float ember = (1.0 - smoothstep(0.0, 0.10 + h * 0.06, d)) * step(0.72, h) * twinkle;
           ember *= exp(-el * 3.4) * smoothstep(-0.05, 0.06, el);
           col += vec3(1.0, 0.55 + fract(h * 91.7) * 0.3, 0.15) * ember * 1.3;
 
@@ -780,11 +785,16 @@ declare module "three" {
           float corona = 1.0 - smoothstep(discR * 0.85, discR * 3.4 + rimN * 0.09, ang);
           float flick = 0.85 + 0.15 * fbm(vec2(uTime * 0.9, ang * 8.0));
           float halo = exp(-ang * 5.5);
-          col += vec3(1.0, 0.93, 0.66) * core * 3.4;                 // white-hot core (only thing that clips to white)
-          col += vec3(1.0, 0.40, 0.07) * corona * corona * 1.2 * flick; // fire corona
-          col += vec3(0.85, 0.20, 0.04) * halo * 0.9;                // ember glow halo
-
-          col *= (1.0 - overhead * 0.0); // band already handles falloff; keep zenith black
+          // A black disc cuts into a dim blood-red corona, behind moving cloud.
+          float eclipse = 1.0 - smoothstep(discR * .88, discR, ang);
+          col *= 1.0 - eclipse;
+          float ring = exp(-pow((ang - discR) * 155.0, 2.0));
+          col += vec3(.65, .085, .035) * ring * (1.0 - smokeMask * .6);
+          col += vec3(.22, .028, .018) * corona * corona * (1.0 - eclipse);
+          col *= .22;
+          vec2 cloudUV = cyl * .8 + vec2(el * 2.0, uTime * .012);
+          float cloud = smoothstep(.38, .72, fbm(cloudUV));
+          col += vec3(.08, .14, .18) * cloud * (1.0 - eclipse);
           col *= uOpacity;
           gl_FragColor = vec4(col, clamp(max(max(col.r, col.g), col.b) * 1.5, 0.0, 1.0) * uOpacity);
         }
@@ -802,7 +812,7 @@ declare module "three" {
       dome.position.setFromMatrixPosition(cam.matrixWorld);
       t += 0.01667; // fixed per-render-tick advance — visual, not physics
       uniforms.uTime.value = t;
-      const flicker = 0.72 + Math.sin(t * 2.3) * 0.10 + Math.sin(t * 5.1 + 1.4) * 0.06;
+      const flicker = 0.78 + Math.sin(t * .31) * .06 + Math.sin(t * .73 + 1.4) * .025;
       uniforms.uOpacity.value = Math.max(0, flicker);
     };
     scene.add(dome);
@@ -888,6 +898,9 @@ declare module "three" {
       g.addColorStop(0.6, "rgba(255,220,130,0.9)");
       g.addColorStop(1, "rgba(255,170,60,0)");
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, 3.4 * degPx, 0, Math.PI * 2); ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = "#010102";
+      ctx.beginPath(); ctx.arc(px, py, 3 * degPx, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalCompositeOperation = "source-over";
 
@@ -911,8 +924,8 @@ declare module "three" {
       t += 0.01667; // fixed per-render-tick advance — flicker/scroll are visual, not physics
       // No UV scroll any more: the painted sun must stay put at BLACKOUT_SUN_DIR so
       // the directional light keeps pointing at it (flicker below still animates).
-      const flicker = 0.72 + Math.sin(t * 2.3) * 0.10 + Math.sin(t * 5.1 + 1.4) * 0.06;
-      mat.opacity = Math.max(0, flicker);
+      const flicker = 0.78 + Math.sin(t * .31) * .06 + Math.sin(t * .73 + 1.4) * .025;
+      mat.opacity = Math.max(0, flicker) * .25;
     };
     scene.add(dome);
     window.__rbFireSkyDome = dome; // dev diagnostic
@@ -1368,6 +1381,8 @@ declare module "three" {
     jumpVel: 0,
     grounded: true,
     jumpCooldown: 0,
+    impactVelX: 0,
+    impactVelZ: 0,
     hurtTimer: 0,
     preDeathThirdPerson: null,
     killStreak: 0,
@@ -1601,7 +1616,7 @@ declare module "three" {
       uDarken:     { value: 0.86 },
       uBlackCrush: { value: 0.045 },
       uGloss:      { value: 1 },
-      uVignette:   { value: 0.34 },
+      uVignette:   { value: 0 },
       uGrain:      { value: 0.01 },
       uShadowTint: { value: new THREE.Vector3(-0.068, 0.02, -0.02) },
       uHighTint:   { value: new THREE.Vector3(0.2, 0.018, 0.106) },
@@ -1694,13 +1709,6 @@ declare module "three" {
         float g = hash(floor(uv * resolution) + floor(time * 24.0)) - 0.5;
         color += g * uGrain * intensity;
 
-        // --- Vignette ---
-        vec2 cUv = vUv - 0.5;
-        cUv.x *= resolution.x / max(1.0, resolution.y);
-        float vigDist = dot(cUv, cUv);
-        float vignette = 1.0 - smoothstep(0.14, 1.0, vigDist) * uVignette * intensity;
-        color *= vignette;
-
         gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
       }
     `,
@@ -1749,8 +1757,6 @@ declare module "three" {
     background: [
       // Dreamy bloom wash — warm cream glow blooming from the centre (fake soft-focus halation)
       "radial-gradient(ellipse 75% 65% at 50% 42%, rgba(255,238,205,0.12), rgba(255,224,188,0.045) 38%, rgba(255,224,188,0) 66%)",
-      // Warm amber vignette — 80s tube-camera lens falloff (brown edges, not black)
-      "radial-gradient(ellipse 116% 96% at 50% 50%, rgba(0,0,0,0) 30%, rgba(44,22,10,0.34) 66%, rgba(18,8,3,0.78) 100%)",
       // Pastel dream cast — peach top fading to a faint magenta/violet base
       "linear-gradient(176deg, rgba(255,176,138,0.07), rgba(0,0,0,0) 45%, rgba(150,110,180,0.06))",
     ].join(", "),
@@ -1759,7 +1765,7 @@ declare module "three" {
   canvas.insertAdjacentElement("afterend", cinematicOverlay);
 
   // ── Signature colour grade (always on, NOT player-adjustable) ───────────────
-  // The game's default look: a permanent subtle vignette + a faint cool-top /
+  // The game's default look: a faint cool-top /
   // warm-bottom cast layered over the canvas. Deliberately NOT tied to the
   // cinematic toggle or any setting — this is the game's fixed visual identity.
   // The matching canvas filter half of the grade lives in applyCinematicSettings.
@@ -1772,8 +1778,6 @@ declare module "three" {
     pointerEvents: "none",
     zIndex: "1",
     background: [
-      // Soft neutral vignette — focuses the eye, kills the washed-out edges
-      "radial-gradient(ellipse 120% 100% at 50% 46%, rgba(0,0,0,0) 50%, rgba(6,10,16,0.14) 76%, rgba(3,6,10,0.30) 100%)",
       // Cool steel cast from the sky, faint warm lift near the ground line
       "linear-gradient(178deg, rgba(120,170,215,0.055), rgba(0,0,0,0) 42% 62%, rgba(224,176,120,0.045))",
     ].join(", "),
@@ -2209,7 +2213,7 @@ declare module "three" {
       u.uDarken.value     = cv("darken", 0.86);
       u.uBlackCrush.value = cv("blackCrush", 0.045);
       u.uGloss.value      = cv("gloss", 1);
-      u.uVignette.value   = cv("vignette", 0.34);
+      u.uVignette.value   = 0;
       u.uGrain.value      = cv("grain", 0.01);
       u.uShadowTint.value.set(cv("shadowR", -0.068), cv("shadowG", 0.02), cv("shadowB", -0.02));
       u.uHighTint.value.set(cv("highR", 0.2), cv("highG", 0.018), cv("highB", 0.106));
@@ -2218,7 +2222,7 @@ declare module "three" {
   }
 
   function getBaseExposure() {
-    if (darkWaveActive) return baseToneMappingExposure * 1.48;
+    if (darkWaveActive) return baseToneMappingExposure * 1.12;
     // Only a slight lift now. The old ×1.55 was tuned for the dark VHS grade; with the
     // lighter music-video grade + bloom it blew the bright daytime scene out to milky
     // white (killing contrast/detail). Keep near-neutral so the grade/bloom do the work.
@@ -2346,7 +2350,7 @@ declare module "three" {
     updateMotionBlurDamp();
     if (debugOrbit.active) {
       // Position the debug cam on a sphere around the player torso and look at it.
-      const tx = yaw.position.x, ty = yaw.position.y + 0.7, tz = yaw.position.z;
+      const tx = yaw.position.x, ty = (thirdPerson.root?.position.y ?? (yaw.position.y - PLAYER_H)) + 1.3, tz = yaw.position.z;
       const ce = Math.cos(debugOrbit.elevation), se = Math.sin(debugOrbit.elevation);
       debugOrbitCam.position.set(
         tx + debugOrbit.dist * ce * Math.sin(debugOrbit.azimuth),
@@ -2444,6 +2448,15 @@ declare module "three" {
   }
 
   function updateAdaptiveQuality(dt) {
+    // Measure real presentation time, independently of the simulation step cap.
+    // Ignore tab suspension / debugger pauses so they cannot trigger a downgrade.
+    if (!Number.isFinite(dt) || dt <= 0 || dt > 0.25 || document.hidden) {
+      quality.sampleTimer = 0;
+      quality.smoothDt = 1 / 60;
+      _governorStrikes = 0;
+      _autoFallbackStrikes = 0;
+      return;
+    }
     quality.smoothDt += (dt - quality.smoothDt) * 0.08;
     quality.sampleTimer += dt;
     quality.hitchCooldown = Math.max(0, quality.hitchCooldown - dt);
@@ -2526,26 +2539,34 @@ declare module "three" {
     });
   }
 
-  // Adaptive performance governor: when the frame rate stays low even after the
-  // render scale has bottomed out (so resolution isn't the lever — the common
-  // GPU-bound case), cut the next most expensive feature: shadows. One-way per
-  // session (avoids oscillation); a reload restores. Respects the dev override:
+  // Resolution is player-controlled, so sustained low FPS must be handled at
+  // the selected scale rather than waiting for a floor we no longer approach.
+  // Offer a shadow-cost reduction after several slow samples, once per session.
+  // Only the player can accept it; a reload restores. Respects the dev override:
   // quality.shadows "on"/"off" pins shadows and disables the governor for them.
   let _governorStrikes = 0;
   let _shadowsDroppedByGovernor = false;
+  let _shadowPerformanceAsked = false;
   function maybePerfGovernor() {
     if (!devVal("quality", "autoPerfGovernor", true)) return;
     if (devVal("quality", "shadows", "auto") !== "auto") return; // explicit on/off wins
     if (game.state !== "playing") { _governorStrikes = 0; return; }
-    if (_shadowsDroppedByGovernor || !renderer.shadowMap?.enabled) return;
-    const scaleFloored = quality.scale <= quality.minScale + 0.08;
-    if (quality.lastFps < 48 && scaleFloored) _governorStrikes++;
+    if (_shadowPerformanceAsked || _shadowsDroppedByGovernor || !renderer.shadowMap?.enabled || cutscene.active) return;
+    if (quality.lastFps < 48) _governorStrikes++;
     else _governorStrikes = Math.max(0, _governorStrikes - 1);
     if (_governorStrikes >= 4) {
-      setShadowsEnabled(false);
-      _shadowsDroppedByGovernor = true;
-      console.warn("[perf] governor: sustained <48fps at min render scale — shadows disabled for a smoother frame rate.");
-      flashPerfNotice("Performance: shadows disabled for a smoother frame rate");
+      _shadowPerformanceAsked = true;
+      keys.clear();
+      pauseGame();
+      showShadowPerformancePrompt(disable => {
+        if (disable) {
+          setShadowsEnabled(false);
+          _shadowsDroppedByGovernor = true;
+          flashPerfNotice("Shadows disabled for this session");
+        }
+        keys.clear();
+        resumeGame();
+      });
     }
   }
 
@@ -2700,8 +2721,7 @@ declare module "three" {
     crosshair.root.style.transform = `translate(calc(-50% + ${reticleX}px), calc(-50% + ${reticleY}px)) scale(${crosshair.spread.toFixed(3)})`;
     const hidden = game.state !== "playing" || viewState.lookBack > 0.08;
     // Sniper hides the reticle once scoped (it has its own zoomed view to aim with).
-    const sniperScoped = currentGun === GUNS.SNIPER && viewState.ads > 0.7;
-    crosshair.root.style.opacity = hidden ? "0" : sniperScoped ? "0" : viewState.ads > 0.9 ? "0.3" : "1";
+    crosshair.root.style.opacity = hidden || viewState.ads > 0.55 ? "0" : "1";
   }
 
   // Pooled GPU particle system (modules/particle_fx.ts). Two draw calls total,
@@ -3745,7 +3765,9 @@ function createLightningEffect() {
 
   const outer = new THREE.LineSegments(geometry, outerMaterial);
   const glow  = new THREE.LineSegments(geometry, glowMaterial);
-  const core  = new THREE.LineSegments(geometry, coreMaterial);
+  const ribbon = createBoltCore(THREE, LIGHTNING_MAX_SEGMENTS, coreMaterial.color);
+  coreMaterial.dispose();
+  const core = ribbon.mesh;
 
   // Glow dots share the same geometry — soft halos at every vertex thicken the bolt visually
   const glowDotMaterial = lightningGlowDotMaterial.clone();
@@ -3799,6 +3821,8 @@ function createLightningEffect() {
     geometry,
     positionAttr,
     positions,
+    ribbon,
+    boltWidth: 0.05,
 
     outer,
     glow,
@@ -3832,6 +3856,7 @@ function createLightningEffect() {
       this.sourceScale = 1;
       this.active = false;
 
+      this.reshuffleTimer = undefined;
       this.group.visible = false;
       // The flash light is shared across the pool — updateLightningEffects recomputes
       // its intensity from the live bolts each frame, so a recycled bolt must not zero it.
@@ -4371,6 +4396,8 @@ function createLightningEffect() {
     const shouldDarken = wave > 0 && wave % 10 === 0;
     if (darkWaveActive === shouldDarken && addedLights === 0) return;
     darkWaveActive = shouldDarken;
+    const atmosphere = scene.getObjectByName("BlackoutAtmosphere");
+    if (atmosphere && !shouldDarken) atmosphere.visible = false;
 
     for (const entry of environmentLights) {
       entry.light.intensity = shouldDarken ? 0 : entry.intensity;
@@ -4383,8 +4410,8 @@ function createLightningEffect() {
     // the dome mesh is hidden (pure visibility toggle on a mesh, so no shader
     // relink — see the light-count invariant) and the clear colour + fog go black.
     if (scene.fog) {
-      (scene.fog as any).density = shouldDarken ? 0.011 : 0.0042;
-      scene.fog.color.setHex(shouldDarken ? 0x05060a : 0xd8c4a8);
+      (scene.fog as any).density = shouldDarken ? 0.014 : 0.0042;
+      scene.fog.color.setHex(shouldDarken ? 0x273b49 : 0xd8c4a8);
     }
     const skyDome = scene.getObjectByName("DaySkyDome");
     if (skyDome) skyDome.visible = !shouldDarken;
@@ -4401,51 +4428,30 @@ function createLightningEffect() {
     // visibility is locked by the shader-cache invariant.)
     const skyline = scene.getObjectByName("DistantSkyline");
     if (skyline) skyline.visible = !shouldDarken;
-    if (scene.background && (scene.background as any).isColor) (scene.background as any).setHex(shouldDarken ? 0x000000 : 0xd8c2a4);
-    scene.environmentIntensity = shouldDarken ? 0.10 : 0.58; // starve the IBL so the dark reads
+    if (scene.background && (scene.background as any).isColor) (scene.background as any).setHex(shouldDarken ? 0x273b49 : 0xd8c2a4);
+    // Disable HDRI lighting and reflections completely during the eclipse.
+    // Retain the texture binding to avoid recompiling every PBR material at wave changes.
+    scene.environmentIntensity = shouldDarken ? 0 : 0.58;
     // No sky = no sun. Drop the exterior key/fill so the world goes truly dark
     // instead of "daylight under a black ceiling" (intensity change only — never
     // visibility, per the light-count shader-cache invariant).
     const extSun = window.__extSun;
     if (extSun) {
-      // Blackout: the ONLY sky light is the burning horizon, so the key light must
-      // come exactly FROM the fiery sun rendered by the fire dome. Same canonical
-      // direction (BLACKOUT_SUN_DIR) feeds the dome's uSunDir uniform and this
-      // placement, measured from the light's target. Intensity 0.32 (was 0.10) so
-      // the fire-sun direction visibly reads as rim light + shadows in the world.
-      // Color + position + intensity changes only (never visibility, per the
-      // light-count shader-cache invariant).
-      extSun.intensity = (extSun.userData.baseIntensity ?? extSun.intensity) * (shouldDarken ? 0.32 : 1);
-      if (!extSun.userData.baseColorHex) extSun.userData.baseColorHex = extSun.color.getHex();
-      if (!extSun.userData.basePosition) extSun.userData.basePosition = extSun.position.clone();
-      if (shouldDarken) {
-        extSun.color.setHex(0xff4a1e);
-        const t = extSun.target.position;
-        extSun.position.set(
-          t.x + BLACKOUT_SUN_DIR.x * 260,
-          t.y + BLACKOUT_SUN_DIR.y * 260,
-          t.z + BLACKOUT_SUN_DIR.z * 260
-        );
-      } else {
-        extSun.color.setHex(extSun.userData.baseColorHex);
-        extSun.position.copy(extSun.userData.basePosition);
-      }
-      // Sun moved → refit the shadow frustum to the world from the new angle and
-      // re-render the shadow map (needed on the low-end static-bake path; harmless
-      // when shadowMap.autoUpdate is on).
-      window.__extFitSunShadow?.();
-      if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+      // The eclipse emits no directional light. Keep the light registered so
+      // shader light counts stay stable, and restore its daylight intensity later.
+      extSun.userData.baseIntensity ??= extSun.intensity;
+      extSun.intensity = shouldDarken ? 0 : extSun.userData.baseIntensity;
     }
     const extHemi = window.__extHemi;
     if (extHemi) {
-      extHemi.intensity = (extHemi.userData.baseIntensity ?? extHemi.intensity) * (shouldDarken ? 0.18 : 1);
+      extHemi.intensity = shouldDarken ? 1.1 : (extHemi.userData.baseIntensity ?? extHemi.intensity);
       if (!extHemi.userData.baseSkyHex) {
         extHemi.userData.baseSkyHex = extHemi.color.getHex();
         extHemi.userData.baseGroundHex = extHemi.groundColor.getHex();
       }
       if (shouldDarken) {
-        extHemi.color.setHex(0x7a2410);      // smoke-red sky bounce
-        extHemi.groundColor.setHex(0x140806); // scorched ground
+        extHemi.color.setHex(0x91b6c5);      // cold ambient silhouettes
+        extHemi.groundColor.setHex(0x627480); // deep blue ground bounce
       } else {
         extHemi.color.setHex(extHemi.userData.baseSkyHex);
         extHemi.groundColor.setHex(extHemi.userData.baseGroundHex);
@@ -5859,6 +5865,12 @@ function createLightningEffect() {
     if (weapon?.gun) weapon.gun.visible = firstPersonVisible;
     if (thirdPerson.root) thirdPerson.root.visible = bodyVisible && !(unifiedFp && UNIFIED_FP_DEBUG_HIDE_BODY) && !cutscene.introPlayerHidden;
     if (thirdPerson.weapon?.gun) thirdPerson.weapon.gun.visible = tpWeaponVisible && !cutscene.introPlayerHidden;
+    // The magnified optic must not be occluded by the local operator's head or gun.
+    if (currentGun === GUNS.SNIPER && viewState.ads > 0.7) {
+      if (thirdPerson.root) thirdPerson.root.visible = false;
+      if (thirdPerson.weapon?.gun) thirdPerson.weapon.gun.visible = false;
+      if (weapon?.gun) weapon.gun.visible = false;
+    }
     // Hide the head only in unified FP; restore it in TP / legacy FP.
     setHeadBoneHidden(unifiedFp);
   }
@@ -6835,19 +6847,17 @@ function createLightningEffect() {
       inspectEnv = Math.max(0, Math.min(riseEnv, fallEnv));
       inspectSpin = Math.sin(t * Math.PI * 2) * inspectEnv;
     }
-    // Hand-fit parenting is the default for any gun that has been calibrated to a
-    // clean aim pose. One-handed sidearms are the smallest/most obvious case, but
-    // real rifles and shotguns also need to stay attached to the firing hand so the
-    // barrel follows aim instead of drifting to the torso-root during movement.
-    // The root pose is only a fallback for an uncalibrated weapon before the fit is
-    // captured; once the fit exists, the gun should stay in the hand.
-    const gunHandParented = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
+    // The rifle carry animation rotates the wrist during locomotion. Capturing a
+    // hand-local fit from one frame makes long guns inherit that wrist rotation
+    // later, tipping the barrel upward and pulling it away from the support hand.
+    // Keep two-handed weapons on the clone's hand-centre/root pose throughout.
+    const oneHandWeapon = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
+    const gunHandParented = oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
       && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
     // TWO-HANDED clone-faithful path: parented to the body ROOT and posed exactly
     // like updateClonedGhostWeaponPose (hand-centre in root-local space + fixed
-    // rotation). This is only a fallback until a clean hand-fit has been captured;
-    // after calibration, the gun remains attached to the right hand.
-    const twoHandRootPose = !gunHandParented && !unifiedFpActive && !(thirdPerson.weapon?.handFit);
+    // rotation). Sidearms also use this while waiting for their hand calibration.
+    const twoHandRootPose = !unifiedFpActive && (!oneHandWeapon || (!gunHandParented && !thirdPerson.weapon.handFit));
     const gunParented = gunHandParented;
     if (GUN_IN_HAND && !gunParented && !twoHandRootPose && gun.parent && gun.parent !== scene) scene.attach(gun);
     if (gunParented) {
@@ -7120,29 +7130,10 @@ function createLightningEffect() {
     }
     }
 
-    // Calibration capture (once per weapon): with whichever pose branch above just
-    // ran (legacy gripAnchor, OR the clone-faithful twoHandRootPose — both produce
-    // a full world transform every frame) applied while AIMING at near-level pitch
-    // — arms raised, gun aligned with the view — the gun's current world transform
-    // IS the correct in-hand pose. attach() to the hand bone converts it to the
-    // equivalent hand-local transform, which we record as this weapon's permanent
-    // fit (research: seed-via-attach pattern). Runs OUTSIDE the if/else chain (not
-    // nested in the legacy branch) because gunHandParented/twoHandRootPose both key
-    // off `!!thirdPerson.weapon.handFit` — nesting this inside one specific branch
-    // would make that branch unreachable pre-calibration and handFit could never be
-    // set (the chicken-and-egg that left every gun un-parented and off-center).
-    //
-    // CRITICAL — the pose MUST be settled before capture. The always-aim change
-    // holds aimBlend≈1 at all times, so the old gate (aimBlend>0.75) fired within
-    // ~3 frames of a weapon becoming ready — i.e. DURING the equip dip (equip>0),
-    // whose additive raise/roll (see the `thirdPerson.equip > 0` block above:
-    // rot.x -= e*0.55, rot.z += e*0.3, pos.y -= e*0.34) then got baked PERMANENTLY
-    // into handFit. That jammed every non-starter weapon to the cheek and rolled it
-    // (read as "held upside-down / like a pistol"). Only the Service Pistol escaped:
-    // as the STARTER it calibrates at boot, long after its equip settled to 0.
-    // So require equip fully finished (and not inspecting) — capture only from the
-    // same clean, settled stance the pistol always got.
-    const shouldCaptureHandFit = GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
+    // Sidearm calibration only: capture a settled aim pose after the equip dip
+    // finishes, so transient equip/inspect rotations cannot become a permanent fit.
+    // Two-handed guns must never leave the clone's root pose for a wrist-local fit.
+    const shouldCaptureHandFit = oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
         && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3
         && thirdPerson.equip < 0.02 && !thirdPerson.inspecting;
     if (shouldCaptureHandFit) {
@@ -10130,6 +10121,8 @@ function createLightningEffect() {
     player.jumpVel = 0;
     player.grounded = true;
     player.jumpCooldown = 0;
+    player.impactVelX = 0;
+    player.impactVelZ = 0;
     ai.playerPrevX = spot.x;
     ai.playerPrevZ = spot.z;
     ai.playerVelX = 0;
@@ -10209,29 +10202,19 @@ function createLightningEffect() {
     return 19;
   }
 
-  function pickEnemyTypeForWave(wave) {
+  function pickEnemyTypeForWave(wave, slot = 0) {
     const siege = ENEMY_TYPES.find(type => type.name === "Siege Drone");
     const ghost = ENEMY_TYPES.find(type => type.name === CLONED_GHOST_TYPE_NAME);
     const blink = ENEMY_TYPES.find(type => type.name === "Blink Seraph");
     const nullCherub = ENEMY_TYPES.find(type => type.name === "Null Cherub");
     const zombie = ENEMY_TYPES.find(type => type.name === "Zombie");
-    // Siege Drone decays from 1.0 toward a 0.55 floor as the rest of the roster
-    // unlocks, so it stops structurally dominating every wave once there's
-    // something else to fight.
-    const choices = [{ type: siege, weight: Math.max(0.55, 1 - (wave - 1) * 0.045) }];
-    if (wave >= 2) choices.push({ type: ghost, weight: Math.min(0.65, 0.35 + (wave - 2) * 0.04) });
-    if (wave >= 4) choices.push({ type: blink, weight: Math.min(0.45, 0.22 + (wave - 4) * 0.025) });
-    // Zombies trickle in from wave 5, ramping slowly (cap ~60% of spawns).
-    if (wave >= 5 && zombie && ZOMBIE_CHARACTER_GLB) choices.push({ type: zombie, weight: Math.min(0.6, 0.28 + (wave - 5) * 0.045) });
-    if (wave >= 6) choices.push({ type: nullCherub, weight: Math.min(0.4, 0.15 + (wave - 6) * 0.02) });
-
-    const total = choices.reduce((sum, choice) => sum + choice.weight, 0);
-    let roll = Math.random() * total;
-    for (const choice of choices) {
-      roll -= choice.weight;
-      if (roll <= 0) return choice.type;
-    }
-    return ENEMY_TYPES[0];
+    // Authored squads: pressure, support, then denial. Keep the intro models warm.
+    const pressure = zombie && ZOMBIE_CHARACTER_GLB ? zombie : blink;
+    const squads = wave === 1 ? [siege] : wave === 2 ? [ghost, siege, ghost]
+      : wave < 6 ? [pressure, ghost, siege, pressure]
+      : wave % 3 === 0 ? [pressure, nullCherub, ghost, pressure, siege]
+      : [ghost, blink, siege, nullCherub, pressure];
+    return squads[slot % squads.length] || siege || ENEMY_TYPES[0];
   }
 
   function disposeEnemy(enemy) {
@@ -10447,6 +10430,7 @@ function createLightningEffect() {
       aiAdvanceMul: NaN,
       aiLateralMul: NaN,
       aiRetreat: false,
+      relayRushTimer: 0,
       zombieWeaveTimer: 0,
       zombieWeaveCooldown: 0.8 + Math.random() * 1.2,
       cloneKeyF: 0,
@@ -10593,6 +10577,7 @@ function createLightningEffect() {
     enemy.aiAdvanceMul = NaN;
     enemy.aiLateralMul = NaN;
     enemy.aiRetreat = false;
+    enemy.relayRushTimer = 0;
     enemy.zombieWeaveTimer = 0;
     enemy.zombieWeaveCooldown = 0.8 + Math.random() * 1.2;
     enemy.zombieAnimLocked = false;
@@ -10672,7 +10657,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   const count = getWaveEnemyCount(wave);
   let positions = getDevSpawnPositions(wave, count, minDistance, preferVisible);
-  const hpScale = getWaveHpScale(wave);
+  const hpScale = getWaveHpScale(wave) * (wave === 1 ? 0.32 : wave === 2 ? 0.65 : 1);
   game.totalEnemies = count;
   game.killed = 0;
   updateObjective();
@@ -10705,7 +10690,7 @@ async function spawnEnemies(wave, options: any = {}) {
       pos = { x: base.x + Math.cos(angle) * CELL * 1.5, z: base.z + Math.sin(angle) * CELL * 1.5 };
     }
     pos = pos || mapToWorld(MAP_W - 2, MAP_H - 2);
-    const type = pickEnemyTypeForWave(wave);
+    const type = pickEnemyTypeForWave(wave, i);
     const pool = enemyPools[type.name];
     const enemy = pool && pool.length ? prepareEnemyForSpawn(pool.pop(), type, pos, wave, hpScale) : createEnemy(type, pos, wave, hpScale);
     scene.add(enemy.mesh);
@@ -10715,6 +10700,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (smooth && ((i + 1) % 2 === 0 || i === count - 1)) await waitFrame();
   }
   game.totalEnemies = enemies.length;
+  beginRelay(wave);
   updateObjective();
 }
 
@@ -12155,6 +12141,12 @@ async function spawnEnemies(wave, options: any = {}) {
     writeLightningPathFromScratch(effect, buildLightningPathScratch(start, end, segments, jitter, lift));
   }
 
+  let abilityImpacts: ReturnType<typeof createAbilityImpacts> | null = null;
+  function impactFx(x, y, z, color, radius = 2, kind = "strike") {
+    abilityImpacts ??= createAbilityImpacts(THREE, scene, lowEndMode ? 6 : 12);
+    abilityImpacts.spawn(x, y, z, color, radius, kind);
+  }
+
   function spawnLightningEffect(start, end, power = 1, options: any = {}) {
     const lowEndLateWave = lowEndMode && game.wave >= 6;
     const maxActive = options.maxActive ?? (lowEndLateWave ? 7 : lowEndMode ? 9 : LIGHTNING_POOL_SIZE);
@@ -12163,6 +12155,12 @@ async function spawnEnemies(wave, options: any = {}) {
 
     const effect = checkoutLightningEffect();
     const tint = options.tint || LIGHTNING_DEFAULT_TINT;
+    effect.impactPoint.copy(end);
+    effect.sourcePoint.copy(start);
+    effect.boltWidth = Math.min(0.13, 0.025 + power * 0.03);
+    effect.reshuffleTimer = undefined;
+    camera.getWorldPosition(cameraWorldTmp);
+    if (options.rings === true) impactFx(end.x, end.y, end.z, tint.ring, Math.min(3.2, 0.8 + power), power < 1 ? "blink" : "strike");
     effect.core.material.color.setHex(tint.core);
     effect.glow.material.color.setHex(tint.glow);
     effect.outer.material.color.setHex(tint.outer);
@@ -12220,13 +12218,15 @@ async function spawnEnemies(wave, options: any = {}) {
     effect.flickerSeed = Math.random() * 1000;
 
     effect.life = (options.life ?? (electric ? 0.075 : (lowEndLateWave ? 0.12 : 0.18))) + power * (electric ? 0.022 : (lowEndLateWave ? 0.028 : 0.048));
+    if (options.rings === true) effect.life = Math.max(effect.life, 0.22 + Math.min(power, 3) * 0.025);
     effect.maxLife = effect.life;
+    effect.ribbon.update(effect.positions, effect.segmentCount, cameraWorldTmp, effect.boltWidth);
 
     // Store for animated path reshuffling on electric bolts
     if (electric) {
       effect.startPos = start.clone();
       effect.endPos   = end.clone();
-      effect.electricSegments = options.segments ?? (lowEndLateWave ? 5 : 8);
+      effect.electricSegments = mainPathCount - 1;
       effect.electricJitter   = options.jitter   ?? (0.14 + power * 0.07);
       effect.electricLift     = options.lift     ?? 0.035;
       effect.reshuffleTimer   = 0.013 + Math.random() * 0.010;
@@ -12931,6 +12931,8 @@ async function spawnEnemies(wave, options: any = {}) {
     const origin = enemyShotOriginTmp.set(enemy.mesh.position.x, enemy.mesh.position.y + 0.45, enemy.mesh.position.z);
     const arcCount = deviceProfile.tier === "low" ? 3 : 4;
     const empTint = getLightningTint(enemy);
+    impactFx(origin.x, 0.1, origin.z, empTint.ring, spec.radius, "emp");
+    broadcastCoopFx("abilityImpact", { x: origin.x, z: origin.z, radius: spec.radius, enemy: ensureCoopEnemyNetId(enemy) });
     for (let i = 0; i < arcCount; i++) {
       const a = (i / arcCount) * Math.PI * 2 + Math.random() * 0.2;
       const end = new THREE.Vector3(
@@ -12967,6 +12969,8 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function updateLightningEffects(dt) {
+    abilityImpacts?.update(dt);
+    camera.getWorldPosition(cameraWorldTmp);
     for (let i = lightningEffects.length - 1; i >= 0; i--) {
       const effect = lightningEffects[i];
       effect.life -= dt;
@@ -12976,6 +12980,7 @@ async function spawnEnemies(wave, options: any = {}) {
         effect.reshuffleTimer -= dt;
         if (effect.reshuffleTimer <= 0 && effect.startPos && effect.endPos) {
           effect.reshuffleTimer = 0.012 + Math.random() * 0.010;
+          const fullSegmentCount = effect.segmentCount;
           effect.segmentCount = 0;
           const cnt = buildLightningPathScratch(
             effect.startPos, effect.endPos,
@@ -12984,6 +12989,7 @@ async function spawnEnemies(wave, options: any = {}) {
             effect.electricLift
           );
           writeLightningPathFromScratch(effect, cnt);
+          effect.segmentCount = fullSegmentCount; // keep the source and fork branches
           effect.geometry.setDrawRange(0, effect.segmentCount * 2);
           effect.geometry.attributes.position.needsUpdate = true;
         }
@@ -12991,6 +12997,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
       const t = Math.max(0, effect.life / effect.maxLife);
       const age = 1 - t;
+      effect.ribbon.update(effect.positions, effect.segmentCount, cameraWorldTmp, effect.boltWidth * (0.55 + t * 0.45));
       // Stronger, faster flicker — randomized each frame for a true crackle feel
       const rawFlicker = 0.62 + Math.random() * 0.38 + Math.sin((performance.now() * 0.055 + effect.flickerSeed) * 14) * 0.18;
       const pulse = Math.max(0, Math.min(1.25, rawFlicker));
@@ -14647,7 +14654,11 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function resetPlayer(options: any = {}) {
     const { setStartTime = true } = options;
+    pendingWeaponSwitch = null;
     cancelCutscene();
+    lightingState.flashlightOn = false;
+    lightingState.flashlightBoot = null;
+    disablePlayerFlashlightRig();
     // Wave 1 opens right at the interior Pack-a-Punch station (createPackStation
     // anchors it at 0,0,22) so the intro cutscene stages there. PvP/other modes
     // keep the legacy corner spawn.
@@ -14770,6 +14781,226 @@ async function spawnEnemies(wave, options: any = {}) {
     updateObjective();
   }
 
+  // Local encounters use a reachable relay; network games retain host kill quotas.
+  let relay: { wave: number; x: number; z: number; progress: number; contested: boolean; playerInside: boolean } | null = null;
+  let relayMarker: import("three").Group | null = null;
+  let relayShield: import("three").Mesh | null = null;
+
+  function beginRelay(wave) {
+    relay = null;
+    if (relayMarker) relayMarker.visible = false;
+    if (net?.active || wave % 3 !== 0) return;
+    const start = worldToMap(yaw.position.x, yaw.position.z);
+    const queue = [{ mx: start.mx, my: start.my, depth: 0 }];
+    const seen = new Set([`${start.mx},${start.my}`]);
+    let target = null;
+    // Flood only traversable cells, so the beacon cannot land across a sealed wall.
+    for (let i = 0; i < queue.length && i < 4000; i++) {
+      const cell = queue[i];
+      const pos = mapToWorld(cell.mx, cell.my);
+      if (cell.depth >= 4) target = pos;
+      if (cell.depth >= 8) break;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const mx = cell.mx + dx, my = cell.my + dz, key = `${mx},${my}`;
+        if (seen.has(key) || !isOpenCell(mx, my)) continue;
+        seen.add(key);
+        const p = mapToWorld(mx, my);
+        if (wallAtWorldRadius(p.x, p.z, 0.7) || propBlocksAt(p.x, p.z, 0.7, 0.1, PLAYER_H)) continue;
+        queue.push({ mx, my, depth: cell.depth + 1 });
+      }
+    }
+    if (!target) return; // Tiny/custom maps safely fall back to elimination.
+    relay = { wave, ...target, progress: 0, contested: false, playerInside: false };
+    if (!relayMarker) {
+      relayMarker = new THREE.Group();
+      relayMarker.name = "Relay Portal";
+      const floorRing = new THREE.Mesh(new THREE.TorusGeometry(3.5, 0.035, 8, 96),
+        new THREE.MeshBasicMaterial({ color: 0x44eeff, transparent: true, opacity: 0.9 }));
+      floorRing.rotation.x = Math.PI / 2;
+      const outerGate = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.045, 8, 48),
+        new THREE.MeshBasicMaterial({ color: 0x62dfff, transparent: true, opacity: 0.86 }));
+      outerGate.position.y = 0.12;
+      outerGate.rotation.x = Math.PI / 2;
+      const innerGate = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.025, 8, 48),
+        new THREE.MeshBasicMaterial({ color: 0xb8f7ff, transparent: true, opacity: 0.75 }));
+      innerGate.position.y = 0.16;
+      innerGate.rotation.x = Math.PI / 2;
+      innerGate.rotation.z = Math.PI / 2;
+      const portalVoid = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.38, 2.4, 32, 4, true),
+        new THREE.ShaderMaterial({
+          uniforms: {
+            uTime: { value: 0 },
+            uPulse: { value: 0.5 },
+            uContested: { value: 0 },
+          },
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.NormalBlending,
+          toneMapped: false,
+          vertexShader: /* glsl */`
+            varying vec2 vUv;
+            varying float vHeight;
+            uniform float uTime;
+            void main() {
+              vUv = uv;
+              vHeight = position.y;
+              vec3 warped = position;
+              float taper = smoothstep(-2.6, 2.6, position.y);
+              warped.x += sin(position.y * 2.7 + uTime * 1.8) * (0.035 + taper * 0.04);
+              warped.z += cos(position.y * 3.1 - uTime * 1.35) * (0.035 + taper * 0.04);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(warped, 1.0);
+            }
+          `,
+          fragmentShader: /* glsl */`
+            precision highp float;
+            varying vec2 vUv;
+            varying float vHeight;
+            uniform float uTime;
+            uniform float uPulse;
+            uniform float uContested;
+
+            void main() {
+              float heightFade = smoothstep(0.0, 0.12, vUv.y) * (1.0 - smoothstep(0.84, 1.0, vUv.y));
+              float bands = pow(0.5 + 0.5 * sin(vUv.x * 38.0 + vUv.y * 10.0 - uTime * 4.0), 8.0);
+              float scan = pow(0.5 + 0.5 * sin(vUv.y * 72.0 - uTime * 7.0), 7.0);
+              float sweep = exp(-pow((fract(uTime * 0.22) - vUv.y) * 12.0, 2.0));
+              float spiral = pow(0.5 + 0.5 * sin(vUv.x * 22.0 - vUv.y * 18.0 + uTime * 2.5), 6.0);
+              vec3 cyan = vec3(0.04, 0.62, 1.0);
+              vec3 amber = vec3(1.0, 0.30, 0.06);
+              vec3 color = mix(cyan, amber, uContested);
+              float energy = (0.12 + bands * 0.9 + scan * 0.35 + spiral * 0.55 + sweep * 0.8) * heightFade;
+              color *= 0.55 + energy * (1.2 + uPulse * 0.5);
+              gl_FragColor = vec4(color, heightFade * (0.06 + energy * 0.20));
+            }
+          `,
+        }));
+      portalVoid.position.set(0, 1.3, 0);
+      const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 1),
+        new THREE.MeshBasicMaterial({ color: 0xd8fbff, transparent: true, opacity: 0.95 }));
+      core.position.set(0, 0.65, 0);
+      relayMarker.add(floorRing, outerGate, innerGate, portalVoid, core);
+      relayMarker.userData = { floorRing, outerGate, innerGate, portalVoid, core };
+      scene.add(relayMarker);
+
+      relayShield = new THREE.Mesh(new THREE.IcosahedronGeometry(1.18, 3), new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uIntensity: { value: 0 },
+        },
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+        vertexShader: /* glsl */`
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+          uniform float uTime;
+          void main() {
+            vec3 displaced = position + normal * (sin(position.y * 9.0 + uTime * 4.0) * 0.012);
+            vNormal = normalize(mat3(modelMatrix) * normal);
+            vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
+            vWorldPosition = worldPosition.xyz;
+            gl_Position = projectionMatrix * viewMatrix * worldPosition;
+          }
+        `,
+        fragmentShader: /* glsl */`
+          precision highp float;
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+          uniform float uTime;
+          uniform float uIntensity;
+          void main() {
+            vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+            float fresnel = pow(1.0 - abs(dot(viewDirection, normalize(vNormal))), 3.0);
+            float latitude = pow(0.5 + 0.5 * sin(vWorldPosition.y * 18.0 - uTime * 7.0), 7.0);
+            float pulse = 0.88 + 0.12 * sin(uTime * 1.8);
+            vec3 shieldBlue = vec3(0.24, 0.72, 0.78);
+            float alpha = (fresnel * 0.38 + latitude * 0.035) * pulse * uIntensity;
+            gl_FragColor = vec4(shieldBlue * (0.8 + fresnel * 0.6), alpha);
+          }
+        `,
+      }));
+      relayShield.name = "Relay Upload Shield";
+      relayShield.visible = false;
+      scene.add(relayShield);
+    }
+    relayMarker.position.set(target.x, 0.18, target.z);
+    relayMarker.visible = true;
+    addKillFeed("RELAY: HOLD THE CYAN ZONE FOR 18 SECONDS. HOSTILES CONTEST IT.");
+  }
+
+  function activeRelay() {
+    return !net?.active && relay?.wave === game.wave ? relay : null;
+  }
+
+  function updateRelay(dt) {
+    const visible = !!activeRelay() && game.state === "playing";
+    if (relayMarker) {
+      relayMarker.visible = visible;
+      if (relayShield) relayShield.visible = false;
+      if (visible) {
+        const parts = relayMarker.userData;
+        const pulse = 0.5 + Math.sin(performance.now() * 0.004) * 0.5;
+        relayMarker.rotation.y += dt * 0.22;
+        parts.floorRing.material.opacity = 0.55 + pulse * 0.15;
+        const relayColor = relay?.contested ? 0xffb767 : 0x79d8d3;
+        parts.floorRing.material.color.setHex(relayColor);
+        parts.outerGate.material.color.setHex(relayColor);
+        parts.innerGate.material.color.setHex(relayColor);
+        parts.outerGate.rotation.z += dt * (0.7 + pulse * 0.35);
+        parts.innerGate.rotation.z -= dt * (1.3 + pulse * 0.5);
+        parts.outerGate.material.opacity = 0.52 + pulse * 0.35;
+        parts.innerGate.material.opacity = 0.42 + pulse * 0.28;
+        parts.portalVoid.material.uniforms.uTime.value = performance.now() * 0.001;
+        parts.portalVoid.material.uniforms.uPulse.value = pulse;
+        parts.portalVoid.material.uniforms.uContested.value = relay?.contested ? 1 : 0;
+        parts.core.rotation.x += dt * 1.4;
+        parts.core.rotation.y -= dt * 1.8;
+        parts.core.scale.setScalar(0.82 + pulse * 0.28);
+
+        const objective = relay;
+        const inside = !!objective && Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z) <= 3.5;
+        const uploading = inside && !objective?.contested && !cutscene.active && player.hp > 0 && thirdPerson.enabled && !!thirdPerson.root?.visible;
+        if (relayShield && uploading) {
+          relayShield.visible = true;
+          relayShield.position.set(
+            thirdPerson.root?.position.x ?? yaw.position.x,
+            (thirdPerson.root?.position.y ?? (yaw.position.y - PLAYER_H)) + 1.05,
+            thirdPerson.root?.position.z ?? yaw.position.z,
+          );
+          relayShield.rotation.y += dt * 0.35;
+          const shieldMaterial = relayShield.material as any;
+          shieldMaterial.uniforms.uTime.value = performance.now() * 0.001;
+          shieldMaterial.uniforms.uIntensity.value = 0.7 + pulse * 0.3;
+        }
+      }
+    }
+    const objective = activeRelay();
+    if (!objective || game.state !== "playing" || cutscene.active || player.hp <= 0) return;
+    const inside = Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z) <= 3.5;
+    if (inside && !objective.playerInside) {
+      objective.playerInside = true;
+      for (const enemy of enemies) {
+        if (!enemy.alive) continue;
+        enemy.aggroed = true;
+        enemy.lastSeenX = yaw.position.x;
+        enemy.lastSeenZ = yaw.position.z;
+        enemy.lastSeenTimer = Math.max(enemy.lastSeenTimer || 0, 8);
+        enemy.relayRushTimer = 8;
+        enemy.smartPlanValid = false;
+        enemy.navPath = [];
+        enemy.navTimer = 0;
+      }
+      addKillFeed("RELAY BREACH: HOSTILES INBOUND");
+    }
+    objective.contested = enemies.some(e => e.alive && Math.hypot(e.mesh.position.x - objective.x, e.mesh.position.z - objective.z) < 5);
+    if (inside && !objective.contested) objective.progress = Math.min(18, objective.progress + dt);
+    updateObjective();
+    if (objective.progress >= 18) void nextWave();
+  }
+
   function updateObjective() {
     if (net?.active && gameMode === "pvp") {
       pvpHudEl?.classList.add("active");
@@ -14780,8 +15011,13 @@ async function spawnEnemies(wave, options: any = {}) {
     if (hud.objective) {
       const blackout = game.wave > 0 && game.wave % 10 === 0;
       hud.objective.textContent = blackout
-        ? `BLACKOUT — ×2 XP — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} HOSTILES`
-        : `WAVE ${game.wave} — ELIMINATE ${Math.max(0, game.totalEnemies - game.killed)} DRONES`;
+        ? "Power lost. Survive the hunt."
+        : "Eliminate hostiles to secure the sector";
+      const objective = activeRelay();
+      if (objective) {
+        const distance = Math.round(Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z));
+        hud.objective.textContent = objective.contested ? "Clear hostiles from the relay" : distance <= 3.5 ? "Uploading: hold position" : `Reach the relay / ${distance}m`;
+      }
       // Blackout polish: the objective line itself burns amber during the event.
       hud.objective.style.color = blackout ? "#ffb054" : "";
       hud.objective.style.textShadow = blackout ? "0 0 12px rgba(255,120,30,.55)" : "";
@@ -15334,8 +15570,29 @@ async function spawnEnemies(wave, options: any = {}) {
     if (!editorWindow) window.location.href = editorUrl;
   }
 
+  let pendingWeaponSwitch: { gun: GunType; elapsed: number; duration: number } | null = null;
+
+  function updateWeaponSwitch(dt) {
+    const pending = pendingWeaponSwitch;
+    if (!pending || cutscene.active || player.pvpDead) return;
+    pending.elapsed = Math.min(pending.duration, pending.elapsed + dt);
+    const lower = pending.elapsed / pending.duration;
+    thirdPerson.equip = lower;
+    if (lower >= 1) {
+      pendingWeaponSwitch = null;
+      switchGun(pending.gun, { commit: true });
+    }
+  }
+
   function switchGun(gunType, options: any = {}) {
-    if (gunType === currentGun) return;
+    if (gunType === currentGun) {
+      if (pendingWeaponSwitch) {
+        weaponAnim.switchBlend = pendingWeaponSwitch.elapsed / pendingWeaponSwitch.duration;
+        thirdPerson.equip = weaponAnim.switchBlend;
+        pendingWeaponSwitch = null;
+      }
+      return;
+    }
     // Progression gate: only OWNED weapons can be selected. The mystery box passes
     // { fromBox:true } after granting, so its result always goes through.
     if (!options.fromBox && !ownsWeapon(gunType)) {
@@ -15343,6 +15600,20 @@ async function spawnEnemies(wave, options: any = {}) {
       sfxDenied();
       return;
     }
+    if (!GUN_SPECS[gunType]) return;
+    if (game.state === "playing" && !options.fromBox && !options.commit) {
+      if (cutscene.active || player.pvpDead) return;
+      // Coalesce requests during the holster instead of restarting its animation.
+      if (pendingWeaponSwitch) pendingWeaponSwitch.gun = gunType;
+      else pendingWeaponSwitch = { gun: gunType, elapsed: 0,
+        duration: Math.max(0.16, GUN_SPECS[currentGun].equipTime * 0.65) };
+      gunState.reloadTimer = 0;
+      gunState.isAutoReloading = false;
+      mouse.aiming = false;
+      audioEngine.stopFireLoop(true);
+      return;
+    }
+    pendingWeaponSwitch = null;
     allGuns[currentGun] = gunState;
     audioEngine.stopFireLoop(true); // hard-cut any auto fire loop from the old weapon
     if (weapon?.gun) weapon.gun.visible = false;
@@ -15370,7 +15641,7 @@ async function spawnEnemies(wave, options: any = {}) {
   function fireGun() {
     if (game.state !== "playing") return;
     if (player.pvpDead) return;
-    if (weaponAnim.switchBlend > 0.12) return;
+    if (pendingWeaponSwitch || weaponAnim.switchBlend > 0.12) return;
     if (gunState.fireCooldown > 0 || gunState.reloadTimer > 0) return;
     if (thirdPerson.inspecting) { thirdPerson.inspecting = false; thirdPerson.inspectT = 0; }
     if (!player.unlimitedAmmo && gunState.mag <= 0) {
@@ -15857,8 +16128,8 @@ async function spawnEnemies(wave, options: any = {}) {
     if (game.state !== "playing" || game.waveSpawning || game.transitioning) return;
     // Stale setTimeout from a previous wave: totalEnemies is 0 (not yet set) or not all
     // enemies have been accounted for yet — bail out to avoid wiping a freshly spawned wave.
-    if (game.totalEnemies <= 0 || game.killed < game.totalEnemies) return;
-    if (enemies.some(e => e.alive)) return;
+    const objective = activeRelay();
+    if (objective ? objective.progress < 18 : (game.totalEnemies <= 0 || game.killed < game.totalEnemies || enemies.some(e => e.alive))) return;
     game.waveSpawning = true;
     game.transitioning = true;
     game.state = "transition";
@@ -15898,7 +16169,7 @@ async function spawnEnemies(wave, options: any = {}) {
       const waveAmmoBonus = 24 + Math.min(26, game.wave * 2);
       for (const gun of Object.values(allGuns)) gun.ammo = Math.min(gun.ammo + waveAmmoBonus, 240);
       player.hp = Math.min(100, player.maxHp);
-      placePlayerForWave(game.wave);
+      // Preserve the player position and the route they chose between encounters.
       updateHUD(0);
       await new Promise(resolve => setTimeout(resolve, 220));
       await waitFrame();
@@ -15991,6 +16262,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function tryReload() {
+    if (pendingWeaponSwitch) return;
     if ((player.nullLockTimer || 0) > 0) return; // Null Field: reload suppressed
     if (gunState.reloadTimer > 0) return;
     if (gunState.mag >= gunState.magSize) return;
@@ -16007,7 +16279,7 @@ async function spawnEnemies(wave, options: any = {}) {
   function tryInspect() {
     if (game.state !== "playing") return;
     if (player.pvpDead) return;
-    if (weaponAnim.switchBlend > 0.12) return;
+    if (pendingWeaponSwitch || weaponAnim.switchBlend > 0.12) return;
     if (gunState.reloadTimer > 0) return;
     if (thirdPerson.inspecting) return;
     thirdPerson.inspecting = true;
@@ -16132,7 +16404,7 @@ async function spawnEnemies(wave, options: any = {}) {
     sun.intensity = (sun.userData.baseIntensity ?? 2.1) * (1 - 0.85 * t);
     const hemi = window.__extHemi;
     if (hemi) hemi.intensity = (hemi.userData.baseIntensity ?? 0.45) * (1 - 0.55 * t);
-    if (scene.environment) scene.environmentIntensity = 0.45 * (1 - 0.68 * t);
+    if (scene.environment) scene.environmentIntensity = darkWaveActive ? 0 : 0.45 * (1 - 0.68 * t);
   }
 
   // Highest prop top the player is standing over and can rest on (within a small
@@ -16247,8 +16519,9 @@ async function spawnEnemies(wave, options: any = {}) {
     const right = thirdPersonRightTmp.set(Math.cos(yaw.rotation.y), 0, -Math.sin(yaw.rotation.y));
     const eyeHeight = PLAYER_H + THIRD_PERSON_CAMERA_HEIGHT;
     const aimT = viewState.ads || 0;
-    const shoulderX = THIRD_PERSON_SHOULDER_X * (1 - aimT * 0.28);
-    const distance = THIRD_PERSON_DISTANCE - aimT * 0.42;
+    const aimProfile = AIM_PROFILES[currentGun];
+    const shoulderX = THIRD_PERSON_SHOULDER_X * (1 + aimT * (aimProfile.shoulder - 1));
+    const distance = Math.max(0.82, THIRD_PERSON_DISTANCE - aimT * aimProfile.pullIn);
     const candidates = [
       { x: shoulderX, y: THIRD_PERSON_SHOULDER_Y, z: distance, weight: 1.0 },
       { x: -shoulderX * 0.58, y: THIRD_PERSON_SHOULDER_Y + 0.06, z: distance * 0.9, weight: 0.82 },
@@ -16392,10 +16665,8 @@ async function spawnEnemies(wave, options: any = {}) {
     playTone(120, "triangle", 0.5, 0.16, 0, 0.4, 0, 320);
   }
 
-  // Cinematic key light for the enemy pan: a blackout interior/exterior is near
-  // pitch black, so the hero shot needs light to read. Boost the EXISTING ember
-  // sun + hemi (intensity-only — never visibility, per the light-count shader-
-  // cache invariant) for the duration of phase B, restore exactly after.
+  // Lift ambient fill for the enemy pan. Eclipse waves keep directional sun
+  // intensity at zero throughout the cinematic as well as gameplay.
   function boostCutsceneKeyLight(on) {
     if (on === cutscene.lightBoosted) return;
     const extSun = window.__extSun, extHemi = window.__extHemi;
@@ -16403,11 +16674,11 @@ async function spawnEnemies(wave, options: any = {}) {
       cutscene.lightBoosted = true;
       cutscene.sunPrev = extSun ? extSun.intensity : null;
       cutscene.hemiPrev = extHemi ? extHemi.intensity : null;
-      if (extSun) extSun.intensity = Math.max(extSun.intensity, 2.6);
+      if (extSun) extSun.intensity = darkWaveActive ? 0 : Math.max(extSun.intensity, 2.6);
       if (extHemi) extHemi.intensity = Math.max(extHemi.intensity, 0.42);
     } else {
       cutscene.lightBoosted = false;
-      if (extSun && cutscene.sunPrev !== null) extSun.intensity = cutscene.sunPrev;
+      if (extSun && cutscene.sunPrev !== null) extSun.intensity = darkWaveActive ? 0 : cutscene.sunPrev;
       if (extHemi && cutscene.hemiPrev !== null) extHemi.intensity = cutscene.hemiPrev;
     }
   }
@@ -16426,7 +16697,7 @@ async function spawnEnemies(wave, options: any = {}) {
       #rb-cut-bottom { bottom: 0; transform-origin: bottom; }
       body.rb-cutscene #rb-cut-top, body.rb-cutscene #rb-cut-bottom { transform: scaleY(1); }
       /* Filmic vignette that fades in with the bars — pushes focus to centre. */
-      #rb-cut-vig { position: fixed; inset: 0; z-index: 59; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(ellipse 128% 92% at 50% 48%, transparent 38%, rgba(0,0,0,.36) 72%, rgba(0,0,0,.8) 100%); }
+      #rb-cut-vig { display: none; position: fixed; inset: 0; z-index: 59; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(ellipse 128% 92% at 50% 48%, transparent 38%, rgba(0,0,0,.36) 72%, rgba(0,0,0,.8) 100%); }
       body.rb-cutscene #rb-cut-vig { opacity: 1; }
       /* Filmic colour grade: a teal-orange push (warm highlights, cool shadows) via
          soft-light, plus a faint anamorphic-style horizontal light bloom near centre.
@@ -17805,7 +18076,11 @@ async function spawnEnemies(wave, options: any = {}) {
     const moveLambda = airborne ? (moving ? 3.2 : 1.6) : (moving ? 15 : 13);
     player.velX = dampValue(player.velX || 0, desiredVX, moveLambda, dt);
     player.velZ = dampValue(player.velZ || 0, desiredVZ, moveLambda, dt);
-    const delta = movementDeltaTmp.set(player.velX * dt, 0, player.velZ * dt);
+    const impactVX = player.impactVelX || 0;
+    const impactVZ = player.impactVelZ || 0;
+    const delta = movementDeltaTmp.set((player.velX + impactVX) * dt, 0, (player.velZ + impactVZ) * dt);
+    player.impactVelX = dampValue(impactVX, 0, 7.5, dt);
+    player.impactVelZ = dampValue(impactVZ, 0, 7.5, dt);
 
     const r = player.radius;
     const steps = Math.max(1, Math.ceil(delta.length() / 0.16));
@@ -17882,6 +18157,8 @@ async function spawnEnemies(wave, options: any = {}) {
     return { f, s, sprinting, jumping: !player.grounded || player.jumpOffset > 0.02 };
   }
 
+  const directEncounter = createEncounterDirector();
+
   function updateEnemies(dt) {
     // Blackout cutscene: freeze enemy AI/attacks in place (still rendered). The
     // co-op host keeps broadcasting these frozen positions, so guests stay in sync.
@@ -17896,6 +18173,17 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     const localPx = yaw.position.x;
     const localPz = yaw.position.z;
+    if (!net?.active && !darkWaveActive && !activeRelay()) {
+      const push = directEncounter(dt, `${game.startTime}/${game.wave}`, enemies, localPx, localPz);
+      for (const enemy of push) {
+        enemy.aggroed = true;
+        enemy.lastSeenX = localPx; enemy.lastSeenZ = localPz;
+        enemy.lastSeenTimer = 10;
+        enemy.navTimer = 0; enemy.smartPlanValid = false;
+        enemy.directChaseTimer = 5;
+      }
+      if (push.length) addKillFeed(game.totalEnemies - game.killed <= 3 ? "LAST HOSTILES ARE CLOSING IN" : "HOSTILE SQUAD INBOUND");
+    }
     if (!ai.initialized) {
       ai.playerPrevX = localPx;
       ai.playerPrevZ = localPz;
@@ -17983,6 +18271,7 @@ async function spawnEnemies(wave, options: any = {}) {
       enemy.lightningStreamTimer = Math.max(0, (enemy.lightningStreamTimer || 0) - dt);
       enemy.lightningDamageTimer = Math.max(0, (enemy.lightningDamageTimer || 0) - dt);
       enemy.lightningSfxTimer = Math.max(0, (enemy.lightningSfxTimer || 0) - dt);
+      enemy.relayRushTimer = Math.max(0, (enemy.relayRushTimer || 0) - dt);
       enemy.directChaseTimer = Math.max(0, enemy.directChaseTimer - dt);
       enemy.lastSeenTimer = Math.max(0, enemy.lastSeenTimer - dt);
       enemy.avoidTimer = Math.max(0, (enemy.avoidTimer || 0) - dt);
@@ -18230,6 +18519,7 @@ async function spawnEnemies(wave, options: any = {}) {
         if (enemy.lightningStreamTimer <= 0 && (enemy.hitStagger || 0) < 0.35) {
           if (!enemy.lightningWindUp) {
             enemy.lightningWindUp = _windUpDuration;
+            enemy.lightningWindUpDuration = _windUpDuration;
             enemy.attackPulse = Math.max(enemy.attackPulse, 1.2);
             lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.18);
             // Lock the aim point at the start of the telegraph so the player has
@@ -18331,6 +18621,18 @@ async function spawnEnemies(wave, options: any = {}) {
 
       if (dist < enemy.aggroRange || enemy.lastSeenTimer > 0) enemy.aggroed = true;
       updateEnemyBrain(enemy, dist, los, dt, isZombie, isClonedGhost);
+      const relayRush = (enemy.relayRushTimer || 0) > 0;
+      if (relayRush) {
+        enemy.aiRetreat = false;
+        enemy.aiLateralMul = isZombie ? 0.08 : 0.18;
+        enemy.aiAdvanceMul = isZombie ? 1.22 : 1.18;
+        enemy.cloneAdvanceMul = 1.12;
+        enemy.cloneLateralMul = 0.12;
+        if (isZombie) {
+          enemy.zombieLocoMul = 1.28;
+          enemy.locoState = "run";
+        }
+      }
       const hoverPhase = enemy.mesh.userData.hoverPhase ?? 0;
       const hover = Math.sin(t + hoverPhase);
       const wingBeat = Math.sin(t * (2.2 + profile.spinMul * 0.7) + enemy.animSeed);
@@ -18476,7 +18778,11 @@ async function spawnEnemies(wave, options: any = {}) {
         let canDirectChase = false;
         let target = null;
 
-        if (isSmartBot) {
+          if (relayRush) {
+            target = { x: px, z: pz };
+            canDirectChase = true;
+            siegeTooClose = false;
+          } else if (isSmartBot) {
           if (enemy.smartThinkTimer <= 0 || !enemy.smartPlanValid) {
             if (isClonedGhost) refreshClonedGhostSmartPlan(enemy, playerCell, dirNormX, dirNormZ, dist, los, tactics);
             else refreshSiegeSmartPlan(enemy, playerCell, dirNormX, dirNormZ, dist, los, tactics);
@@ -18526,7 +18832,7 @@ async function spawnEnemies(wave, options: any = {}) {
           let moveDirZ = target.z - enemy.mesh.position.z;
           const moveDist = Math.hypot(moveDirX, moveDirZ) || 1;
           const nearPlayer = dist < 6.2;
-          const tooClose = dist < tactics.preferRange && ((enemy.rangedCooldown || 0) > 0.12 || enemy.attackCooldown > 0.15);
+          const tooClose = !relayRush && dist < tactics.preferRange && ((enemy.rangedCooldown || 0) > 0.12 || enemy.attackCooldown > 0.15);
           if ((tooClose && los) || enemy.aiRetreat === true) {
             moveDirX = -dirNormX;
             moveDirZ = -dirNormZ;
@@ -18671,6 +18977,19 @@ async function spawnEnemies(wave, options: any = {}) {
             const dmg = enemy.damage[0] + Math.floor(Math.random() * (enemy.damage[1] - enemy.damage[0] + 1));
             const localHit = applyCoopTargetDamage(enemyTarget, dmg, { sx: enemy.mesh.position.x, sz: enemy.mesh.position.z });
             if (localHit) {
+              if (enemy.typeName === "Zombie") {
+                const hitX = px - enemy.mesh.position.x;
+                const hitZ = pz - enemy.mesh.position.z;
+                const hitDist = Math.hypot(hitX, hitZ);
+                const invHitDist = hitDist > 0.05 ? 1 / hitDist : 0;
+                const knockback = 6.4;
+                player.impactVelX = hitX * invHitDist * knockback;
+                player.impactVelZ = hitZ * invHitDist * knockback;
+                if (player.grounded && player.jumpOffset <= 0.02) {
+                  player.jumpVel = Math.max(player.jumpVel || 0, 1.35);
+                  player.grounded = false;
+                }
+              }
               cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.55);
               player.killStreak = 0;
               updateStreak();
@@ -18748,7 +19067,23 @@ async function spawnEnemies(wave, options: any = {}) {
     lightingState.droneGlow = Math.min(1, droneGlowAccum * 0.12);
   }
 
+  const updateBlackoutAtmosphere = createBlackoutAtmosphere(THREE, scene, lowEndMode);
+  let blackoutSoundTimer = 6;
+
   function updateWeapon(dt) {
+    const haunting = darkWaveActive && game.state === "playing" && !cutscene.active;
+    updateBlackoutAtmosphere(dt, haunting, yaw.position);
+    if (haunting) {
+      blackoutSoundTimer -= dt;
+      if (blackoutSoundTimer <= 0) {
+        blackoutSoundTimer = 13 + Math.random() * 9;
+        const pan = Math.sin(performance.now() * .00013) * .7;
+        playNoise(3.8, .035, 180, "lowpass", 0, pan, .5);
+        playTone(46, "sine", 4.2, .022, 0, 0, pan, 33);
+        playTone(113, "sine", 2.8, .009, 0, .8, -pan, 87);
+      }
+    } else blackoutSoundTimer = 6;
+
     lightingState.shootFlash = Math.max(0, lightingState.shootFlash - dt * 10.5);
     lightingState.lightningFlash = Math.max(0, lightingState.lightningFlash - dt * 7.5);
 
@@ -18765,13 +19100,14 @@ async function spawnEnemies(wave, options: any = {}) {
     if (fboot && flashlightEnabled) flashlightLevel = fboot.active ? flashlightBootLevel(fboot.t) : 0;
     // Normal waves: the beam is a subtle aid, not a floodlight — 20% power. Blackout
     // waves (wave%10) keep the full beam, where it's effectively the only light.
-    const flashlightWaveMul = darkWaveActive ? 1 : 0.2;
+    flashlight.distance = darkWaveActive ? 34 : 90;
+    const flashlightWaveMul = darkWaveActive ? .72 : 0.2;
     // Cinematic's grade already lifts glow/bloom around bright sources, so the same
     // raw intensity read as blown-out under it — 30% dimmer keeps the beam readable
     // instead of flaring. Cinematic-only: unaffected outside cinematic mode.
     const flashlightCinematicMul = cinematicState.enabled ? 0.7 : 1;
     flashlight.intensity = flashlightLevel > 0
-      ? (120 + flashlightFlicker * 2) * flashlightLevel * flashlightWaveMul * flashlightCinematicMul
+      ? (60 + flashlightFlicker) * flashlightLevel * flashlightWaveMul * flashlightCinematicMul
       : 0;
     if (thirdPerson.enabled && thirdPerson.weapon?.muzzle) {
       thirdPerson.weapon.muzzle.getWorldPosition(flashlightMuzzleTmp);
@@ -18920,13 +19256,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // a pistol raised to eye level sits centered and closer to camera (larger z),
     // with far less lateral/roll offset than a two-handed long gun.
     const oneHandAds = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
-    const aimPose = currentGun === GUNS.SNIPER
-      ? { x: 0, y: 0, z: 0, ry: 0, rz: 0 }
-      : currentGun === GUNS.SHOTGUN
-        ? { x: -0.045, y: 0.04, z: 0.12, ry: -0.045, rz: -0.015 }
-        : oneHandAds
-          ? { x: -0.015, y: 0.058, z: 0.24, ry: -0.015, rz: -0.006 }
-          : { x: -0.055, y: 0.045, z: 0.14, ry: -0.055, rz: -0.015 };
+    const aimPose = AIM_PROFILES[currentGun].pose;
     weapon.gun.position.x += aimBlend * aimPose.x;
     weapon.gun.position.y += aimBlend * aimPose.y;
     weapon.gun.position.z += aimBlend * aimPose.z;
@@ -18943,11 +19273,13 @@ async function spawnEnemies(wave, options: any = {}) {
     weapon.gun.position.x += aimCursorOffset.x * (0.045 + aimBlend * 0.025);
     weapon.gun.position.y -= aimCursorOffset.y * (0.04 + aimBlend * 0.02);
 
-    const switchEase = weaponAnim.switchBlend * weaponAnim.switchBlend;
-    weapon.gun.position.y -= switchEase * 0.22;
-    weapon.gun.position.z -= switchEase * 0.12;
-    weapon.gun.rotation.x -= switchEase * 0.16;
-    weapon.gun.rotation.z += switchEase * 0.28;
+    const switchPhase = pendingWeaponSwitch
+      ? pendingWeaponSwitch.elapsed / pendingWeaponSwitch.duration : weaponAnim.switchBlend;
+    const switchEase = switchPhase * switchPhase * (3 - 2 * switchPhase);
+    weapon.gun.position.y -= switchEase * 0.62;
+    weapon.gun.position.z += switchEase * 0.18;
+    weapon.gun.rotation.x -= switchEase * 0.42;
+    weapon.gun.rotation.z += switchEase * 0.48;
 
     weapon.gun.position.x += bobX + reloadDrop * 0.12 + weaponAnim.reloadJolt * 0.02;
     weapon.gun.position.y += bobY + breathY + weaponAnim.landJolt - Math.max(0, weaponAnim.kick) * 0.03 - reloadDrop * 0.14;
@@ -19089,7 +19421,7 @@ async function spawnEnemies(wave, options: any = {}) {
     viewState.lookBack += (lookBackTarget - viewState.lookBack) * Math.min(1, dt * 12);
 
     const allowAds = !thirdPerson.enabled || mouse.aiming || currentGun === GUNS.SNIPER;
-    const adsTarget = mouse.aiming && !sprinting && game.state === "playing" && viewState.lookBack < 0.1 && allowAds ? 1 : 0;
+    const adsTarget = mouse.aiming && !sprinting && gunState.reloadTimer <= 0 && game.state === "playing" && viewState.lookBack < 0.1 && allowAds ? 1 : 0;
     const adsSpeed = adsTarget > viewState.ads ? gunSpec.adsInSpeed : gunSpec.adsOutSpeed;
     viewState.ads += (adsTarget - viewState.ads) * Math.min(1, dt * adsSpeed);
 
@@ -19101,8 +19433,9 @@ async function spawnEnemies(wave, options: any = {}) {
     const cinFovOffset = cinematicState.enabled ? devVal("camera", "cinematicFovOffset", -4) : 0;
     // The player's FOV offset moves the hip/sprint framing but is cancelled out
     // as ADS blends in — scope magnification is a weapon stat, not a preference.
-    cameraFX.targetFov = (baseFov + cinFovOffset + userFovOffset)
-      + (gunSpec.adsFov - baseFov + cinFovOffset - userFovOffset) * viewState.ads;
+    const hipFov = baseFov + cinFovOffset + userFovOffset;
+    const aimFov = Math.min(hipFov, getWeaponAdsFov(gunSpec.adsFov, inTP));
+    cameraFX.targetFov = hipFov + (aimFov - hipFov) * viewState.ads;
     const prevFov = camera.fov;
     camera.fov += (cameraFX.targetFov - camera.fov) * Math.min(1, dt * 6);
     if (Math.abs(camera.fov - prevFov) > 0.01) camera.updateProjectionMatrix();
@@ -19119,8 +19452,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // ADS focus vignette: darkens toward the edges as aim comes up, deepening
     // further once the sniper is fully scoped (sells "looking through glass").
     if (hud.adsVig) {
-      const sniperBoost = currentGun === GUNS.SNIPER ? Math.max(0, viewState.ads - 0.6) * 1.4 : 0;
-      hud.adsVig.style.opacity = String(Math.min(1, viewState.ads * 0.85 + sniperBoost));
+      hud.adsVig.style.opacity = "0";
     }
 
     const recoilSettle = viewState.ads
@@ -19187,6 +19519,8 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     applyViewModeVisibility();
 
+    updateAimSight(currentGun, viewState.ads, game.state === "playing" && viewState.lookBack < 0.08,
+      crosshair.recoilX, crosshair.recoilY);
     const sniperAds = currentGun === GUNS.SNIPER ? viewState.ads : 0;
     const scopeSwayX = currentGun === GUNS.SNIPER ? Math.sin(noiseT * 0.34) * sniperAds * 0.00045 : 0;
     const scopeSwayY = currentGun === GUNS.SNIPER ? Math.cos(noiseT * 0.28) * sniperAds * 0.00038 : 0;
@@ -19284,7 +19618,7 @@ async function spawnEnemies(wave, options: any = {}) {
     for (const gunType of Object.values(GUNS)) {
       const chip = document.createElement("span");
       chip.dataset.slot = gunType;
-      chip.textContent = WEAPON_SLOT_CODES[gunType] || gunType.slice(0, 2).toUpperCase();
+      chip.textContent = `${Object.values(GUNS).indexOf(gunType) + 1} ${WEAPON_SLOT_CODES[gunType] || gunType.slice(0, 2).toUpperCase()}`;
       chip.title = GUN_SPECS[gunType]?.name || gunType;
       chip.style.cssText =
         "display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:16px;" +
@@ -19306,6 +19640,8 @@ async function spawnEnemies(wave, options: any = {}) {
       const g = chip.dataset.slot;
       const owned = ownsWeapon(g);
       const equipped = g === currentGun;
+      chip.style.display = owned ? "inline-flex" : "none";
+      chip.setAttribute("aria-current", equipped ? "true" : "false");
       if (equipped) {
         chip.style.color = "#04121a";
         chip.style.background = "linear-gradient(180deg,#9fdcff,#66c8ff)";
@@ -19423,14 +19759,18 @@ async function spawnEnemies(wave, options: any = {}) {
     deathFadeEl.style.transition = "opacity 2.5s ease-in";
   }
 
+  const updateWeaponReadout = createWeaponHud();
+  const updateGameReadout = createGameHud();
+  const updateAimSight = createAimSight();
+
   function updateHUD(dt) {
     if (hud.hpVal) {
       const hp = Math.ceil(player.hp);
-      setTextIfChanged(hud.hpVal, player.unlimitedHealth ? "INF" : hp);
+      setTextIfChanged(hud.hpVal, player.unlimitedHealth ? "∞" : hp);
       setClassIfChanged(hud.hpVal, "hud-value" + (!player.unlimitedHealth && hp < 30 ? " danger" : ""));
     }
-    if (hud.hpBar) setStyleIfChanged(hud.hpBar.style, "width", (player.hp / player.maxHp) * 100 + "%");
-    setTextIfChanged(hud.weaponVal, gunState.displayName);
+    if (hud.hpBar) setStyleIfChanged(hud.hpBar.style, "width", (player.unlimitedHealth ? 100 : clamp(player.hp / Math.max(1, player.maxHp), 0, 1) * 100) + "%");
+    setTextIfChanged(hud.weaponVal, GUN_SPECS[currentGun].name);
     updateWeaponSlots();
     if (hud.xpVal) setTextIfChanged(hud.xpVal, player.xp);
     if (hud.packVal) {
@@ -19445,9 +19785,9 @@ async function spawnEnemies(wave, options: any = {}) {
       updateInteractPrompt(combinedPrompt);
     }
     if (hud.ammoVal) {
-      setTextIfChanged(hud.ammoMag, player.unlimitedAmmo ? "INF" : gunState.mag);
-      setTextIfChanged(hud.ammoReserve, player.unlimitedAmmo ? "INF" : gunState.ammo);
-      setClassIfChanged(hud.ammoVal, "hud-value" + (player.unlimitedAmmo ? "" : gunState.mag <= 0 ? " danger" : gunState.mag < 4 ? " low-ammo" : ""));
+      setTextIfChanged(hud.ammoMag, player.unlimitedAmmo ? "∞" : gunState.mag);
+      setTextIfChanged(hud.ammoReserve, gunState.ammo);
+      setClassIfChanged(hud.ammoVal, "hud-value" + (player.unlimitedAmmo ? "" : gunState.mag <= 0 ? " danger" : gunState.mag / Math.max(1, gunState.magSize) <= 0.25 ? " low-ammo" : ""));
     }
     setTextIfChanged(hud.killsVal, `${game.killed} / ${game.totalEnemies}`);
     if (hud.staminaBar) {
@@ -19463,6 +19803,12 @@ async function spawnEnemies(wave, options: any = {}) {
       gunState.reloadTimer = Math.max(0, gunState.reloadTimer - dt);
       if (gunState.reloadTimer <= 0) finishReload();
     }
+
+    updateWeaponReadout(currentGun, gunState, player.unlimitedAmmo, gunUpgradeLevels[currentGun] || 0);
+    const relayHud = activeRelay();
+    updateGameReadout({ hp: player.hp, maxHp: player.maxHp, unlimitedHealth: player.unlimitedHealth,
+      killed: game.killed, total: game.totalEnemies, grenadeCooldown: player.grenadeCooldown || 0,
+      relayProgress: relayHud?.progress, contested: relayHud?.contested, blackout: darkWaveActive, pvp: !!net?.active && gameMode === "pvp" });
 
     if (game.hitMarkerTimer > 0) {
       game.hitMarkerTimer = Math.max(0, game.hitMarkerTimer - dt);
@@ -19750,12 +20096,24 @@ async function spawnEnemies(wave, options: any = {}) {
     }
 
     // ── Enemy blips — red; angels are triangles, ground units dots ──
+    const beacon = activeRelay();
+    if (beacon) {
+      const p = projectBlip(beacon.x, beacon.z);
+      ctx.strokeStyle = beacon.contested ? "#ffb054" : "#44eeff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "#44eeff";
+      ctx.font = "10px monospace";
+      ctx.fillText("R", p.sx, p.sy - 9);
+    }
     const minimapEnemies = pvpLayoutOnly ? [] : isCoopGuest() && coopMinimapEnemies.length ? coopMinimapEnemies : enemies;
     const tPulse = (now * 0.003) % (Math.PI * 2);
     for (const enemy of minimapEnemies) {
       if (!enemy.alive) continue;
       const exW = enemy.mesh?.position?.x ?? enemy.x;
       const ezW = enemy.mesh?.position?.z ?? enemy.z;
+      // Nearby motion contacts; reveal the final stragglers to avoid a cleanup hunt.
+      if (!net?.active && game.totalEnemies - game.killed > 2 && Math.hypot(exW - yaw.position.x, ezW - yaw.position.z) > 22) continue;
       const p = projectBlip(exW, ezW);
       const dim = p.clamped ? 0.55 : 1;
       if (enemy.aggroed && !p.clamped) {
@@ -20561,6 +20919,10 @@ async function spawnEnemies(wave, options: any = {}) {
         tint: getLightningTint(fxProxy),
       });
       lightingState.lightningFlash = Math.max(lightingState.lightningFlash, 0.08);
+    } else if (msg.fx === "abilityImpact") {
+      if (Number.isFinite(msg.x) && Number.isFinite(msg.z) && Number.isFinite(msg.radius)) {
+        impactFx(msg.x, 0.1, msg.z, getLightningTint(fxProxy).ring, Math.max(0.2, Math.min(8, msg.radius)), "emp");
+      }
     } else if (msg.fx === "tracer") {
       netTmpA.set(msg.ox || 0, msg.oy || 0, msg.oz || 0);
       netTmpB.set(msg.ex || 0, msg.ey || 0, msg.ez || 0);
@@ -21212,6 +21574,9 @@ async function spawnEnemies(wave, options: any = {}) {
         lb: +(e.lungeBoost || 0).toFixed(2),
         vl: +(e.verticalLift || 0).toFixed(2),
         mb: e.netMegaBlast || null,
+        // Visual state only; clients never use this to deal ability damage.
+        av: [e.lightningWindUp || 0, e.lightningWindUpDuration || 0.34,
+          e.empWindUp || 0, e.phaseOut || 0, e.megaBlastTimer || 0, e.barrageActive ? 1 : 0],
       });
     }
     const sb = pendingSpeedBonus;
@@ -21255,7 +21620,7 @@ async function spawnEnemies(wave, options: any = {}) {
       const waveAmmoBonus = 24 + Math.min(26, game.wave * 2);
       for (const gun of Object.values(allGuns)) gun.ammo = Math.min(gun.ammo + waveAmmoBonus, 240);
       player.hp = Math.min(100, player.maxHp);
-      placePlayerForWave(game.wave);
+      // Preserve the player position and the route they chose between encounters.
       updateHUD(0);
       // Guest-side blackout cutscene: fires locally when the host's snapshot
       // advances us onto a blackout wave (proxies land this same snapshot, so
@@ -21306,6 +21671,14 @@ async function spawnEnemies(wave, options: any = {}) {
       proxy.lungeBoost = Math.max(proxy.lungeBoost || 0, s.lb || 0);
       proxy.verticalLift = s.vl || 0;
       proxy.netMegaBlast = s.mb || null;
+      const ability = Array.isArray(s.av) ? s.av : [];
+      const visualValue = (i, max) => Number.isFinite(ability[i]) ? Math.max(0, Math.min(max, ability[i])) : 0;
+      proxy.lightningWindUp = visualValue(0, 2);
+      proxy.lightningWindUpDuration = visualValue(1, 2) || 0.34;
+      proxy.empWindUp = visualValue(2, 0.6);
+      proxy.phaseOut = visualValue(3, 1);
+      proxy.megaBlastTimer = visualValue(4, 10);
+      proxy.barrageActive = ability[5] === 1;
       setEnemyAlive(proxy, true);
       proxy.removed = false;
       proxy.deathQueued = false;
@@ -21335,6 +21708,14 @@ async function spawnEnemies(wave, options: any = {}) {
       proxy.strafeTimer         = 0.4 + Math.random() * 0.8;
       proxy.lightningStreamTimer = proxy.lightning ? 0.4 + Math.random() * 0.3 : 0;
       proxy.lightningWindUp     = 0;
+      // Snapshot poses must not resume as half-initialized authoritative casts.
+      proxy.empWindUp = 0;
+      proxy.phaseOut = 0;
+      proxy.blinkHold = 0;
+      proxy.megaBlastTimer = 0;
+      proxy.barrageActive = false;
+      proxy.barrageQueue = [];
+      proxy.barrageCooldown = 4;
       proxy.meleeWindUp         = -1;
       proxy.rangedCooldown      = proxy.ranged ? 1.0 + Math.random() * 1.5 : 0;
       proxy.lastRepathX         = proxy.mesh.position.x;
@@ -21743,6 +22124,8 @@ async function spawnEnemies(wave, options: any = {}) {
       gunPos: at(gun),
       gun: currentGun,
       gunParent: parentName,
+      gunRootParented: !!gun && gun.parent === thirdPerson.root,
+      gunForward: gun ? new THREE.Vector3(1, 0, 0).applyQuaternion(gun.getWorldQuaternion(new THREE.Quaternion())).toArray() : null,
       handFit: !!(w && w.handFit),
     };
   };
@@ -21771,6 +22154,11 @@ async function spawnEnemies(wave, options: any = {}) {
       fpAdsView: shouldUseFirstPersonAdsView(),
       unifiedFpBody: unifiedFirstPersonBodyActive(),
       aiming: !!mouse.aiming,
+      ads: viewState.ads,
+      fov: camera.fov,
+      targetFov: cameraFX.targetFov,
+      sight: AIM_PROFILES[currentGun].sight,
+      gun: currentGun,
     };
   };
 
@@ -22097,7 +22485,8 @@ async function spawnEnemies(wave, options: any = {}) {
       // Process slightly more pending deaths during wave-clear frames to avoid long tail cleanup
       flushPendingEnemyDeaths(game.killed >= game.totalEnemies ? 4 : 1);
       gunState.fireCooldown = Math.max(0, gunState.fireCooldown - dt);
-      updateAdaptiveQuality(dt);
+      updateRelay(dt);
+      updateAdaptiveQuality(rawDt);
       updateCrosshair(dt);
       updateBulletHoles(dt);
       updateLightningEffects(dt);
@@ -22109,6 +22498,7 @@ async function spawnEnemies(wave, options: any = {}) {
       updateWeaponSkinShader(dt);
 
       if (game.state === "playing") {
+        updateWeaponSwitch(dt);
         if (mouse.down && gunState.fireCooldown <= 0 && !(cutscene.active && cutscene.phase < 2)) fireGun();
         const moveState = updateMovement(dt);
         updateThirdPersonCharacter(dt, moveState);
@@ -22237,6 +22627,7 @@ async function spawnEnemies(wave, options: any = {}) {
     showTransitionCover(); // hide the world/HUD until the restart terminal/intro (or gameplay) takes over
     try {
       particleFX?.clear();
+      abilityImpacts?.clear();
 
       for (const t of tracers) {
         recycleTracer(t);
@@ -22438,6 +22829,10 @@ async function spawnEnemies(wave, options: any = {}) {
       getDebugState: () => ({ xp: player.xp, hp: player.hp, state: game.state, y: yaw.position.y }),
       getEnemyCount: () => enemies.filter(e => e.alive).length,
       getState: () => game.state,
+      getWeaponSwitch: () => ({ gun: currentGun, pending: pendingWeaponSwitch?.gun || null, lower: pendingWeaponSwitch ? pendingWeaponSwitch.elapsed / pendingWeaponSwitch.duration : 0, draw: weaponAnim.switchBlend }),
+      getRelay: () => activeRelay() ? { ...activeRelay() } : null,
+      beginRelayForTest: () => { beginRelay(game.wave); return activeRelay(); },
+      tickRelayForTest: (dt) => updateRelay(dt),
       getFrameStats: () => ({
         frame: game.frame,
         fps: quality.lastFps,
@@ -22882,21 +23277,32 @@ async function spawnEnemies(wave, options: any = {}) {
   // already enforces) in roster order, wrapping around. passive:false + preventDefault
   // stops the page itself from scrolling while the pointer is locked in-game.
   let wheelSwitchAccum = 0;
+  let lastWheelInput = 0;
+  let nextWheelSwitch = 0;
   window.addEventListener("wheel", e => {
-    if (game.state !== "playing" || !document.pointerLockElement) return;
-    e.preventDefault();
-    wheelSwitchAccum += e.deltaY;
-    const step = 60; // ~one notch on most mice/trackpads
-    while (Math.abs(wheelSwitchAccum) >= step) {
-      const dir = wheelSwitchAccum > 0 ? 1 : -1;
-      wheelSwitchAccum -= dir * step;
-      const roster = Object.values(GUNS);
-      const owned = roster.filter(ownsWeapon);
-      if (owned.length < 2) continue;
-      const idx = owned.indexOf(currentGun);
-      const next = owned[(idx + dir + owned.length) % owned.length];
-      switchGun(next);
+    if (game.state !== "playing" || !document.pointerLockElement || cutscene.active || player.pvpDead || e.ctrlKey) {
+      wheelSwitchAccum = 0;
+      return;
     }
+    if (!e.deltaY) return;
+    e.preventDefault();
+    const now = performance.now();
+    // Normalize line/page deltas; expire trackpad residue and reverse immediately.
+    const delta = e.deltaY * (e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 120 : 1);
+    if (now - lastWheelInput > 180 || Math.sign(delta) !== Math.sign(wheelSwitchAccum)) wheelSwitchAccum = 0;
+    lastWheelInput = now;
+    if (now < nextWheelSwitch) return;
+    wheelSwitchAccum += delta;
+    if (Math.abs(wheelSwitchAccum) < 40) return;
+    const dir = Math.sign(wheelSwitchAccum);
+    wheelSwitchAccum = 0;
+    const owned = Object.values(GUNS).filter(ownsWeapon);
+    if (owned.length < 2) return;
+    const selected = pendingWeaponSwitch?.gun || currentGun;
+    const idx = owned.indexOf(selected);
+    const next = owned[(idx + dir + owned.length) % owned.length];
+    nextWheelSwitch = now + 180;
+    switchGun(next);
   }, { passive: false });
 
   const clickToPlayEl = document.getElementById("click-to-play");

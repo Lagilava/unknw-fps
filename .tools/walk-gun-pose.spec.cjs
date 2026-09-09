@@ -1,45 +1,66 @@
 const { test, expect } = require("@playwright/test");
 const URL = "http://127.0.0.1:8000/first_person_shooter_room_game%20(1).html?test=1";
-test("two-handed guns stay attached to the right hand after calibration", async ({ page }) => {
-  test.setTimeout(240000);
-  await page.addInitScript(() => { for (const k of ["rb-dev-store-v1","rb-dev-active-v1","rb-dev-starter-installed"]) localStorage.removeItem(k); });
+test.use({ channel: 'chromium' });
+test("two-handed carry stays level through switching, movement and aim, viewed around the player", async ({ page }) => {
+  test.setTimeout(900000);
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await page.addInitScript(() => localStorage.setItem('rb-dev-active-v1', JSON.stringify({
+    version: 5, _categories: ['quality'], quality: {renderer: 'webgl', shadows: 'off', renderScaleCap: 0.75, maxActiveLights: 2, autoFallback: false}
+  })));
   await page.goto(URL, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.body.dataset.rbReady === "1", { timeout: 180000 });
-  await page.waitForFunction(() => window.__rbTest && typeof window.__rbReload === "function", { timeout: 15000 });
+  await page.waitForFunction(() => document.body.dataset.rbReady === "1", null, { timeout: 180000 });
   await page.locator("#startBtn").click();
-  await page.waitForFunction(() => window.__rbTest.getState() === "playing", { timeout: 15000 });
+  await page.waitForFunction(() => window.__rbTest.getState() === "playing");
   await page.evaluate(() => window.__rbTest.setUnlimitedHealth(true));
-  await page.evaluate(() => window.__rbTest.grantGun("rifle"));
-  await page.waitForFunction(() => { const r = window.__rbReload(); return r.gunPos && r.leftHand && r.rightHand; }, { timeout: 30000 });
-
-  const canvas = page.locator("#gameCanvas");
-  const box = await canvas.boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down({ button: "right" });
-  // Calibration needs 3 consecutive settled frames (equip fully down + aimBlend
-  // high + low pitch) — a few frames in real play, but headless Chrome runs this
-  // scene far below 60fps (see the particle-fx testing note in CLAUDE.md), so poll
-  // instead of sleeping a fixed guess.
-  await page.waitForFunction(() => window.__rbReload().handFit === true, { timeout: 90000 });
-
-  const info = await page.evaluate(() => {
-    const r = window.__rbReload();
-    return {
-      gunParent: r.gunParent,
-      gunHandDistance: r.gunPos && r.rightHand ? Math.hypot(r.gunPos.x - r.rightHand.x, r.gunPos.y - r.rightHand.y, r.gunPos.z - r.rightHand.z) : NaN,
-      handFit: r.handFit,
-    };
-  });
-
-  console.log("RIGHT-HAND HOLD CHECK", JSON.stringify(info));
-  // The bone's actual name is the source rig's naming (e.g. Mixamo's
-  // "mixamorigRightHand"), not a literal "rightHand" — match loosely like
-  // findRightHandBone itself does.
-  expect(info.gunParent).toMatch(/hand/i);
-  expect(info.handFit).toBe(true);
-  expect(info.gunHandDistance).toBeLessThan(0.5);
-  await page.mouse.up({ button: "right" });
+  await page.waitForFunction(() => window.__rbReload().rightHand !== null);
+  const views = [
+    ["rear", 0, 0.1], ["right", Math.PI / 2, 0.1],
+    ["front", Math.PI, 0.1], ["left", -Math.PI / 2, 0.1],
+    ["front-quarter", 2.4, 0.1], ["above", 2.4, 0.8],
+    ["below", 2.4, -0.3], ["rear-quarter", -0.7, 0.1],
+  ];
+  for (const gun of ["rifle", "shotgun", "sniper", "lmg", "dmr", "flak", "rifle"]) {
+    console.log('Checking carry:', gun);
+    await page.evaluate(g => { window.__rbTest.tpTo(0, 42, 0, 0); window.__rbTest.grantGun(g); }, gun);
+    await page.waitForFunction(g => window.__rbReload().gun === g && window.__rbTest.getWeaponSwitch().draw === 0, gun);
+    await page.mouse.down({ button: "right" });
+    await page.waitForTimeout(600);
+    for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      for (const pitch of [0, -0.7, 0.7]) {
+        await page.evaluate(({yaw, pitch}) => window.__rbTest.tpTo(0, 42, yaw, pitch), {yaw, pitch});
+        await page.waitForTimeout(120);
+        const r = await page.evaluate(() => window.__rbReload());
+        expect(r.handFit).toBe(false);
+        expect(r.gunRootParented).toBe(true);
+        const forward = -Math.sin(yaw) * r.gunForward[0] - Math.cos(yaw) * r.gunForward[2];
+        expect(forward).toBeGreaterThan(0.8);
+        if (pitch === 0) expect(Math.abs(r.gunForward[1])).toBeLessThan(0.15);
+      }
+    }
+    // Leave scoped ADS before observing the body: the sniper hides the operator
+    // in its normal scope view, including when the diagnostic camera renders.
+    await page.mouse.up({ button: "right" });
+    await page.waitForFunction(() => window.__rbView().ads < 0.02);
+    await page.evaluate(() => window.__rbTest.tpTo(0, 42, 0, 0));
+    for (const [name, azimuth, elevation] of views) {
+      await page.evaluate(opts => window.__rbTest.orbitCam(opts), {on: true, azimuth, elevation, dist: 3});
+      await page.waitForTimeout(120);
+      await page.screenshot({path: `test-artifacts/weapon-pose/${gun}-${name}.png`});
+    }
+    await page.mouse.up({ button: "right" });
+    await page.keyboard.down("KeyW");
+    await page.waitForTimeout(600);
+    const walking = await page.evaluate(() => window.__rbReload());
+    expect(walking.handFit).toBe(false);
+    expect(Math.abs(walking.gunForward[1])).toBeLessThan(0.15);
+    await page.screenshot({path: `test-artifacts/weapon-pose/${gun}-walking.png`});
+    await page.keyboard.up("KeyW");
+    await page.evaluate(() => window.__rbTest.orbitCam({on: false}));
+  }
+  expect(errors).toEqual([]);
 });
+
 test("gun stays held in the hands while walking (not centered on the body)", async ({ page }) => {
   test.setTimeout(240000);
   await page.addInitScript(() => { for (const k of ["rb-dev-store-v1","rb-dev-active-v1","rb-dev-starter-installed"]) localStorage.removeItem(k); });

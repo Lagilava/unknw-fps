@@ -891,3 +891,6 @@ body:not(.gameplay-view) #touch-controls {
   .ov-panel { padding: 44px 16px 28px !important; }
   .set-groups { grid-template-columns: 1fr; }
 }
+
+/* Gameplay uses an unobstructed frame, without the page edge-darkening overlay. */
+body.gameplay-view::after { display: none; }

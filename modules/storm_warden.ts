@@ -670,7 +670,8 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     const isAttacking = !!enemyRef?.isAttacking;
     const atkPulse    = clamp01((enemyRef?.attackPulse || 0) / 1.2);
     const windUpTimer = enemyRef?.lightningWindUp || 0;
-    const windUpProgress = windUpTimer > 0 ? clamp01(1 - windUpTimer / 0.34) : 0;
+    const windUpDuration = Math.max(0.01, enemyRef?.lightningWindUpDuration || 0.34);
+    const windUpProgress = windUpTimer > 0 ? clamp01(1 - windUpTimer / windUpDuration) : 0;
     const visualTurn  = enemyRef?.visualTurn || 0;
     const visualSpeed = enemyRef?.visualSpeed || 0;
     const hpRatio     = (enemyRef && enemyRef.maxHp > 0) ? clamp01(enemyRef.hp / enemyRef.maxHp) : 1;
@@ -711,7 +712,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     crownWobble += crownWobbleVel * dt;
 
     // ── Charge / fire ───────────────────────────────────────────────────────
-    attackWindUp = damp(attackWindUp, Math.max(atkPulse, windUpProgress), isAttacking ? 10 : 4.5, dt);
+    attackWindUp = damp(attackWindUp, (windUpTimer > 0 ? 0.18 + windUpProgress * 0.82 : atkPulse), isAttacking ? 10 : 8, dt);
     if (isAttacking && !prevIsAttacking) { attackFireFlash = 1; fireHoldTimer = 0.08; ringPulseScale = 0.08; ringPulseOpacity = 1; }
     prevIsAttacking = isAttacking;
     if (fireHoldTimer > 0) fireHoldTimer -= dt; else attackFireFlash = damp(attackFireFlash, 0, 14, dt);
@@ -870,6 +871,36 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
         + (isCherub ? Math.sin(elapsed * 0.23 * seed.f2 + seed.p2) * 0.16 + freezeTilt * (1 - bobGate) : 0);
       rig.head.rotation.x += flinch * -0.08 - channelBlend * 0.25;
     }
+    // Large, distinct casting silhouettes. applySeparation resets shoulders and
+    // head each frame, so these offsets blend out without transform drift.
+    const cast = windUpTimer > 0 ? smoothstep(windUpProgress) : 0;
+    if (!isSeraph && !isCherub) {
+      // Lance: draw the right arm back, aim, then drive it forward on discharge.
+      rig.shoulderR.rotation.y += cast * 0.65;
+      rig.shoulderR.rotation.z -= cast * 0.45;
+      rig.shoulderR.rotation.x -= attackFireFlash * 0.65;
+      // Barrage: both arms raised overhead, fan open throughout the channel.
+      rig.shoulderL.rotation.x -= barrageBlend * 1.6;
+      rig.shoulderR.rotation.x -= barrageBlend * 1.6;
+      rig.shoulderL.rotation.z += barrageBlend * 0.55;
+      rig.shoulderR.rotation.z -= barrageBlend * 0.55;
+      rig.head.rotation.x -= barrageBlend * 0.3;
+    } else if (isSeraph) {
+      // Blink: fold the arms across the core; arrival opens into a striking pose.
+      rig.shoulderL.rotation.x -= blinkCrouch * 0.95;
+      rig.shoulderR.rotation.x -= blinkCrouch * 0.95 + arrivalWhip * 1.1;
+      rig.shoulderL.rotation.z -= blinkCrouch * 0.7 - arrivalWhip * 0.8;
+      rig.shoulderR.rotation.z += blinkCrouch * 0.7 - arrivalWhip * 0.8;
+      rig.shoulderL.rotation.y += cast * 0.5;
+      rig.shoulderR.rotation.y -= cast * 0.5;
+    } else {
+      // Collapse: a wide sustained channel; EMP: gather inward, throw outward.
+      rig.shoulderL.rotation.z += channelBlend * 0.8 - empCharge * 0.65 + empFlash * 0.9;
+      rig.shoulderR.rotation.z -= channelBlend * 0.8 - empCharge * 0.65 + empFlash * 0.9;
+      rig.shoulderL.rotation.y += empCharge * 0.6;
+      rig.shoulderR.rotation.y -= empCharge * 0.6;
+    }
+
     // Warden: shoulders counter-rotate against the sway as it moves (weighty gait).
     if (!isSeraph && !isCherub) {
       const cnt = Math.sin(elapsed * 0.9 * seed.f2 + seed.p2) * 0.05 * (0.4 + speedNorm * 0.6);
@@ -989,6 +1020,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     dead = v;
     if (!v) {
       deadTime = 0; separation = 0; attackWindUp = 0; attackFireFlash = 0;
+      prevIsAttacking = false; fireHoldTimer = 0;
       bodyPitch = 0; bodyBank = 0; ringPulseOpacity = 0; rageBlend = 0; crownSpin = 0;
       poseRush = 0; poseAnchor = 0; poseRecover = 0; latBank = 0;
       // Expressive-motion state + fresh per-instance desync seeds (pool recycle).
