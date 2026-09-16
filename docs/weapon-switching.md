@@ -8,4 +8,4 @@ Switching lowers the outgoing weapon, swaps at the end of the holster, then draw
 
 Motion reference: [Dev_Unallocated: Procedural Weapon Animations](https://www.devunallocated.com/projects/project-killhouse/procedural-weapon-animations-condensed). This implementation uses original procedural transforms on the game's existing weapon rigs; no external animation asset was imported.
 
-Validation: `npm run typecheck`, `npm run build`, `npx playwright test .tools/weapon-switch.spec.cjs`.
+Validation: `npm run typecheck`, `npm run build`, `npx playwright test .tools/weapons/weapon-switch.spec.cjs`.

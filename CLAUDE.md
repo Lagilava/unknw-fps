@@ -21,7 +21,7 @@ Room breach fps11/
 ├── environment.js                             ← MAP grid, arena geometry, lighting, collision math
 ├── exterior_map.js                            ← Outdoor street/plaza zone (procedural)
 ├── vite.config.ts                             ← Build (copies environment/exterior/assets into dist)
-├── server.js / Start Multiplayer.bat          ← LAN/internet multiplayer launcher
+├── server.js / Start Internet Multiplayer.bat ← LAN/internet multiplayer launcher
 ├── modules/
 │   ├── gun_config.js                          ← GUN_SPECS (damage, ammo, spread, recoil, ADS FOV)
 │   ├── dom_ui.js                              ← getHudElements(), getMenuElements(), loading controller
@@ -165,7 +165,7 @@ category + layered master presets. See **`DEV_MANUAL.md`** for the full guide.
   `ENEMY_TYPE_BASE`, `PLAYER_BASE`) — player/camera/weapons/enemies/gameplay/
   spawn/lighting/debug/quality-caps all update live. Only **map** (geometry
   rebuild) and **quality.renderer** (GPU backend swap) reload the tab.
-- Tests: `.tools/dev-console.spec.cjs`, `.tools/dev-game-boot.spec.cjs`;
+- Tests: `.tools/dev/dev-console.spec.cjs`, `.tools/dev/dev-game-boot.spec.cjs`;
   engine unit harness runs headless with mocked `localStorage`.
 
 ## Collision System
@@ -331,7 +331,7 @@ capped the whole game at 36 particles (36 draws).
   longer, so heavy overdraw sustained itself instead of draining.
 - **Diagnostics:** `window.__rbParticles()` (live/capacity + per-layer state) and
   `window.__rbFx(kind, distance)` to fire an effect in front of the camera for
-  tuning. Test: `.tools/particles.spec.cjs`.
+  tuning. Test: `.tools/audio/particles.spec.cjs`.
 - **Testing note:** particles age in *game* time and headless Chrome runs this
   scene at ~2.5 fps, so never assert "drained" after a fixed `waitForTimeout` —
   poll with `waitForFunction`.
@@ -375,7 +375,7 @@ Rules:
   scene-level light (`getSharedLightningLight`, driven by the brightest live bolt);
   enemy aura / megaBlast / angel / Warden / car lights were all removed for this reason.
 - `window.__rbCountLights()` reports the count **as three sees it** (ancestor-aware).
-  **It must not change while playing.** `.tools/shader-stability.spec.cjs` asserts that,
+  **It must not change while playing.** `.tools/core/shader-stability.spec.cjs` asserts that,
   plus that starting a mission compiles **zero** new GL programs.
 
 `compileAllWarmables()` (called from `compileStartupScene`) links everything up front:
@@ -453,7 +453,7 @@ Backend is chosen in the renderer-selection block (~line 280) and is **device-aw
 - `maybeAutoFallbackRenderer()` (in `updateAdaptiveQuality`) self-heals a slow
   WebGPU session: <30 fps at min render scale for ~4 samples → persist WebGL +
   reload once (guarded by `sessionStorage.rb_autofb_done`).
-- Diagnostics: `window.__rbDraws()` logs per-group draw counts; `.tools/perf-probe.spec.cjs`
+- Diagnostics: `window.__rbDraws()` logs per-group draw counts; `.tools/perf/perf-probe.spec.cjs`
   dumps the steady-state breakdown.
 
 ## Post-Processing / Cinematic Mode
