@@ -20,8 +20,21 @@ const { test } = require("@playwright/test");
 const path = require("path");
 
 const URL = "http://127.0.0.1:8000/first_person_shooter_room_game%20(1).html?test=1";
-const OUT = path.join(__dirname, "..", "docs", "screenshots");
-const shot = (page, name) => page.screenshot({ path: path.join(OUT, `${name}.png`) });
+const OUT = path.join(__dirname, "..", "..", "docs", "screenshots");
+// This machine's real GPU can dip below the 48fps perf-prompt threshold during
+// the heavier stages (blackout wave, city vista). Dismiss it before shooting —
+// "Keep shadows" leaves the scene looking the way a README shot should.
+async function dismissPerfPrompt(page) {
+  await page.evaluate(() => {
+    const dialog = document.getElementById("shadow-performance-prompt");
+    dialog?.querySelector('[data-choice="keep"]')?.click();
+  });
+}
+
+const shot = async (page, name) => {
+  await dismissPerfPrompt(page);
+  await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+};
 
 // The scene keeps animating (walk cycles, ring pulses, particle drain), so a
 // real-time settle beats any single-frame wait.
@@ -181,15 +194,24 @@ test("regenerate README screenshots", async ({ page }) => {
         window.__rbTest.spawnAt("Zombie", -9 + i * 2.6, -11 - (i % 3) * 3.5);
       }
     }, ARENA);
-    await settle(page, 2800);
+    await settle(page, 1300);
     await page.evaluate(() => window.__rbTest.aimAtNearest());
-    await settle(page, 900);
+    await settle(page, 300);
     await shot(page, "zombies");
   });
 
   // ── Blackout wave (every 10th: power dies, the sky burns) ──────────────────
   await stage("blackout_firesky", async () => {
     await clearField(page);
+    // KNOWN ISSUE (as of the encounter-director/HUD rework): calling setWave(10)
+    // here leaves the game in a paused state — #overlay comes up showing
+    // Resume/Restart instead of the burning sky. Not a tooling problem; something
+    // in the wave-10 transition now pauses outside the normal wave-complete flow.
+    // Until that's fixed, this stage is skipped and the committed screenshot is
+    // left as-is (regenerate by hand once the pause bug is found).
+    console.log("  ! blackout_firesky: skipped, setWave(10) currently pauses the game — see comment above");
+    return;
+    // eslint-disable-next-line no-unreachable
     await page.evaluate(a => {
       window.__rbTest.setWave(10);
       window.__rbTest.setWaveLighting(10);
@@ -200,11 +222,11 @@ test("regenerate README screenshots", async ({ page }) => {
       window.__rbTest.spawnAt("Siege Drone", 7, -22);
       window.__rbTest.spawnAt("Siege Drone", -8, -25);
     }, ARENA);
-    await settle(page, 1500);
+    await settle(page, 1600);
     // Enemies were spawned due north, so hold yaw = 0 and tilt up — the burning
     // dome, not the silhouettes, is what this shot is about.
     await page.evaluate(a => window.__rbTest.tpTo(a.x, a.z, 0, -0.13), ARENA);
-    await settle(page, 1400);
+    await settle(page, 1200);
     await shot(page, "blackout_firesky");
   });
 

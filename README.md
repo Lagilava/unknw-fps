@@ -1,6 +1,6 @@
 # UNKNW — Containment Protocol
 
-A browser-based third-person wave-survival shooter built on **Three.js r166**, written in TypeScript with a Rapier physics backend. Hold an open-air urban district against escalating waves of drones, clones, zombies and storm-angels — start with nothing but a service pistol, gamble for better guns at the mystery box, stack perks at the plaza statue, and survive the wave-10 blackouts when the power dies and the sky catches fire.
+A browser-based third-person wave-survival shooter built on **Three.js r166**, written in TypeScript with a Rapier physics backend. Push through an open-air urban district against escalating waves of drones, clones, zombies and storm-angels — each normal wave is a relay upload, not just a kill quota: reach the marked zone and hold it uncontested while living enemies nearby stall your progress. Start with nothing but a service pistol, gamble for better guns at the mystery box, stack perks at the plaza statue, and survive the wave-10 blackouts when the power dies and the sky catches fire.
 
 ![Hold the plaza against the Storm Wardens](docs/screenshots/hero_combat.png)
 
@@ -13,7 +13,9 @@ A browser-based third-person wave-survival shooter built on **Three.js r166**, w
 | ![The zombie horde closes in across the arena](docs/screenshots/zombies.png) | ![Blackout wave — the power dies and the sky burns](docs/screenshots/blackout_firesky.png) |
 | **The horde** — screaming, weaving zombies that swing mid-sprint on a layered upper-body attack clip | **Blackout waves** — every 10th wave the lights die, an animated fire dome replaces the sky, and everything pays double XP |
 
-Five hostile types, each with its own AI brain rather than a shared chase routine: the **Siege Drone** phase-machine artillery, the **Blink Seraph** that phases out and re-arrives on your flank, the zone-denying **Null Cherub**, kiting **Cloned Ghost** riflemen that mirror your own movement mechanics, and the **Zombie** horde.
+Five hostile types, each with its own AI brain rather than a shared chase routine: the **Siege Drone** phase-machine artillery, the **Blink Seraph** that phases out and re-arrives on your flank, the zone-denying **Null Cherub**, kiting **Cloned Ghost** riflemen that mirror your own movement mechanics, and the **Zombie** horde. Every hostile is awake and tracking you from the moment a wave starts — nothing waits offscreen to be discovered.
+
+Normal waves aren't a clear-the-room kill quota: reach the relay marker (shown on the HUD and radar) and hold it — 11 uncontested seconds within 3.5 m — to advance. A living enemy within 5 m stalls the upload, so killing everyone isn't required, but it isn't optional against pressure either. Each wave opens with a brief damage shield while the squad spawns in. Blackout waves keep their own distinct survive-and-fight rule instead.
 
 ## The economy
 
