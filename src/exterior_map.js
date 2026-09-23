@@ -1393,10 +1393,10 @@
     // ── GLTF loaders ─────────────────────────────────────────────────────
     async function loadAndPlaceCars() {
       try {
-        const { GLTFLoader } = await import("https://unpkg.com/three@0.166.1/examples/jsm/loaders/GLTFLoader.js");
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
         const loader = new GLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load(
-          "https://raw.githubusercontent.com/mrdoob/three.js/r166/examples/models/gltf/ferrari.glb",
+          "../assets/models/ferrari.glb",
           res, undefined, rej
         ));
         const templateScene = gltf.scene;
@@ -1435,7 +1435,7 @@
 
     async function loadAndPlaceTrees() {
       try {
-        const { GLTFLoader } = await import("https://unpkg.com/three@0.166.1/examples/jsm/loaders/GLTFLoader.js");
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
         const loader = new GLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load("../assets/models/tree.glb", res, undefined, rej));
         const template = gltf.scene;
@@ -1507,7 +1507,7 @@
     buildAtmosphere();
     flushBuckets();
     // On mobile, use the lightweight procedural cars/trees instead of the
-    // external high-poly Ferrari GLB (×7 clones) and the 5.8 MB tree GLB — a big
+    // high-poly Ferrari GLB (×7 clones) and the 5.8 MB tree GLB — a big
     // download + draw-call saving on phones with no meaningful visual loss.
     if (window.__mobileMode) {
       placeParkedCars();

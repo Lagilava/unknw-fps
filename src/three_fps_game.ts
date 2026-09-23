@@ -23475,6 +23475,7 @@ async function spawnEnemies(wave, options: any = {}) {
         return true;
       },
       forceDamage: (amount = 9999) => {
+        player.waveInvulnerabilityTimer = 0;
         if (damagePlayer(amount)) endGame("dead");
         updateHUD(0);
         return { hp: player.hp, state: game.state };
@@ -23496,6 +23497,8 @@ async function spawnEnemies(wave, options: any = {}) {
       completeWave: () => {
         const live = enemies.filter(e => e.alive);
         for (const enemy of live) killEnemy(enemy);
+        const objective = activeRelay();
+        if (objective) objective.progress = RELAY_UPLOAD_SECONDS;
         return { killed: game.killed, total: game.totalEnemies, remaining: enemies.filter(e => e.alive).length };
       },
       // Jumps the wave counter and re-applies wave lighting (blackout waves etc.).

@@ -198,6 +198,10 @@ test.describe.serial("Room Breach FPS gameplay smoke", () => {
         await page.evaluate(() => window.__rbTest.restart());
         await page.waitForFunction(() => window.__rbTest.getState() === "playing", { timeout: 12000 });
       }
+      // __rbTest.restart() bypasses the real restart-button click handler, so it
+      // never re-requests pointer lock — leave the "click to engage" prompt up and
+      // the browser throttles rAF for the unfocused canvas, starving frameDelta below.
+      await page.locator("#click-to-play").click({ force: true }).catch(() => {});
       await page.waitForTimeout(1500);
       const before = await page.evaluate(() => window.__rbTest.getFrameStats());
       await page.waitForTimeout(2000);
