@@ -34,7 +34,7 @@ if not exist "%~dp0node_modules\peer" (
 
 :: ─── 3. Game + PeerJS server ──────────────────────────────────────────────────
 echo [ .. ] Starting game + PeerJS server on 127.0.0.1:8000...
-start "RB-SERVER" /min cmd /k node "%~dp0server.js" 8000
+start "RB-SERVER" /min cmd /k node "%~dp0src\server.js" 8000
 timeout /t 3 /nobreak >nul
 
 :: Verify it started
@@ -121,7 +121,7 @@ set "TUNNEL_HOST=!TUNNEL_URL:https://=!"
 ::  This makes every client use OUR broker instead of the public one.
 set "PEER_PARAMS=?peerhost=!TUNNEL_HOST!&peerport=443&peersecure=1&peerpath=/peerjs"
 
-set "GAME_FILE=first_person_shooter_room_game%%20(1).html"
+set "GAME_FILE=src/first_person_shooter_room_game%%20(1).html"
 set "GAME_URL=!TUNNEL_URL!/!GAME_FILE!!PEER_PARAMS!"
 
 echo [ OK ] Tunnel ready: !TUNNEL_URL!

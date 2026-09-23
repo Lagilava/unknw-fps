@@ -4,7 +4,10 @@
 The existing game has varied weapons and enemies but repeats a kill quota in one arena. This change delivers an initial encounter-design pass, not a replacement campaign or a claim of Halo-equivalent depth.
 
 ## Implemented
-- Every third solo wave becomes a relay upload. Reach the cyan zone and accumulate 18 uncontested seconds within 3.5 metres. Living enemies within 5 metres block progress. Leaving preserves progress. Completing the upload advances even with survivors; killing everyone does not bypass the upload.
+- Every normal solo wave is now a relay upload. Reach the cyan zone and accumulate 11 uncontested seconds within 3.5 metres. Living enemies within 5 metres block progress. Leaving preserves progress. Completing the upload advances even with survivors; killing everyone does not bypass the upload. Blackout waves retain a distinct survival/elimination rule.
+- Every live enemy is awake and tracking the player throughout every PvE wave; individual brains still flank, establish range, and telegraph attacks, but no hostile waits to be found.
+- Every PvE wave begins with a five-second damage shield, shown in the normal-wave health readout.
+- Blackout waves disrupt all usable HUD instrumentation—including the crosshair, radar, health, ammo, and touch controls—and replace it with intermittent interference. The equipped weapon becomes an unlimited, no-reload arc caster whose lightning terminates against actual enemies or world surfaces and emits impact effects.
 - Place relays by traversing open map cells from the player, rejecting collision-blocked cells. Small/custom maps without a target retain elimination.
 - Show relay distance, upload progress, and contest status in the HUD, a cyan ground marker, and an R marker on radar.
 - Preserve player position and facing across wave transitions, including co-op guests.
@@ -14,7 +17,7 @@ The existing game has varied weapons and enemies but repeats a kill quota in one
 - Co-op retains synchronized elimination objectives and radar behavior. Squad and HP changes are host-authoritative.
 
 ## Validation
-Run `npm run typecheck`, `npm run build`, and `npx playwright test .tools/relay-objective.spec.cjs`.
+Run `npm run typecheck`, `npm run build`, and `npx playwright test src/tests/relay-objective.spec.cjs`.
 Browser coverage checks objective gating, presence, wave transition and position continuity. Manually play waves 1-6 to judge opening pace, enemy pressure, beacon readability and whether capturing under fire is preferable to clearing first.
 
 ## Next development milestones

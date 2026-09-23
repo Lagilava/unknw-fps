@@ -8,14 +8,14 @@
 $ErrorActionPreference = "SilentlyContinue"
 $ProjectDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Port        = 8765
-$HtmlFile    = "first_person_shooter_room_game%20(1).html"
+$HtmlFile    = "src/first_person_shooter_room_game%20(1).html"
 
-# Locate cloudflared: known install paths → PATH → local .tools copy.
+# Locate cloudflared: known install paths → PATH → local src/tests copy.
 function Find-Cloudflared {
   $candidates = @(
     "C:\Program Files (x86)\cloudflared\cloudflared.exe",
     "C:\Program Files\cloudflared\cloudflared.exe",
-    (Join-Path $ProjectDir ".tools\cloudflared.exe")
+    (Join-Path $ProjectDir "src\tests\cloudflared.exe")
   )
   foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
   $inPath = Get-Command cloudflared -ErrorAction SilentlyContinue
@@ -145,7 +145,7 @@ function Start-GameServer {
   Start-Sleep -Milliseconds 400
   Remove-Item $ServerOut, $ServerErr -ErrorAction SilentlyContinue
   $script:ServerProc = Start-Process -FilePath "node" `
-    -ArgumentList "server.js", "$Port" `
+    -ArgumentList "src\server.js", "$Port" `
     -WorkingDirectory $ProjectDir `
     -RedirectStandardOutput $ServerOut -RedirectStandardError $ServerErr `
     -WindowStyle Hidden -PassThru

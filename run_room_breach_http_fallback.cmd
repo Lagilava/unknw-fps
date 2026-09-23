@@ -5,14 +5,14 @@ cd /d "%~dp0"
 set "PY_CMD=python"
 where python >nul 2>nul || set "PY_CMD=py -3"
 
-set "GAME_FILE=first_person_shooter_room_game (1).html"
-set "GAME_URL=http://127.0.0.1:8000/first_person_shooter_room_game%%20(1).html"
+set "GAME_FILE=src\first_person_shooter_room_game (1).html"
+set "GAME_URL=http://127.0.0.1:8000/src/first_person_shooter_room_game%%20(1).html"
 
 if not exist "%GAME_FILE%" (
   echo.
   echo Expected file not found: %GAME_FILE%
   echo Available HTML files:
-  dir /b *.html
+  dir /b src\*.html
   echo.
   set "GAME_URL=http://127.0.0.1:8000/"
 )

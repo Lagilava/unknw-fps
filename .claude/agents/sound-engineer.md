@@ -56,7 +56,7 @@ Two layers, both routed to their own master:
    comment density.
 3. **Validate before you hand back:** `npx tsc --noEmit` (expect 0 errors) and, when you
    touched sample wiring, `npx playwright test audio-howler`. If you added a new sound
-   event, extend `.tools/audio-howler.spec.cjs` to cover the new file.
+   event, extend `src/tests/audio-howler.spec.cjs` to cover the new file.
 4. Report what you changed, why it sounds better, and the validation results. State
    trade-offs honestly; if something still needs the human's ear in-game, say so.
 

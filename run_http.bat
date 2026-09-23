@@ -3,7 +3,7 @@ cd /d "%~dp0"
 set "PY_CMD=python"
 where python >nul 2>nul || set "PY_CMD=py -3"
 
-if not exist "first_person_shooter_room_game (1).html" (
+if not exist "src\first_person_shooter_room_game (1).html" (
 	echo ERROR: Game file not found.
 	pause
 	exit /b 1
@@ -32,9 +32,9 @@ if not errorlevel 1 (
 )
 
 :: Start HTTP server on all interfaces so LAN players can connect.
-:: Uses the Node server (.tools/static-server.cjs), which transpiles .ts sources
+:: Uses the Node server (src/tests/static-server.cjs), which transpiles .ts sources
 :: on the fly — Python's http.server cannot serve the TypeScript modules.
-start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=0.0.0.0&& set PORT=8000&& node .tools\static-server.cjs"
+start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=0.0.0.0&& set PORT=8000&& node src\tests\static-server.cjs"
 
 set "SERVER_READY=0"
 for /l %%I in (1,1,30) do (
@@ -60,12 +60,12 @@ if not errorlevel 1 (
 )
 
 :: URL for LAN peers — uses LAN IP so other machines can reach the HTTP server
-set "LAN_URL=http://%LAN_IP%:8000/first_person_shooter_room_game%%20(1).html%PEER_PARAMS%"
+set "LAN_URL=http://%LAN_IP%:8000/src/first_person_shooter_room_game%%20(1).html%PEER_PARAMS%"
 
 :: URL for the HOST machine — uses localhost so the browser gets a secure context
 :: (navigator.deviceMemory is only exposed on secure contexts; localhost qualifies).
 :: The peerhost param still points to the LAN IP so signalling reaches the local peer server.
-set "HOST_URL=http://localhost:8000/first_person_shooter_room_game%%20(1).html%PEER_PARAMS%"
+set "HOST_URL=http://localhost:8000/src/first_person_shooter_room_game%%20(1).html%PEER_PARAMS%"
 
 echo.
 echo =====================================================

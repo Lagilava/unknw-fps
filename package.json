@@ -9,8 +9,8 @@
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "multiplayer": "node server.js",
-    "optimize:textures": "node scripts/optimize-textures.mjs",
+    "multiplayer": "node src/server.js",
+    "optimize:textures": "node src/scripts/optimize-textures.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -20,7 +20,8 @@
     "miniplex": "^2.0.0",
     "peer": "^1.0.2",
     "peerjs": "^1.5.4",
-    "three": "^0.166.1"
+    "three": "^0.166.1",
+    "three-mesh-bvh": "0.9.15"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.0",

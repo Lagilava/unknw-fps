@@ -3,13 +3,13 @@ cd /d "%~dp0"
 set "PY_CMD=python"
 where python >nul 2>nul || set "PY_CMD=py -3"
 
-if not exist "first_person_shooter_room_game (1).html" (
+if not exist "src\first_person_shooter_room_game (1).html" (
 	call "%~dp0run_room_breach_http_fallback.cmd"
 	exit /b %errorlevel%
 )
 
 :: Node server transpiles .ts sources on the fly (Python's http.server cannot).
-start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=127.0.0.1&& set PORT=8000&& node .tools\static-server.cjs"
+start "Room Breach HTTP Server" /D "%~dp0" cmd /k "set HOST=127.0.0.1&& set PORT=8000&& node src\tests\static-server.cjs"
 
 set "SERVER_READY=0"
 for /l %%I in (1,1,30) do (
@@ -27,7 +27,7 @@ echo Keep the server window open and try again.
 exit /b 1
 
 :server_ready
-set "GAME_URL=http://127.0.0.1:8000/first_person_shooter_room_game%%20(1).html"
+set "GAME_URL=http://127.0.0.1:8000/src/first_person_shooter_room_game%%20(1).html"
 if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
 	start "" "%ProgramFiles%\Google\Chrome\Application\chrome.exe" "%GAME_URL%"
 ) else if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" (

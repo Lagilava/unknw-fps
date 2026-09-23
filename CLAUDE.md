@@ -2,48 +2,64 @@
 
 ## Project at a Glance
 
-Browser third-person wave shooter built on **Three.js r166**, branded **UNKNW** (internal APIs still say RoomBreach — deliberate, see Rebrand note). Core game logic lives in one large async IIFE in `three_fps_game.js`. Environment geometry and collision live in `environment.js`.
+Browser third-person wave shooter built on **Three.js r166**, branded **UNKNW** (internal APIs still say RoomBreach — deliberate, see Rebrand note). Core game logic lives in one large async IIFE in `three_fps_game.ts`. Environment geometry and collision live in `environment.js`. All game code lives under **`src/`**; `assets/` (textures/, hdri/, audio/, world/, zombies/, landmarks/, models/ — ~440MB of FBX/GLB/audio) is kept as a **sibling of `src/`**, not inside it, and `docs/` holds the written documentation. The repo root otherwise holds only config files (`package.json`, `vite.config.ts`, `tsconfig.json`, `playwright.config.cjs`, `.gitignore`) and the double-click launcher scripts (`Start Internet Multiplayer.bat`, `run_http.bat`, `run_internet.bat`, `start-multiplayer.ps1`, etc.) — those stay at root on purpose so testers can launch the game without opening the repo.
 
 **Two entry points, both live:**
-- `index.html` — the real entry. Vite resolves the bare `three` / `peerjs` imports, so it
-  needs a dev server: `npm run dev` (then `/index.html`). There is no importmap.
-- `first_person_shooter_room_game (1).html` — legacy standalone copy with an importmap,
-  served by `.tools/static-server.cjs` on :8000. **The Playwright specs use this one.**
+- `src/index.html` — the real entry. Vite (`root: 'src'` in `vite.config.ts`) resolves the
+  bare `three` / `peerjs` imports, so it needs a dev server: `npm run dev` (then `/` — Vite's
+  root already points at `src/`). There is no importmap.
+- `src/first_person_shooter_room_game (1).html` — legacy standalone copy with an importmap,
+  served by `src/tests/static-server.cjs` on :8000 (root = repo root, so it can also reach
+  `assets/`; browse it at `/src/first_person_shooter_room_game (1).html`, **not** `/`).
+  **The Playwright specs use this one.**
 
-Both load the same `three_fps_game.js`, so a game fix applies to both — but HTML/CSS
+Both load the same `three_fps_game.ts`, so a game fix applies to both — but HTML/CSS
 changes (e.g. the menu-reveal watchdog) must be made in **both** files.
+
+Every runtime string path to `assets/` (in `src/modules/asset_paths.ts`, `audio_assets.ts`,
+`landmarks.ts`, `zombie_assets.ts`, `intel_gallery.ts`, and a few call sites in
+`three_fps_game.ts`/`environment.js`/`exterior_map.js`) is written `../assets/...` — one level
+up from wherever the HTML entry point sits, since assets/ is a sibling of `src/`. These are
+plain runtime strings passed to loaders (not ES import specifiers), so they resolve against
+the **page's URL**, not the file that contains the string — the same `../assets/` prefix is
+correct everywhere in `src/`, regardless of how deeply the containing file is nested under it.
 
 ```
 Room breach fps11/
-├── index.html                                 ← Entry point (Vite)
-├── first_person_shooter_room_game (1).html   ← Legacy entry (importmap); used by tests
-├── three_fps_game.js                          ← Main game loop, weapons, AI, networking (~17 000 lines)
-├── environment.js                             ← MAP grid, arena geometry, lighting, collision math
-├── exterior_map.js                            ← Outdoor street/plaza zone (procedural)
-├── vite.config.ts                             ← Build (copies environment/exterior/assets into dist)
-├── server.js / Start Internet Multiplayer.bat ← LAN/internet multiplayer launcher
-├── modules/
-│   ├── gun_config.js                          ← GUN_SPECS (damage, ammo, spread, recoil, ADS FOV)
-│   ├── dom_ui.js                              ← getHudElements(), getMenuElements(), loading controller
-│   ├── netcode.js                             ← WebRTC peer-to-peer via PeerJS (+ optional TURN)
-│   ├── asset_paths.js                         ← Texture/model URL constants
-│   ├── audio_assets.js                        ← SFX/VO manifest (Kenney packs + TTS announcer)
-│   ├── settings.js                            ← Persistent localStorage settings
-│   ├── dev_engine.js                          ← Developer preset engine (schema, presets, resolve/apply)
-│   ├── dev_presets.js                         ← Built-in preset library for the dev console
-│   ├── landmarks.js                           ← GLB landmark manifest (city skyline, statue)
-│   ├── storm_warden.js                        ← Procedural skinned Warden/Seraph/Cherub character rig
-│   ├── zombie_character.js                    ← Skinned Mixamo zombie controller (clip layering)
-│   ├── zombie_assets.js                       ← Zombie model/animation asset list
-│   ├── model_editor_state.js                  ← Model-editor persistence
-│   ├── sjm.js                                 ← F8 diagnostics overlay (clone movement)
-│   └── three_loaders.js                       ← GLTFLoader / FBXLoader helpers
-├── dev.html                                   ← Standalone Developer Console (preset UI, dev-only)
-├── model_preview.html                         ← Standalone character/animation inspector
-├── scripts/                                   ← optimize-textures.mjs, convert-zombie.mjs
-├── .tools/                                    ← Playwright specs + static test server
-├── DEV_MANUAL.md                              ← Developer customization manual
-└── assets/                                    ← textures/, hdri/, audio/, world/, zombies/, landmarks/, models/
+├── src/
+│   ├── index.html                             ← Entry point (Vite root)
+│   ├── first_person_shooter_room_game (1).html ← Legacy entry (importmap); used by tests
+│   ├── three_fps_game.ts                      ← Main game loop, weapons, AI, networking (~24 000 lines)
+│   ├── environment.js                         ← MAP grid, arena geometry, lighting, collision math
+│   ├── exterior_map.js                        ← Outdoor street/plaza zone (procedural)
+│   ├── server.js                              ← LAN/internet multiplayer server (launched via the root .bat/.ps1 scripts)
+│   ├── menu_halo.css                          ← Halo-CE-style menu shell stylesheet
+│   ├── dev.html                                ← Standalone Developer Console (preset UI, dev-only)
+│   ├── model_preview.html                     ← Standalone character/animation inspector
+│   ├── modules/
+│   │   ├── gun_config.ts                      ← GUN_SPECS (damage, ammo, spread, recoil, ADS FOV)
+│   │   ├── dom_ui.ts                           ← getHudElements(), getMenuElements(), loading controller
+│   │   ├── netcode.ts                          ← WebRTC peer-to-peer via PeerJS (+ optional TURN)
+│   │   ├── asset_paths.ts                      ← Texture/model URL constants
+│   │   ├── audio_assets.ts                     ← SFX/VO manifest (Kenney packs + TTS announcer)
+│   │   ├── settings.ts                         ← Persistent localStorage settings
+│   │   ├── dev_engine.ts                       ← Developer preset engine (schema, presets, resolve/apply)
+│   │   ├── dev_presets.ts                      ← Built-in preset library for the dev console
+│   │   ├── landmarks.ts                        ← GLB landmark manifest (city skyline, statue)
+│   │   ├── storm_warden.ts                     ← Procedural skinned Warden/Seraph/Cherub character rig
+│   │   ├── zombie_character.ts                 ← Skinned Mixamo zombie controller (clip layering)
+│   │   ├── zombie_assets.ts                    ← Zombie model/animation asset list
+│   │   ├── model_editor_state.ts               ← Model-editor persistence
+│   │   ├── sjm.js                              ← F8 diagnostics overlay (clone movement)
+│   │   └── three_loaders.ts                    ← GLTFLoader / FBXLoader helpers
+│   ├── scripts/                                ← optimize-textures.mjs, convert-zombie.mjs
+│   └── tests/                                  ← Playwright specs + static test server (was `.tools/`)
+├── assets/                                     ← textures/, hdri/, audio/, world/, zombies/, landmarks/, models/ (sibling of src/, not inside it)
+├── docs/                                       ← DEV_MANUAL.md, DESIGN.md, and other written docs
+├── vite.config.ts                              ← Build (root='src'; copies environment/exterior/sjm.js/assets into dist)
+├── package.json / tsconfig.json / playwright.config.cjs / .gitignore
+└── Start Internet Multiplayer.bat / run_http.bat / run_internet.bat / start-multiplayer.ps1 / ...
+    ← double-click launchers, kept at repo root on purpose (testers shouldn't need to open the repo)
 ```
 
 ## Architecture
@@ -165,7 +181,7 @@ category + layered master presets. See **`DEV_MANUAL.md`** for the full guide.
   `ENEMY_TYPE_BASE`, `PLAYER_BASE`) — player/camera/weapons/enemies/gameplay/
   spawn/lighting/debug/quality-caps all update live. Only **map** (geometry
   rebuild) and **quality.renderer** (GPU backend swap) reload the tab.
-- Tests: `.tools/dev/dev-console.spec.cjs`, `.tools/dev/dev-game-boot.spec.cjs`;
+- Tests: `src/tests/dev/dev-console.spec.cjs`, `src/tests/dev/dev-game-boot.spec.cjs`;
   engine unit harness runs headless with mocked `localStorage`.
 
 ## Collision System
@@ -331,7 +347,7 @@ capped the whole game at 36 particles (36 draws).
   longer, so heavy overdraw sustained itself instead of draining.
 - **Diagnostics:** `window.__rbParticles()` (live/capacity + per-layer state) and
   `window.__rbFx(kind, distance)` to fire an effect in front of the camera for
-  tuning. Test: `.tools/audio/particles.spec.cjs`.
+  tuning. Test: `src/tests/audio/particles.spec.cjs`.
 - **Testing note:** particles age in *game* time and headless Chrome runs this
   scene at ~2.5 fps, so never assert "drained" after a fixed `waitForTimeout` —
   poll with `waitForFunction`.
@@ -375,7 +391,7 @@ Rules:
   scene-level light (`getSharedLightningLight`, driven by the brightest live bolt);
   enemy aura / megaBlast / angel / Warden / car lights were all removed for this reason.
 - `window.__rbCountLights()` reports the count **as three sees it** (ancestor-aware).
-  **It must not change while playing.** `.tools/core/shader-stability.spec.cjs` asserts that,
+  **It must not change while playing.** `src/tests/core/shader-stability.spec.cjs` asserts that,
   plus that starting a mission compiles **zero** new GL programs.
 
 `compileAllWarmables()` (called from `compileStartupScene`) links everything up front:
@@ -453,7 +469,7 @@ Backend is chosen in the renderer-selection block (~line 280) and is **device-aw
 - `maybeAutoFallbackRenderer()` (in `updateAdaptiveQuality`) self-heals a slow
   WebGPU session: <30 fps at min render scale for ~4 samples → persist WebGL +
   reload once (guarded by `sessionStorage.rb_autofb_done`).
-- Diagnostics: `window.__rbDraws()` logs per-group draw counts; `.tools/perf/perf-probe.spec.cjs`
+- Diagnostics: `window.__rbDraws()` logs per-group draw counts; `src/tests/perf/perf-probe.spec.cjs`
   dumps the steady-state breakdown.
 
 ## Post-Processing / Cinematic Mode

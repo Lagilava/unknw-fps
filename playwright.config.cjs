@@ -1,5 +1,5 @@
 module.exports = {
-  testDir: ".tools",
+  testDir: "src/tests",
   timeout: 360000,
   workers: 1,
   reporter: [["list"]],
@@ -20,7 +20,7 @@ module.exports = {
     },
   },
   webServer: {
-    command: "node .tools/static-server.cjs",
+    command: "node src/tests/static-server.cjs",
     url: "http://127.0.0.1:8000/",
     reuseExistingServer: true,
     timeout: 15000,

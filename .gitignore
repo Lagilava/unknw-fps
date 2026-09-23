@@ -5,7 +5,7 @@ dist/
 # ── Test artifacts (Playwright screenshots, traces, headless Chrome profiles) ─
 test-artifacts/
 test-results/
-.tools/chrome-*/
+src/tests/chrome-*/
 *.log
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ turn-config.txt
 
 # Local tunnel helper and exporter cache
 cloudflared.exe
-.tools/cloudflared.exe
+src/tests/cloudflared.exe
 assets/.export-cache.json
 
 # ── Legacy / superseded snapshots kept locally, not part of the shipped game ──
@@ -35,7 +35,6 @@ project.bjseditor
 public/scene/
 assets/example.scene/
 assets/country.env
-src/
 
 # ── Old Java prototype (predates the Three.js game) ───────────────────────────
 JAVA/
@@ -46,4 +45,4 @@ Thumbs.db
 .DS_Store
 
 # Scratch output from scripts/_grade_check.mjs (regenerated on demand)
-scripts/_grade_*.png
+src/scripts/_grade_*.png
