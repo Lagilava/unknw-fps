@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>UNKNW — FX Lab</title>
+<!--
+  Standalone VFX lab (dev-only, like dev.html / model_preview.html).
+
+  WHY: the flamethrower is the one effect in the game that cannot be judged from
+  a still frame or from a single angle — it only looks like a jet because many
+  frames of particles coexist, it is fired down the camera axis in normal play
+  (the worst angle to evaluate a cone from), and reaching a blackout wave in the
+  real game takes ~40 s of boot. This page loads the SAME modules/particle_fx.ts
+  and modules/flame_jet.ts the game does, against a small lit room, and exposes:
+
+    __fxLab.step(n)        advance n fixed 60 fps frames (emit + simulate)
+    __fxLab.settle(n)      step until the jet is at steady state
+    __fxLab.view(name)     named camera angles (see VIEWS)
+    __fxLab.orbit(az, el, dist, height)
+    __fxLab.shot(view, frames)  -> PNG data URL, rendered in the SAME task
+    __fxLab.set({...})     live-tune FLAMETHROWER_CONFIG (deep merge)
+    __fxLab.quality(q)     "low" | "medium" | "high"
+    __fxLab.setWall(d)     move the impact wall to d metres (0 = open air)
+    __fxLab.stats()        live particle counts, per component
+    __fxLab.pipeline(p)    "game" (default: HDR composer + bloom + output tone
+                           map, like the game) or "direct" (canvas, per-sprite
+                           tone mapping — NOT what players see)
+    __fxLab.motion({vx, vz, yawRate})  move/turn the muzzle while firing
+                           (walk, strafe, whip-pan) — reset() clears it
+
+  Everything is stepped by hand, so nothing depends on the page's real frame
+  rate — a headless browser at 2 fps produces the same image as a desktop at 144.
+
+  Serve through src/tests/static-server.cjs (port 8000), which transpiles the
+  .ts modules on the fly:  http://127.0.0.1:8000/src/fx_lab.html
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/": "/node_modules/three/"
+  }
+}
+</script>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; left: 10px; top: 10px; z-index: 5; pointer-events: none;
+    font: 12px/1.5 ui-monospace, Consolas, monospace; color: #9fb4c4;
+    background: rgba(4,8,12,.72); border: 1px solid rgba(120,150,170,.3);
+    padding: 8px 10px; white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div id="hud">FX LAB — loading…</div>
+<script type="module">
+import * as THREE from "three";
+import { createParticleFX } from "./modules/particle_fx.js";
+import { createFlameJet, FLAMETHROWER_CONFIG } from "./modules/flame_jet.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(window.innerWidth, window.innerHeight);
+// Match the game's tone mapping and exposure, or every brightness decision made
+// here is wrong the moment the effect is dropped back into the game.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// The game's blackout exposure: BASE_TONE_MAPPING_EXPOSURE 1.16 × 1.12.
+renderer.toneMappingExposure = 1.3;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070a);
+
+const camera = new THREE.PerspectiveCamera(63, window.innerWidth / window.innerHeight, 0.05, 480);
+
+// ── A deliberately dark room ────────────────────────────────────────────────
+// Blackout waves kill the environment lights, so the lab starts almost black:
+// that is the only honest way to judge both the fire's own brightness and the
+// light it is supposed to throw. Materials are plain grey so any colour on them
+// came from the fire.
+const ambient = new THREE.AmbientLight(0x2a3340, 0.16);
+scene.add(ambient);
+const fill = new THREE.HemisphereLight(0x22303f, 0x0a0c10, 0.18);
+scene.add(fill);
+
+// The shared fire light. Created ONCE at boot and never toggled — in the game
+// this role is played by an existing permanent light for exactly this reason
+// (see the light-count invariant in CLAUDE.md).
+const fireLight = new THREE.PointLight(FLAMETHROWER_CONFIG.lighting.color, 0, FLAMETHROWER_CONFIG.lighting.distance, 1.6);
+fireLight.castShadow = false;
+fireLight.name = "FlameJetLight";
+scene.add(fireLight);
+
+const grey = (hex, rough = 0.92) => new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: 0.02 });
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), grey(0x3a3c40));
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+
+// The impact wall. Its near face sits `wallDist` metres down the throw (see
+// setWall) so the stream's stall, the splash and the residue are all visible.
+const wall = new THREE.Mesh(new THREE.BoxGeometry(40, 9, 0.6), grey(0x45443f));
+scene.add(wall);
+let wallDist = 12;
+function setWall(d) {
+  wallDist = d;
+  wall.visible = d > 0;
+  wall.position.set(0, 4.5, -(d + 0.3));
+  return d;
+}
+setWall(wallDist);
+
+// Scatter a few blocks down the jet's path: these are the readout for whether
+// the fire is lighting the environment, and by how much at each distance.
+const marks = [];
+for (let i = 0; i < 7; i++) {
+  const h = 1.1 + (i % 3) * 0.5;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.9, h, 0.9), grey(0x56585c, 0.8));
+  box.position.set(i % 2 ? 2.1 : -2.1, h / 2, -2.2 - i * 2.1);
+  scene.add(box);
+  marks.push(box);
+}
+// A human-height post where the player stands: behind the muzzle (arms' length)
+// and on the side AWAY from the over-shoulder camera, as in the game.
+const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.8, 10), grey(0x6a6c70, 0.7));
+post.position.set(-0.2, 0.9, 0.55);
+scene.add(post);
+
+const particleFX = createParticleFX(THREE, scene, {
+  backend: "webgl",
+  viewportHeight: () => renderer.getDrawingBufferSize(new THREE.Vector2()).y,
+  viewerPosition: () => camera.getWorldPosition(new THREE.Vector3()),
+  floorY: 0.02,
+});
+const jet = createFlameJet(THREE, particleFX, { quality: "high" });
+
+// The muzzle: roughly where the game's third-person weapon sits.
+const MUZZLE = { x: 0, y: 1.45, z: 0 };
+const DIR = { x: 0, y: 0, z: -1 };
+const lightSample = { x: 0, y: 0, z: 0, intensity: 0, flicker: 0 };
+
+let simTime = 0;
+let throttle = 1;
+// Muzzle motion for the movement tests: world velocity (m/s) and turn rate
+// (rad/s) about Y. DIR is kept a unit vector in the XZ plane.
+const motion = { vx: 0, vz: 0, yawRate: 0, yaw: 0 };
+
+function step(frames = 1) {
+  const dt = 1 / 60;
+  for (let i = 0; i < frames; i++) {
+    simTime += dt;
+    MUZZLE.x += motion.vx * dt;
+    MUZZLE.z += motion.vz * dt;
+    if (motion.yawRate) {
+      motion.yaw += motion.yawRate * dt;
+      DIR.x = -Math.sin(motion.yaw);
+      DIR.z = -Math.cos(motion.yaw);
+    }
+    // Stop the jet at the wall the way the game stops it at world geometry.
+    const hit = wallDist > 0 && wallDist <= FLAMETHROWER_CONFIG.range;
+    const reach = hit ? wallDist : FLAMETHROWER_CONFIG.range;
+    const frame = { origin: MUZZLE, dir: DIR, reach, surface: hit, throttle, dt, time: simTime };
+    if (throttle > 0) jet.emit(frame); else jet.stop();
+    if (hit) jet.emitSurface({ x: MUZZLE.x, y: MUZZLE.y, z: MUZZLE.z + DIR.z * reach },
+      { x: 0, y: 0, z: 1 }, DIR, throttle, reach);
+    jet.updateResidue(dt);
+    jet.lightSample(frame, lightSample);
+    fireLight.position.set(lightSample.x, lightSample.y, lightSample.z);
+    fireLight.intensity = throttle > 0 ? lightSample.intensity : 0;
+    particleFX.update(dt);
+  }
+}
+
+// ── Camera rig ──────────────────────────────────────────────────────────────
+// Every angle that matters for a cone fired away from the viewer.
+const VIEWS = {
+  // What the player actually sees. Measured in-game (__rbFlame().camera vs
+  // .muzzle): the third-person lens sits ~1.7 m behind the muzzle, ~0.8 m to
+  // its right and ~0.4 m above, looking at the crosshair. An orbit around the
+  // jet's mid-point cannot express that (the old orbit put the lens INSIDE
+  // the stream), so this view is placed explicitly — see view().
+  gameplay:   { player: true, back: 1.7, right: 0.8, up: 0.4, aim: 10 },
+  // The shape read: dead side-on.
+  side:       { az: Math.PI / 2, el: 0.06, dist: 13.0, height: 1.6, look: 7 },
+  // Three-quarter, the most flattering and most diagnostic.
+  threeQuarter: { az: 0.95, el: 0.22, dist: 11.0, height: 2.0, look: 7 },
+  // From above: shows the cone's plan shape and the whip.
+  top:        { az: Math.PI / 2, el: 1.15, dist: 14.0, height: 2.0, look: 7 },
+  // Head-on from the far end, the worst case for additive stacking.
+  headOn:     { az: Math.PI, el: 0.10, dist: 6.5, height: 1.5, look: 4 },
+  // Low and close, where the particle masks are biggest on screen.
+  closeLow:   { az: 1.5, el: -0.05, dist: 4.2, height: 0.8, look: 4 },
+};
+
+function orbit(az, el, dist, height = 1.5, look = 7) {
+  const ce = Math.cos(el), se = Math.sin(el);
+  // The jet runs along -Z from MUZZLE; orbit around its mid-point.
+  const cx = MUZZLE.x, cz = MUZZLE.z + DIR.z * look;
+  camera.position.set(cx + dist * ce * Math.sin(az), height + dist * se, cz + dist * ce * Math.cos(az));
+  camera.lookAt(cx, height * 0.75, cz);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+
+function view(name) {
+  const v = VIEWS[name] || VIEWS.side;
+  if (v.player) {
+    // DIR is -Z, so "right" is +X and "back" is +Z.
+    camera.position.set(MUZZLE.x + v.right, MUZZLE.y + v.up, MUZZLE.z + v.back);
+    camera.lookAt(MUZZLE.x + DIR.x * v.aim, MUZZLE.y + DIR.y * v.aim, MUZZLE.z + DIR.z * v.aim);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    return name;
+  }
+  orbit(v.az, v.el, v.dist, v.height, v.look);
+  return name;
+}
+
+// The game renders through a post composer by default (cinematic / FXAA), so
+// additive fire is SUMMED in a linear HDR target and tone-mapped once at the
+// end, with bloom in between. Rendering straight to the canvas instead tone-
+// maps each sprite before it blends, which keeps colours saturated that the
+// game washes to white. The fire was once tuned on that path and looked peach
+// in-game, so the lab defaults to the game's pipeline: HDR target, bloom at
+// the game's cinematic values (strength 0.22, radius 1, threshold 0.9), then
+// the output tone map. (The game's grade/FXAA passes do not change the fire's
+// brightness balance and are left out.)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.22, 1, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+let pipeline = "game";
+function render() {
+  if (pipeline === "game") composer.render();
+  else renderer.render(scene, camera);
+}
+
+/** Settle to steady state, frame the view, render and read back — all inside
+ *  ONE task, so the image is what a 60 fps player would see. */
+function shot(name = "side", frames = 70) {
+  view(name);
+  step(frames);
+  render();
+  try { return renderer.domElement.toDataURL("image/png"); } catch (e) { return String(e); }
+}
+
+const hud = document.getElementById("hud");
+function stats() {
+  const info = {
+    particles: particleFX.count(),
+    capacity: particleFX.capacity(),
+    jet: jet.stats(),
+    draws: renderer.info.render.calls,
+    lightIntensity: +fireLight.intensity.toFixed(1),
+    throttle,
+    time: +simTime.toFixed(2),
+  };
+  const j = info.jet;
+  hud.textContent =
+    `FX LAB  [${j.quality}]\nparticles ${info.particles}/${info.capacity}\ndraws ${info.draws}\n` +
+    `core ${j.core}  flames ${j.flames}  smoke ${j.smoke}  embers ${j.embers}\n` +
+    `impact ${j.impact}  residue ${j.residue} (${j.residuePatches} patches)\n` +
+    `fire light ${info.lightIntensity}\nthrottle ${throttle}  wall ${wallDist || "none"}`;
+  return info;
+}
+
+window.__fxLab = {
+  THREE, scene, camera, renderer, particleFX, jet, fireLight, FLAMETHROWER_CONFIG, VIEWS, MUZZLE, DIR,
+  step, view, orbit, render, shot, stats, setWall,
+  settle: (n = 70) => step(n),
+  reset: () => {
+    particleFX.clear(); jet.clearResidue(); jet.stop(); simTime = 0;
+    Object.assign(motion, { vx: 0, vz: 0, yawRate: 0, yaw: 0 });
+    Object.assign(MUZZLE, { x: 0, y: 1.45, z: 0 });
+    Object.assign(DIR, { x: 0, y: 0, z: -1 });
+  },
+  motion: (m = {}) => Object.assign(motion, m),
+  setThrottle: (v) => { throttle = Math.max(0, Math.min(1, v)); },
+  quality: (q) => jet.setQuality(q),
+  pipeline: (p) => { if (p === "game" || p === "direct") pipeline = p; return pipeline; },
+  bloom,
+  /** Live-tune the fire, deep-merged into FLAMETHROWER_CONFIG, e.g.
+   *  __fxLab.set({ flame: { speed: [20, 26] }, turbulence: { flame: 30 } }). */
+  set: (patch = {}) => {
+    const merge = (dst, src) => {
+      for (const [k, v] of Object.entries(src)) {
+        if (v && typeof v === "object" && !Array.isArray(v) && dst[k] && typeof dst[k] === "object") merge(dst[k], v);
+        else dst[k] = v;
+      }
+    };
+    merge(FLAMETHROWER_CONFIG, patch);
+    jet.applyConfig();
+    return FLAMETHROWER_CONFIG;
+  },
+  /** Ambient level, for checking the fire's contribution against a lit room. */
+  setAmbient: (v) => { ambient.intensity = v; fill.intensity = v; },
+  /** Dump the particle atlas as a labelled contact sheet. When a stray
+   *  silhouette shows up in an effect, this says which tile it is far faster
+   *  than reasoning about which preset might be responsible. */
+  atlasSheet: () => {
+    const tex = particleFX.objects[0].material.uniforms
+      ? particleFX.objects[0].material.uniforms.uAtlas.value
+      : particleFX.objects[0].material.map;
+    const { width, height, data } = tex.image;
+    const c = document.createElement("canvas");
+    c.width = width; c.height = height;
+    const ctx = c.getContext("2d");
+    const img = ctx.createImageData(width, height);
+    // Alpha-only masks: show them as white-on-checkerboard so shape is legible.
+    for (let i = 0; i < width * height; i++) {
+      const a = data[i * 4 + 3] / 255;
+      const cx = ((i % width) >> 4 & 1) ^ ((Math.floor(i / width) >> 4) & 1);
+      const bg = cx ? 40 : 70;
+      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = Math.round(bg * (1 - a) + 255 * a);
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    // Blow it up: a 96 px tile is far too small to judge a silhouette by eye.
+    const S = 3;
+    const big = document.createElement("canvas");
+    big.width = width * S; big.height = height * S;
+    const bx = big.getContext("2d");
+    bx.imageSmoothingEnabled = false;
+    bx.drawImage(c, 0, 0, big.width, big.height);
+    bx.font = "bold 34px monospace"; bx.fillStyle = "#ff3355";
+    bx.strokeStyle = "rgba(255,51,85,.5)"; bx.lineWidth = 2;
+    for (let sh = 0; sh < 12; sh++) {
+      const tx = (sh % 4) * (big.width / 4), ty = Math.floor(sh / 4) * (big.height / 3);
+      bx.strokeRect(tx, ty, big.width / 4, big.height / 3);
+      bx.fillText(String(sh), tx + 10, ty + 38);
+    }
+    return big.toDataURL("image/png");
+  },
+};
+
+view("side");
+step(70);
+function loop() { step(1); render(); stats(); requestAnimationFrame(loop); }
+loop();
+document.body.dataset.fxLabReady = "1";
+</script>
+</body>
+</html>

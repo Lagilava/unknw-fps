@@ -1,50 +1,32 @@
 const { test, expect } = require('@playwright/test');
-const fs = require('node:fs');
 
-test('hoisted weapon ray preserves the effect at the original iteration counts', async ({ page }) => {
-  const source = fs.readFileSync('src/three_fps_game.ts', 'utf8');
-  const skin = source.slice(source.indexOf('const weaponSkinMaterial ='));
-  const optimized = skin.match(/fragmentShader: \/\* glsl \*\/`([\s\S]*?)`/)[1];
-  expect(optimized).toContain('i<43.');
-  expect(optimized).toContain('j<10');
-  const original = optimized.replace(/        vec3 ray =[^;]+;\s*ray.xy\*=c\(r\);\s*ray.yz\*=c\(q\);\s*ray.xz\*=c\(p\);/, '').replace('          vec3 a=ray*d;', `
-          vec3 a=vec3((n.xy*2.1-g)/g.y*d,d);
-          a.xy*=c(r);
-          a.yz*=c(q);
-          a.xz*=c(p);`);
-  const result = await page.evaluate(({ original, optimized }) => {
-    const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 144;
-    const gl = canvas.getContext('webgl', { antialias: false });
-    const compile = (type, text) => { const s=gl.createShader(type); gl.shaderSource(s,text); gl.compileShader(s);
-      if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
-    const make = fragment => {
-      const p = gl.createProgram();
-      gl.attachShader(p,compile(gl.VERTEX_SHADER,'attribute vec2 position; void main(){gl_Position=vec4(position,0.,1.);}'));
-      gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fragment)); gl.linkProgram(p);
-      if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p)); return p;
-    };
-    const programs = [make(original), make(optimized)];
-    gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
-    const pixels = [new Uint8Array(canvas.width*canvas.height*4),new Uint8Array(canvas.width*canvas.height*4)];
-    const timings = [[],[]], comparisons=[];
-    function draw(index,time) {
-      const p=programs[index]; gl.useProgram(p); const loc=gl.getAttribLocation(p,'position'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-      gl.uniform2f(gl.getUniformLocation(p,'iResolution'),canvas.width,canvas.height); gl.uniform1f(gl.getUniformLocation(p,'uTime'),time);
-      const start=performance.now(); gl.drawArrays(gl.TRIANGLES,0,3); gl.finish();
-      gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels[index]);
-      timings[index].push(performance.now()-start);
-    }
-    for(const time of [0,.5,3,12,40,90]) {
-      draw(0,time);draw(1,time);
-      let sum=0,max=0,changed=0;
-      for(let i=0;i<pixels[0].length;i++) { const d=Math.abs(pixels[0][i]-pixels[1][i]);sum+=d;max=Math.max(max,d);if(d>8)changed++; }
-      comparisons.push({time,mean:sum/pixels[0].length,max,changedFraction:changed/pixels[0].length});
-    }
-    return {timings,comparisons};
-  }, {original,optimized});
-  console.log(JSON.stringify(result));
-  for(const comparison of result.comparisons) {
-    expect(comparison.mean).toBeLessThan(.5);
-    expect(comparison.changedFraction).toBeLessThan(.01);
-  }
+test('all nine gun finishes compile, render distinctly, and own their upgrade materials', async ({ page }) => {
+  const errors=[]; page.on('pageerror', e=>errors.push(e.message));
+  page.on('console', m=>{if(m.type()==='error')errors.push(m.text());});
+  await page.route('**/finish-test',route=>route.fulfill({contentType:'text/html',body:'<html><body></body></html>'}));
+  await page.goto('http://127.0.0.1:8000/finish-test');
+  await page.setContent('<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js"}}</script>');
+  const result = await page.evaluate(async () => {
+    const THREE=await import('three');
+    const {createWeaponMaterials}=await import('/src/modules/weapon_materials');
+    const {GUNS}=await import('/src/modules/gun_config');
+    const renderer=new THREE.WebGLRenderer({preserveDrawingBuffer:true});renderer.setSize(900,600);document.body.append(renderer.domElement);
+    const scene=new THREE.Scene();scene.background=new THREE.Color(0x101722);
+    scene.add(new THREE.HemisphereLight(0xb8dfff,0x665544,3));
+    const light=new THREE.DirectionalLight(0xffffff,4);light.position.set(2,5,8);scene.add(light);
+    const camera=new THREE.PerspectiveCamera(40,1.5,.1,100);camera.position.set(0,0,8);
+    const finishes=Object.values(GUNS).map((type,i)=>{
+      const mats=createWeaponMaterials(type,{value:1});
+      const mesh=new THREE.Mesh(new THREE.TorusKnotGeometry(.37,.12,64,8),mats.bodyMat);
+      mesh.position.set((i%3-1)*1.8,(1-Math.floor(i/3))*1.5,0);scene.add(mesh);
+      return mats;
+    });
+    renderer.render(scene,camera);
+    const first=finishes[0].bodyMat.emissive.getHex();finishes[1].bodyMat.emissive.setHex(0xff0000);
+    const fallback=Object.values(GUNS).map(t=>createWeaponMaterials(t,{value:0},true).bodyMat.color.getHex());
+    return {keys:new Set(finishes.map(m=>m.bodyMat.customProgramCacheKey())).size,colors:new Set(fallback).size,isolated:finishes[0].bodyMat.emissive.getHex()===first,programs:renderer.info.programs.length,runnable:renderer.info.programs.every(p=>p.diagnostics?.runnable!==false)};
+  });
+  expect(result.keys).toBe(9);expect(result.colors).toBe(9);expect(result.isolated).toBe(true);
+  expect(result.programs).toBe(9);expect(result.runnable).toBe(true);expect(errors).toEqual([]);
+  await page.screenshot({path:'test-artifacts/weapon-finishes.png'});
 });

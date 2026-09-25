@@ -33,10 +33,15 @@ type Vec3Like = { x: number; y: number; z: number };
 /** Layer a preset renders into. Determines blending, not behaviour. */
 type LayerName = "add" | "alpha";
 
-interface Preset {
+export interface Preset {
   layer: LayerName;
-  /** Atlas tile: puff, streak, ring, arc, smoke, spray, flare, shard. */
+  /** Atlas tile: puff, streak, ring, arc, smoke, spray, flare, shard, then the
+   *  fire masks — tongue, ragged blob, soft smoke puff, ragged blob variant. */
   shape: number;
+  /** Optional second mask; each particle picks between the two at birth. One
+   *  silhouette repeated hundreds of times is legible as a repeat however it is
+   *  rotated, which is what makes a big additive effect look stamped. */
+  shapeAlt: number;
   delay: number;
   /** Single signature sprites survive density scaling; budget zero still disables them. */
   signature: boolean;
@@ -50,6 +55,10 @@ interface Preset {
   life: [number, number];
   /** World-unit diameter at birth → at death. */
   size: [number, number];
+  /** Size growth curve: size = birth + (death − birth) × t^sizePow. 1 =
+   *  linear. Below 1 grows early and settles (a jet that opens up soon after
+   *  the nozzle, then stops growing instead of ballooning at the tip). */
+  sizePow: number;
   /** Colour at birth → at death (hex). */
   color: [number, number];
   /** Peak opacity. */
@@ -68,13 +77,47 @@ interface Preset {
   jitter: number;
   /** Extra upward bias added to the emission direction. */
   rise: number;
+  /** Optional middle colour stop at half-life (hex); -1 = straight birth→death
+   *  lerp. Fire needs three stops (hot → orange → dark red): a two-stop lerp
+   *  from yellow to red spends its whole life a muddy salmon. */
+  colorMid: number;
+  /** Life fraction before which the particle is fully invisible; `attack`
+   *  ramps it in from there. This is how one emitter at the nozzle puts smoke
+   *  and embers only DOWNSTREAM: they fly with the stream, unseen, and appear
+   *  where the flame is already cooling. Invisible particles are parked by the
+   *  vertex shader, so they cost no fill. */
+  fadeInAt: number;
+  /** Turbulence acceleration (units/s²), scaled by life fraction so a particle
+   *  leaves smooth and churns more the further it has travelled. It is a
+   *  zero-mean spatial field, so neighbours move together (coherent tongues)
+   *  and the stream keeps its overall heading. 0 = none, costs nothing. */
+  turb: number;
+  /** When a spawn() cutoff age is reached (the particle got to the surface the
+   *  jet was aimed at): velocity is multiplied by `cutKeep` and the REMAINING
+   *  life by `cutLife`. 0/0.35 = stall and gutter out against the wall. */
+  cutKeep: number;
+  cutLife: number;
+  /** Small integer for live-count diagnostics (see ParticleFX.tagCount). */
+  tag: number;
+  /** Additive layer only: how much the particle also DARKENS what is behind
+   *  it, 0..1. 0 is pure additive (sparks, energy — unchanged). Fire needs
+   *  some: pure additive over a lit scene sums toward white and washes out,
+   *  and seen down its own axis a stream stacks into one bright blob. With
+   *  occlusion, near flame covers far flame and the colour stays saturated.
+   *  Same draw call: the layer blends premultiplied (One, OneMinusSrcAlpha),
+   *  which at occlusion 0 is exactly the old additive result. */
+  occlusion: number;
 }
 
 const P = (o: Partial<Preset> & Pick<Preset, "layer">): Preset => ({
-  shape: 0, delay: 0, signature: false, count: 6, speed: [2, 5], spread: 0.6, life: [0.3, 0.6], size: [0.08, 0.02],
+  shape: 0, shapeAlt: -1, delay: 0, signature: false, count: 6, speed: [2, 5], spread: 0.6, life: [0.3, 0.6], size: [0.08, 0.02],
   color: [0xffffff, 0xffffff], alpha: 1, gravity: 9, drag: 1.5, hard: 3,
-  bounce: 0, attack: 0, jitter: 0.02, rise: 0.2, ...o,
+  bounce: 0, attack: 0, jitter: 0.02, rise: 0.2,
+  sizePow: 1, colorMid: -1, fadeInAt: 0, turb: 0, cutKeep: 1, cutLife: 1, tag: 0, occlusion: 0, ...o,
 });
+
+/** Tags are indices into a small shared counter array. */
+const MAX_TAGS = 16;
 
 /**
  * Emitter archetypes. These are the vocabulary; `EFFECTS` below composes them
@@ -171,6 +214,10 @@ const PRESETS: Record<string, Preset> = {
     life: [0.4, 0.65], size: [0.6, 1.6], color: [0x327cc9, 0x25255d],
     alpha: 0.32, gravity: -0.6, drag: 3, attack: 0.12, jitter: 0.2,
   }),
+  // Flamethrower vocabulary (the jet, its impact, residue, burning enemies,
+  // pilot light) is NOT defined here: modules/flame_jet.ts owns it in
+  // FLAMETHROWER_CONFIG and registers it through definePreset/defineEffect,
+  // so every fire number lives in one place. Tune it in src/fx_lab.html.
   // Ability/energy hits. Tinted at the call site via opts.color.
   energy: P({
     layer: "add", count: 8, speed: [3, 8], spread: 1, life: [0.25, 0.6],
@@ -195,6 +242,9 @@ const EFFECTS: Record<string, Array<[string, number]>> = {
   headshot: [["deathSpray", 1], ["bloodMist", 1.5], ["blood", 1.6]],
   enemyDeath: [["deathSpray", 1], ["bloodMist", 1.2], ["blood", 1.6]],
   enemyArmorHit: [["shieldCore", 1], ["shieldArc", 1], ["shieldSpark", 0.7], ["spark", 0.3]],
+  // Angel head hit: the body-hit discharge plus a ring and a heavier spark
+  // shower, so a crit reads at a glance without a damage number.
+  enemyArmorHeadshot: [["shieldCore", 1], ["shieldRing", 1], ["shieldArc", 1], ["shieldSpark", 1.3], ["spark", 0.7]],
   // Metal enemy (angel) death: shower of sparks + shrapnel + a puff of smoke and
   // hot embers — the mechanical equivalent of enemyDeath, no gore.
   enemyDeathMetal: [["shieldCore", 1], ["shieldRing", 1], ["deathArc", 1], ["shieldSpark", 1.4], ["spark", 0.7], ["debris", 0.7], ["plasmaVapor", 1]],
@@ -205,7 +255,7 @@ const EFFECTS: Record<string, Array<[string, number]>> = {
 /** Eight small authored masks, generated once. One texture lookup per fragment,
  * rather than procedural noise / branching lightning maths on every pixel. */
 function createParticleAtlas(THREE: any): any {
-  const tile = 96, width = tile * 4, height = tile * 2;
+  const tile = 96, width = tile * 4, height = tile * 3;
   const pixels = new Uint8Array(width * height * 4);
   const clamp = (v: number) => Math.max(0, Math.min(1, v));
   const segment = (x: number, y: number, ax: number, ay: number, bx: number, by: number) => {
@@ -220,7 +270,7 @@ function createParticleAtlas(THREE: any): any {
     [.17, .09, .47, -.08], [.47, -.08, .56, -.36], [-.48, -.14, -.62, .44],
   ];
   const lobes = [[0, 0, .52], [-.3, .13, .37], [.22, .28, .38], [.32, -.19, .4], [-.18, -.33, .35]];
-  for (let shape = 0; shape < 8; shape++) {
+  for (let shape = 0; shape < 12; shape++) {
     for (let iy = 0; iy < tile; iy++) for (let ix = 0; ix < tile; ix++) {
       const x = (ix + .5) / tile * 2 - 1, y = (iy + .5) / tile * 2 - 1;
       const r = Math.hypot(x, y);
@@ -260,6 +310,68 @@ function createParticleAtlas(THREE: any): any {
           + .65 * Math.exp(-Math.abs(y) * 65 - Math.abs(x) * 3);
       }
       if (shape === 7) a = clamp((.65 - Math.abs(x * 1.5 + y * .4) - Math.abs(y) * .7) * 30);
+      // ── Fire masks (8-10) ────────────────────────────────────────────────
+      // Round sprites cannot make fire. A flame's silhouette is the effect: a
+      // tapering tongue with a notched edge, not a disc with soft edges. These
+      // three carry that shape so the particles do not have to fake it with
+      // sheer density. None of them use a periodic grain term — see shape 4,
+      // whose sin() grain tiles into a visible honeycomb at large sizes.
+      //
+      // 8: flame tongue. Base at -y, tip at +y, so the vertex shader's
+      // velocity alignment points the tip down-flow.
+      if (shape === 8) {
+        const ny = (y + 1) * .5;                         // 0 at base, 1 at tip
+        // Profile: a rounded bulb in the lower third drawn out to a point. The
+        // width must not go to zero at the base — a tongue that tapers at BOTH
+        // ends is a blade, and that is exactly what the first version rendered.
+        const w = .42 * Math.pow(1 - ny, .5) * clamp(ny * 6 + .25);
+        if (w > .004) {
+          const lean = .08 * Math.sin(ny * 4.2 + 1.1);   // slight S, so it licks
+          const u = (x - lean) / w;
+          // SQUARED falloff across the width. A linear cut (1 - |u|) gives a
+          // dead-straight edge, which is what made this read as a machined
+          // blade instead of something burning.
+          let core = clamp(1 - u * u);
+          // Erode the silhouette toward the tip so it frays rather than ending
+          // in a clean spike.
+          core *= clamp(1.02 - .55 * (.35 + .65 * ny) * (.5 + .5 * Math.sin(ny * 19 + x * 5 + .6)));
+          a = Math.pow(core, 1.15) * (1 - Math.pow(ny, 2.4) * .7);
+        }
+      }
+      // 9 and 11: ragged burning blobs — the body of the fire. Angular noise on
+      // the radius gives a broken edge with no tiling artefact.
+      //
+      // Keep the amplitudes SMALL. At .15/.09 the 3θ term dominates and every
+      // particle becomes a recognisable three-pointed star — which, scattered
+      // and rotated at metre scale, reads as a flock of birds rather than fire.
+      // The raggedness has to be a perturbation of a disc, not a shape of its own.
+      //
+      // 11 is the same blob with different phases: one silhouette repeated a few
+      // hundred times is legible as a repeat no matter how it is rotated, so
+      // presets alternate between the two (see `shapeAlt`).
+      if (shape === 9 || shape === 11) {
+        const ph = shape === 9 ? 0 : 2.6;
+        const angle = Math.atan2(y, x);
+        const edge = .72 + .07 * Math.sin(angle * 3 + 1.1 + ph) + .05 * Math.sin(angle * 5 - .6 - ph)
+          + .035 * Math.sin(angle * 9 + 2.4 + ph * 2);
+        a = Math.pow(clamp((edge - r) * (1.8 + 1.7 * clamp(1 - r))), .95);
+      }
+      // 10: rolling smoke puff. Lobed like shape 4 but with a noisy perimeter
+      // instead of a grain, so it survives being metres across.
+      if (shape === 10) {
+        // Deliberately NOT lobed. The five discrete lobes of shape 4 turn into
+        // recognisable bird/butterfly silhouettes once a particle is metres
+        // across, and every instance repeats the same one. A soft disc with a
+        // gently irregular perimeter stays amorphous at any size.
+        // Keep the perimeter noise SMALL relative to the radius. At .1/.07/.05
+        // on a base of .78 the three harmonics line up in a few directions and
+        // push the edge out to the tile corners — the puff grows arms and reads
+        // as a bird, which is the artefact this shape existed to avoid.
+        const angle = Math.atan2(y, x);
+        const edge = .66 + .05 * Math.sin(angle * 3 + .7) + .035 * Math.sin(angle * 5 - 1.3)
+          + .025 * Math.sin(angle * 8 + 2.1);
+        a = Math.pow(clamp((edge - r) / edge), 1.4);
+      }
       const i = (((shape >> 2) * tile + iy) * width + (shape % 4) * tile + ix) * 4;
       pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
       pixels[i + 3] = Math.round(clamp(a) * clamp((.98 - Math.max(Math.abs(x), Math.abs(y))) * 30) * 255);
@@ -277,7 +389,7 @@ attribute float aSize;
 attribute vec3 aColor;
 attribute float aAlpha;
 attribute float aHard;
-attribute vec2 aStyle;
+attribute vec3 aStyle;
 attribute vec4 aMotion;
 uniform float uViewportHeight;
 varying vec3 vColor;
@@ -286,13 +398,18 @@ varying float vHard;
 varying vec2 vStyle;
 varying float vAge;
 varying vec2 vRotation;
+varying float vOcclusion;
 void main() {
   vColor = aColor;
   vAlpha = aAlpha;
   vHard = aHard;
-  vStyle = aStyle;
+  vStyle = aStyle.xy;
+  vOcclusion = aStyle.z;
   vAge = aMotion.w;
-  if (aStyle.x > 0.5 && aStyle.x < 1.5) {
+  // Shapes 1 (streak) and 8 (flame tongue) are directional: rotate them so
+  // their long axis follows the particle's screen-space velocity. Everything
+  // else keeps its random birth rotation.
+  if ((aStyle.x > 0.5 && aStyle.x < 1.5) || (aStyle.x > 7.5 && aStyle.x < 8.5)) {
     vec3 velocity = mat3(modelViewMatrix) * aMotion.xyz;
     if (dot(velocity.xy, velocity.xy) > 0.001)
       vStyle.y = atan(-velocity.y, velocity.x) - 1.5707963;
@@ -305,6 +422,12 @@ void main() {
   // built-in points shader ignores the projection term and so ignores FOV.)
   float px = aSize * projectionMatrix[1][1] * 0.5 * uViewportHeight / max(0.0001, -mv.z);
   gl_PointSize = min(px, 190.0);
+  // Near-camera fade. Close up a particle fills a huge patch of screen and the
+  // viewer starts reading the SPRITE instead of the effect — every mask becomes
+  // a legible silhouette (a wedge, a blob, a streak). Fading the nearest ones
+  // out keeps the effect volumetric from inside it, which matters here because
+  // the third-person camera sits only a few metres behind the muzzle.
+  vAlpha *= smoothstep(0.30, 1.90, -mv.z);
   // Warm-up may draw unused slots; park those off-screen. Live draws use a
   // packed draw range, which does not change the compiled program.
   if (aSize <= 0.0 || aAlpha <= 0.0) {
@@ -321,7 +444,9 @@ varying float vHard;
 varying vec2 vStyle;
 varying float vAge;
 varying vec2 vRotation;
+varying float vOcclusion;
 uniform sampler2D uAtlas;
+uniform float uPremultiplied;
 // NOTE: do NOT include <tonemapping_pars_fragment> / <colorspace_pars_fragment>
 // here — three's WebGLProgram already prepends both to every ShaderMaterial's
 // fragment prefix, and re-including them is a "function already has a body"
@@ -332,13 +457,32 @@ void main() {
   p = mat2(cs, -sn, sn, cs) * p;
   if (max(abs(p.x), abs(p.y)) > 0.49) discard;
   vec2 tile = vec2(mod(vStyle.x, 4.0), floor(vStyle.x / 4.0));
-  float a = texture2D(uAtlas, (tile + p + 0.5) / vec2(4.0, 2.0)).a;
-  if (vStyle.x < 0.5) a = pow(a, vHard * 0.5);
+  float a = texture2D(uAtlas, (tile + p + 0.5) / vec2(4.0, 3.0)).a;
+  // The hard falloff exponent applies to the plain puff and to the fire masks;
+  // the authored masks (ring, arc, spray...) own their own edge. NOTE: no
+  // backticks in this shader source, it lives in a template literal.
+  if (vStyle.x < 0.5 || vStyle.x > 7.5) a = pow(a, vHard * 0.5);
   // A short stutter reads as electricity without needing extra particles.
   if (vStyle.x > 2.5 && vStyle.x < 3.5) a *= 0.65 + 0.35 * step(0.4, fract(vAge * 6.0));
-  gl_FragColor = vec4(vColor, a * vAlpha);
+  // Fire masks (8 tongue, 9 and 11 blobs; NOT 10, the smoke puff) burn hotter
+  // in their dense centre than at their frayed edge. The mask value is already
+  // in hand, so this is one mix per fragment, no extra fetch. It is what gives
+  // a stream internal detail: overlapping sprites show hot cores inside cooler
+  // rims instead of summing to one flat colour, and dimming the rims keeps the
+  // additive total (and so bloom) concentrated where the fire is hottest.
+  vec3 col = vColor;
+  if (vStyle.x > 7.5 && abs(vStyle.x - 10.0) > 0.5) {
+    float core = smoothstep(0.3, 0.95, a);
+    col *= mix(0.55, 1.25, core);
+    col.g += core * core * 0.1 * vColor.r;
+  }
+  gl_FragColor = vec4(col, a * vAlpha);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
+  // Additive layer: premultiplied output for (One, OneMinusSrcAlpha) blending.
+  // rgb*a is exactly what additive (SrcAlpha, One) added; the alpha channel
+  // now carries how much of the background this particle also covers.
+  if (uPremultiplied > 0.5) gl_FragColor = vec4(gl_FragColor.rgb * gl_FragColor.a, gl_FragColor.a * vOcclusion);
 }
 `;
 
@@ -373,14 +517,25 @@ class Layer {
   vx: Float32Array; vy: Float32Array; vz: Float32Array;
   life: Float32Array; maxLife: Float32Array;
   delay: Float32Array;
-  size0: Float32Array; size1: Float32Array;
-  c0: Float32Array; c1: Float32Array;   // 3 floats each
+  size0: Float32Array; size1: Float32Array; sizePow: Float32Array;
+  c0: Float32Array; c1: Float32Array; cm: Float32Array;   // 3 floats each
   alpha0: Float32Array;
   grav: Float32Array; drag: Float32Array; bounce: Float32Array; attack: Float32Array;
+  fadeIn: Float32Array; turb: Float32Array; seed: Float32Array;
+  cut: Float32Array; cutKeep: Float32Array; cutLife: Float32Array;
+  tag: Uint8Array;
+  /** Set by spawn(): the particle is already where it belongs at render time,
+   *  so its first update must not advance or age it. */
+  fresh: Uint8Array;
+  /** Shared across layers: live particles per preset tag. */
+  tagCounts: Int32Array;
+  /** Seconds of simulated time; drives the turbulence field. */
+  clock = 0;
 
-  constructor(THREE: any, opts: LayerOpts) {
+  constructor(THREE: any, opts: LayerOpts, tagCounts: Int32Array) {
     const n = opts.capacity;
     this.capacity = n;
+    this.tagCounts = tagCounts;
     this.additive = opts.additive;
     this.shaded = opts.backend === "webgl";
 
@@ -389,15 +544,19 @@ class Layer {
     this.aSize = new Float32Array(n);
     this.aAlpha = new Float32Array(n);
     this.aHard = new Float32Array(n);
-    this.aStyle = new Float32Array(n * 2);
+    this.aStyle = new Float32Array(n * 3);
     this.aMotion = new Float32Array(n * 4);
     this.delay = new Float32Array(n);
 
     this.vx = new Float32Array(n); this.vy = new Float32Array(n); this.vz = new Float32Array(n);
     this.life = new Float32Array(n); this.maxLife = new Float32Array(n);
-    this.size0 = new Float32Array(n); this.size1 = new Float32Array(n);
-    this.c0 = new Float32Array(n * 3); this.c1 = new Float32Array(n * 3);
+    this.size0 = new Float32Array(n); this.size1 = new Float32Array(n); this.sizePow = new Float32Array(n);
+    this.c0 = new Float32Array(n * 3); this.c1 = new Float32Array(n * 3); this.cm = new Float32Array(n * 3);
     this.alpha0 = new Float32Array(n);
+    this.fadeIn = new Float32Array(n); this.turb = new Float32Array(n); this.seed = new Float32Array(n);
+    this.cut = new Float32Array(n); this.cutKeep = new Float32Array(n); this.cutLife = new Float32Array(n);
+    this.tag = new Uint8Array(n);
+    this.fresh = new Uint8Array(n);
     this.grav = new Float32Array(n); this.drag = new Float32Array(n);
     this.bounce = new Float32Array(n); this.attack = new Float32Array(n);
 
@@ -410,27 +569,41 @@ class Layer {
     // WebGPU fallback reads `color` for vertexColors; alias the same buffer so
     // there is no second copy to keep in sync.
     this.geo.setAttribute("color", new THREE.BufferAttribute(this.aCol, 3));
-    this.geo.setAttribute("aStyle", new THREE.BufferAttribute(this.aStyle, 2));
+    this.geo.setAttribute("aStyle", new THREE.BufferAttribute(this.aStyle, 3));
     this.geo.setAttribute("aMotion", new THREE.BufferAttribute(this.aMotion, 4));
     for (const attr of Object.values(this.geo.attributes) as any[]) attr.setUsage(THREE.DynamicDrawUsage);
     this.geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e4);
 
     if (this.shaded) {
       this.mat = new THREE.ShaderMaterial({
-        uniforms: { uViewportHeight: { value: 1080 }, uAtlas: { value: opts.atlas } },
+        uniforms: {
+          uViewportHeight: { value: 1080 }, uAtlas: { value: opts.atlas },
+          uPremultiplied: { value: opts.additive ? 1 : 0 },
+        },
         vertexShader: VERT,
         fragmentShader: FRAG,
         transparent: true,
         depthWrite: false,
         depthTest: true,
-        blending: opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+        // The additive layer is really premultiplied: the fragment shader
+        // writes (rgb*a, a*occlusion), so occlusion 0 is plain additive and
+        // fire can also cover what is behind it — see Preset.occlusion.
+        ...(opts.additive
+          ? {
+            blending: THREE.CustomBlending,
+            blendEquation: THREE.AddEquation,
+            blendSrc: THREE.OneFactor,
+            blendDst: THREE.OneMinusSrcAlphaFactor,
+          }
+          : { blending: THREE.NormalBlending }),
       });
     } else {
       // WebGPU path: no custom shader. Size is per-material, so pick the preset
       // midpoint; alpha rides on the vertex colour (exact under additive).
       const map = opts.atlas.clone();
-      map.repeat.set(0.25, 0.5);
-      map.offset.set(opts.additive ? 0.5 : 0, 0.5);
+      // One fixed tile out of the 4x3 atlas (additive -> flare, alpha -> smoke).
+      map.repeat.set(0.25, 1 / 3);
+      map.offset.set(opts.additive ? 0.5 : 0, 1 / 3);
       map.needsUpdate = true;
       this.mat = new THREE.PointsMaterial({
         map,
@@ -453,6 +626,7 @@ class Layer {
 
   /** Free the slot at `i` by swapping the last live particle into it. */
   private kill(i: number): void {
+    this.tagCounts[this.tag[i]]--;
     const last = --this.count;
     if (i !== last) this.copySlot(last, i);
     this.aSize[last] = 0;
@@ -466,20 +640,26 @@ class Layer {
       this.aCol[t3 + k] = this.aCol[f3 + k];
       this.c0[t3 + k] = this.c0[f3 + k];
       this.c1[t3 + k] = this.c1[f3 + k];
+      this.cm[t3 + k] = this.cm[f3 + k];
     }
     this.aSize[to] = this.aSize[from];
     this.aAlpha[to] = this.aAlpha[from];
     this.aHard[to] = this.aHard[from];
-    this.aStyle[to * 2] = this.aStyle[from * 2];
-    this.aStyle[to * 2 + 1] = this.aStyle[from * 2 + 1];
+    this.aStyle[to * 3] = this.aStyle[from * 3];
+    this.aStyle[to * 3 + 1] = this.aStyle[from * 3 + 1];
+    this.aStyle[to * 3 + 2] = this.aStyle[from * 3 + 2];
     for (let k = 0; k < 4; k++) this.aMotion[to * 4 + k] = this.aMotion[from * 4 + k];
     this.delay[to] = this.delay[from];
     this.vx[to] = this.vx[from]; this.vy[to] = this.vy[from]; this.vz[to] = this.vz[from];
     this.life[to] = this.life[from]; this.maxLife[to] = this.maxLife[from];
-    this.size0[to] = this.size0[from]; this.size1[to] = this.size1[from];
+    this.size0[to] = this.size0[from]; this.size1[to] = this.size1[from]; this.sizePow[to] = this.sizePow[from];
     this.alpha0[to] = this.alpha0[from];
     this.grav[to] = this.grav[from]; this.drag[to] = this.drag[from];
     this.bounce[to] = this.bounce[from]; this.attack[to] = this.attack[from];
+    this.fadeIn[to] = this.fadeIn[from]; this.turb[to] = this.turb[from]; this.seed[to] = this.seed[from];
+    this.cut[to] = this.cut[from]; this.cutKeep[to] = this.cutKeep[from]; this.cutLife[to] = this.cutLife[from];
+    this.tag[to] = this.tag[from];
+    this.fresh[to] = this.fresh[from];
   }
 
   /** @returns the new particle's index, or -1 when the layer is saturated. */
@@ -499,7 +679,9 @@ class Layer {
    * itself into a death spiral instead of draining.
    */
   update(dt: number, step: number, floorY: number): void {
+    this.clock += dt;
     if (this.count === 0) return;
+    const clock = this.clock;
     for (let i = this.count - 1; i >= 0; i--) {
       let activeDt = dt;
       if (this.delay[i] > 0) {
@@ -508,12 +690,41 @@ class Layer {
         activeDt = -this.delay[i];
         this.delay[i] = 0;
       }
-      const life = this.life[i] - activeDt;
+      // A spawn() particle was placed at its exact sub-frame position for THIS
+      // frame's render. Advancing it now as well would open a speed×dt gap at
+      // the emitter (0.5 m at 60 fps, 1 m at 30) — a stream detached from its
+      // nozzle. So its first update only refreshes the visuals.
+      if (this.fresh[i]) { this.fresh[i] = 0; activeDt = 0; }
+      let life = this.life[i] - activeDt;
       if (life <= 0) { this.kill(i); continue; }
+      // Cutoff: the particle has reached the surface its emitter was aimed at
+      // (an age computed analytically at spawn — no per-particle collision).
+      // Scaling life AND maxLife together shortens what is left without
+      // jumping the colour/size ramps forward.
+      if (this.cut[i] > 0 && this.maxLife[i] - life >= this.cut[i]) {
+        this.cut[i] = 0;
+        const keep = this.cutKeep[i];
+        this.vx[i] *= keep; this.vy[i] *= keep; this.vz[i] *= keep;
+        life *= this.cutLife[i];
+        this.maxLife[i] *= this.cutLife[i];
+      }
       this.life[i] = life;
 
       const t = 1 - life / this.maxLife[i];          // 0 at birth → 1 at death
       const motionStep = Math.min(step, activeDt);
+      const tb = this.turb[i];
+      if (tb > 0) {
+        // Cheap coherent turbulence: a few sines of POSITION (so neighbours
+        // share a gust and form tongues) and time, grown with age. Zero-mean,
+        // so it bends and breaks the stream without steering it.
+        const s = this.seed[i];
+        const i3t = i * 3;
+        const px = this.aPos[i3t], py = this.aPos[i3t + 1], pz = this.aPos[i3t + 2];
+        const amp = tb * t * motionStep;
+        this.vx[i] += amp * (Math.sin(py * 1.9 + clock * 6.1 + s) + 0.6 * Math.sin(pz * 1.3 - clock * 4.3));
+        this.vy[i] += amp * (Math.sin(pz * 1.7 + clock * 5.3 + s * 1.7) + 0.6 * Math.sin(px * 1.1 + clock * 3.7));
+        this.vz[i] += amp * (Math.sin(px * 1.5 - clock * 5.9 + s * 0.6) + 0.6 * Math.sin(py * 1.2 + clock * 4.9));
+      }
       const d = Math.max(0, 1 - this.drag[i] * motionStep);
       this.vx[i] *= d;
       this.vz[i] *= d;
@@ -534,16 +745,24 @@ class Layer {
       }
 
       this.aPos[i3] = x; this.aPos[i3 + 1] = y; this.aPos[i3 + 2] = z;
-      this.aSize[i] = this.size0[i] + (this.size1[i] - this.size0[i]) * t;
-      for (let k = 0; k < 3; k++) {
-        this.aCol[i3 + k] = this.c0[i3 + k] + (this.c1[i3 + k] - this.c0[i3 + k]) * t;
+      const sp = this.sizePow[i];
+      this.aSize[i] = this.size0[i] + (this.size1[i] - this.size0[i]) * (sp === 1 ? t : Math.pow(t, sp));
+      // Three-stop ramp: birth → mid at half-life → death. Presets without a
+      // mid stop get the average, which is exactly the old two-stop lerp.
+      if (t < 0.5) {
+        const k2 = t * 2;
+        for (let k = 0; k < 3; k++) this.aCol[i3 + k] = this.c0[i3 + k] + (this.cm[i3 + k] - this.c0[i3 + k]) * k2;
+      } else {
+        const k2 = (t - 0.5) * 2;
+        for (let k = 0; k < 3; k++) this.aCol[i3 + k] = this.cm[i3 + k] + (this.c1[i3 + k] - this.cm[i3 + k]) * k2;
       }
 
-      // Fade: quick ramp in over `attack`, linear-ish decay out, squared so the
-      // tail disappears rather than lingering at a flat grey.
+      // Fade: invisible until `fadeIn`, quick ramp in over `attack`, linear-ish
+      // decay out, squared so the tail disappears rather than lingering grey.
       const atk = this.attack[i];
-      const rampIn = atk > 0 ? Math.min(1, t / atk) : 1;
-      const shape = this.aStyle[i * 2];
+      const fi = this.fadeIn[i];
+      const rampIn = t < fi ? 0 : atk > 0 ? Math.min(1, (t - fi) / atk) : 1;
+      const shape = this.aStyle[i * 3];
       const fade = shape >= 2 ? 1 - t * t : (1 - t) * (1 - t);
       const a = this.alpha0[i] * rampIn * fade;
       this.aAlpha[i] = a;
@@ -576,6 +795,7 @@ class Layer {
   truncate(target: number): void {
     if (target >= this.count) return;
     for (let i = Math.max(0, target); i < this.count; i++) {
+      this.tagCounts[this.tag[i]]--;
       this.aSize[i] = 0;
       this.aAlpha[i] = 0;
     }
@@ -586,6 +806,7 @@ class Layer {
   }
 
   clear(): void {
+    for (let i = 0; i < this.count; i++) this.tagCounts[this.tag[i]]--;
     this.aSize.fill(0);
     this.aAlpha.fill(0);
     this.count = 0;
@@ -614,6 +835,24 @@ export interface EmitOptions {
 
 export interface ParticleFX {
   emit(name: string, pos: Vec3Like, normal?: Vec3Like | null, opts?: EmitOptions): void;
+  /**
+   * Spawn ONE particle of preset `name` with an explicit world velocity — for
+   * continuous emitters (the flamethrower) that own their own direction, rate
+   * and placement. Scalars rather than objects so a hot loop allocates nothing.
+   * @param age    seconds the particle has already lived (sub-frame spawn
+   *               offset): it is advanced along its velocity by that much.
+   * @param cut    age at which the preset's cutKeep/cutLife apply (it reached
+   *               a surface); 0 = never.
+   * @returns false when the layer is saturated or the budget skipped it.
+   */
+  spawn(name: string, px: number, py: number, pz: number, vx: number, vy: number, vz: number,
+    age?: number, cut?: number, sizeMul?: number): boolean;
+  /** Register or replace a preset (partial; unspecified fields take defaults). */
+  definePreset(name: string, preset: Partial<Preset> & Pick<Preset, "layer">): void;
+  /** Register or replace a composite effect: [presetName, countMultiplier][]. */
+  defineEffect(name: string, parts: Array<[string, number]>): void;
+  /** Live particles carrying preset tag `tag` (diagnostics). */
+  tagCount(tag: number): number;
   update(dt: number): void;
   clear(): void;
   /** Live particle count across both layers (for the perf HUD / __rbTest). */
@@ -647,12 +886,17 @@ export function createParticleFX(THREE: any, scene: any, opts: CreateOptions = {
   const backend = opts.backend === "webgpu" ? "webgpu" : "webgl";
   const low = !!opts.lowEnd;
   const atlas = createParticleAtlas(THREE);
+  const tagCounts = new Int32Array(MAX_TAGS);
   const addLayer = new Layer(THREE, {
     capacity: low ? 520 : 1400, additive: true, backend, renderOrder: 34, atlas,
-  });
+  }, tagCounts);
   const alphaLayer = new Layer(THREE, {
     capacity: low ? 260 : 700, additive: false, backend, renderOrder: 33, atlas,
-  });
+  }, tagCounts);
+  // Per-instance vocabulary, so definePreset/defineEffect never leak between
+  // systems (the lab and a test can each build one).
+  const presets: Record<string, Preset> = { ...PRESETS };
+  const effects: Record<string, Array<[string, number]>> = { ...EFFECTS };
   scene.add(addLayer.points);
   scene.add(alphaLayer.points);
 
@@ -662,6 +906,75 @@ export function createParticleFX(THREE: any, scene: any, opts: CreateOptions = {
 
   const tmpColor = new THREE.Color();
   const nx = { x: 0, y: 1, z: 0 };
+  // Linear RGB of each preset's birth/mid/death stops, resolved once.
+  const rgbCache = new Map<Preset, Float32Array>();
+  function presetRgb(preset: Preset): Float32Array {
+    let c = rgbCache.get(preset);
+    if (c) return c;
+    c = new Float32Array(9);
+    tmpColor.setHex(preset.color[0]); c[0] = tmpColor.r; c[1] = tmpColor.g; c[2] = tmpColor.b;
+    tmpColor.setHex(preset.color[1]); c[6] = tmpColor.r; c[7] = tmpColor.g; c[8] = tmpColor.b;
+    if (preset.colorMid >= 0) {
+      tmpColor.setHex(preset.colorMid); c[3] = tmpColor.r; c[4] = tmpColor.g; c[5] = tmpColor.b;
+    } else {
+      c[3] = (c[0] + c[6]) / 2; c[4] = (c[1] + c[7]) / 2; c[5] = (c[2] + c[8]) / 2;
+    }
+    rgbCache.set(preset, c);
+    return c;
+  }
+  const tintRgb = new Float32Array(9);
+
+  /** Everything about a new slot except its position and velocity. */
+  function initSlot(layer: Layer, idx: number, preset: Preset, sizeMul: number, rgb: Float32Array): void {
+    const i3 = idx * 3;
+    const life = preset.life[0] + Math.random() * (preset.life[1] - preset.life[0]);
+    layer.life[idx] = life;
+    layer.maxLife[idx] = life;
+    layer.delay[idx] = preset.delay;
+
+    const sv = (0.8 + Math.random() * 0.45) * sizeMul;
+    layer.size0[idx] = preset.size[0] * sv;
+    layer.size1[idx] = preset.size[1] * sv;
+    layer.sizePow[idx] = preset.sizePow;
+    layer.aSize[idx] = layer.size0[idx];
+
+    for (let k = 0; k < 3; k++) {
+      layer.c0[i3 + k] = rgb[k];
+      layer.cm[i3 + k] = rgb[3 + k];
+      layer.c1[i3 + k] = rgb[6 + k];
+      layer.aCol[i3 + k] = rgb[k];
+    }
+
+    layer.alpha0[idx] = preset.alpha * (0.8 + Math.random() * 0.3);
+    layer.aAlpha[idx] = preset.delay > 0 || preset.fadeInAt > 0 ? 0
+      : preset.attack > 0 ? 0.001 : layer.alpha0[idx];
+    layer.aHard[idx] = preset.hard;
+    layer.aStyle[idx * 3] = preset.shapeAlt >= 0 && Math.random() < 0.5
+      ? preset.shapeAlt : preset.shape;
+    layer.aStyle[idx * 3 + 1] = Math.random() * Math.PI * 2;
+    layer.aStyle[idx * 3 + 2] = preset.occlusion;
+    layer.aMotion[idx * 4] = layer.vx[idx];
+    layer.aMotion[idx * 4 + 1] = layer.vy[idx];
+    layer.aMotion[idx * 4 + 2] = layer.vz[idx];
+    layer.aMotion[idx * 4 + 3] = 0;
+    if (!layer.shaded && (preset.delay > 0 || preset.fadeInAt > 0)) {
+      layer.aCol[i3] = layer.aCol[i3 + 1] = layer.aCol[i3 + 2] = 0;
+    }
+    layer.grav[idx] = preset.gravity;
+    layer.drag[idx] = preset.drag;
+    layer.bounce[idx] = preset.bounce;
+    layer.attack[idx] = preset.attack;
+    layer.fadeIn[idx] = preset.fadeInAt;
+    layer.turb[idx] = preset.turb;
+    layer.seed[idx] = Math.random() * 6.283;
+    layer.cut[idx] = 0;
+    layer.cutKeep[idx] = preset.cutKeep;
+    layer.cutLife[idx] = preset.cutLife;
+    const tag = preset.tag | 0;
+    layer.tag[idx] = tag;
+    layer.fresh[idx] = 0;
+    tagCounts[tag]++;
+  }
 
   function emitPreset(preset: Preset, pos: Vec3Like, n: Vec3Like, mult: number, o: EmitOptions): void {
     const layer = preset.layer === "add" ? addLayer : alphaLayer;
@@ -678,17 +991,17 @@ export function createParticleFX(THREE: any, scene: any, opts: CreateOptions = {
     if (preset.signature && want > 0) count = 1;
     if (count <= 0) return;
 
-    tmpColor.setHex(preset.color[0]);
-    let r0 = tmpColor.r, g0 = tmpColor.g, b0 = tmpColor.b;
-    tmpColor.setHex(preset.color[1]);
-    let r1 = tmpColor.r, g1 = tmpColor.g, b1 = tmpColor.b;
+    let rgb = presetRgb(preset);
     if (o.color != null) {
       // Tint: take the override's hue at each stop's original brightness, so an
       // ability keeps the preset's hot-core → cool-tail shape in its own colour.
       tmpColor.setHex(o.color);
       const tr = tmpColor.r, tg = tmpColor.g, tb = tmpColor.b;
-      r0 = (r0 + tr * 2) / 3; g0 = (g0 + tg * 2) / 3; b0 = (b0 + tb * 2) / 3;
-      r1 = tr * 0.75; g1 = tg * 0.75; b1 = tb * 0.75;
+      const base = rgb;
+      rgb = tintRgb;
+      rgb[0] = (base[0] + tr * 2) / 3; rgb[1] = (base[1] + tg * 2) / 3; rgb[2] = (base[2] + tb * 2) / 3;
+      rgb[6] = tr * 0.75; rgb[7] = tg * 0.75; rgb[8] = tb * 0.75;
+      rgb[3] = (rgb[0] + rgb[6]) / 2; rgb[4] = (rgb[1] + rgb[7]) / 2; rgb[5] = (rgb[2] + rgb[8]) / 2;
     }
 
     const floorY = o.floorY ?? Math.min(pos.y, defaultFloorY);
@@ -715,36 +1028,7 @@ export function createParticleFX(THREE: any, scene: any, opts: CreateOptions = {
       layer.vy[idx] = (dy / len) * speed;
       layer.vz[idx] = (dz / len) * speed;
 
-      const life = preset.life[0] + Math.random() * (preset.life[1] - preset.life[0]);
-      layer.life[idx] = life;
-      layer.maxLife[idx] = life;
-      layer.delay[idx] = preset.delay;
-
-      const sv = (0.8 + Math.random() * 0.45) * scale;
-      layer.size0[idx] = preset.size[0] * sv;
-      layer.size1[idx] = preset.size[1] * sv;
-      layer.aSize[idx] = layer.size0[idx];
-
-      layer.c0[i3] = r0; layer.c0[i3 + 1] = g0; layer.c0[i3 + 2] = b0;
-      layer.c1[i3] = r1; layer.c1[i3 + 1] = g1; layer.c1[i3 + 2] = b1;
-      layer.aCol[i3] = r0; layer.aCol[i3 + 1] = g0; layer.aCol[i3 + 2] = b0;
-
-      layer.alpha0[idx] = preset.alpha * (0.8 + Math.random() * 0.3);
-      layer.aAlpha[idx] = preset.delay > 0 ? 0 : preset.attack > 0 ? 0.001 : layer.alpha0[idx];
-      layer.aHard[idx] = preset.hard;
-      layer.aStyle[idx * 2] = preset.shape;
-      layer.aStyle[idx * 2 + 1] = Math.random() * Math.PI * 2;
-      layer.aMotion[idx * 4] = layer.vx[idx];
-      layer.aMotion[idx * 4 + 1] = layer.vy[idx];
-      layer.aMotion[idx * 4 + 2] = layer.vz[idx];
-      layer.aMotion[idx * 4 + 3] = 0;
-      if (!layer.shaded && preset.delay > 0) {
-        layer.aCol[i3] = layer.aCol[i3 + 1] = layer.aCol[i3 + 2] = 0;
-      }
-      layer.grav[idx] = preset.gravity;
-      layer.drag[idx] = preset.drag;
-      layer.bounce[idx] = preset.bounce;
-      layer.attack[idx] = preset.attack;
+      initSlot(layer, idx, preset, scale, rgb);
       // Stash the floor for this particle by clamping now — the sim uses one
       // shared floor per frame, which is right for a flat arena.
       if (preset.bounce > 0 && layer.aPos[i3 + 1] < floorY) layer.aPos[i3 + 1] = floorY;
@@ -756,17 +1040,47 @@ export function createParticleFX(THREE: any, scene: any, opts: CreateOptions = {
 
     emit(name, pos, normal, o = {}) {
       const n = normal ?? nx;
-      const composite = EFFECTS[name];
+      const composite = effects[name];
       if (composite) {
         for (const [presetName, mult] of composite) {
-          const preset = PRESETS[presetName];
+          const preset = presets[presetName];
           if (preset) emitPreset(preset, pos, n, mult, o);
         }
         return;
       }
-      const preset = PRESETS[name];
+      const preset = presets[name];
       if (preset) emitPreset(preset, pos, n, 1, o);
     },
+
+    spawn(name, px, py, pz, vx, vy, vz, age = 0, cut = 0, sizeMul = 1) {
+      const preset = presets[name];
+      if (!preset) return false;
+      // Adaptive quality thins continuous emitters the same way it thins bursts.
+      if (budget < 1 && Math.random() > budget) return false;
+      if (age >= preset.life[1]) return false;
+      const layer = preset.layer === "add" ? addLayer : alphaLayer;
+      const idx = layer.alloc();
+      if (idx < 0) return false;
+      layer.vx[idx] = vx; layer.vy[idx] = vy; layer.vz[idx] = vz;
+      initSlot(layer, idx, preset, sizeMul, presetRgb(preset));
+      const i3 = idx * 3;
+      // Sub-frame birth: it left the nozzle `age` seconds ago, so it is already
+      // that far down its path. Without this a continuous stream renders as
+      // frame-spaced clumps, and at 30 fps the clumps are half a metre apart.
+      layer.aPos[i3] = px + vx * age;
+      layer.aPos[i3 + 1] = py + vy * age;
+      layer.aPos[i3 + 2] = pz + vz * age;
+      if (age > 0) layer.life[idx] = Math.max(0.001, layer.life[idx] - age);
+      layer.cut[idx] = cut;
+      layer.fresh[idx] = 1;
+      return true;
+    },
+
+    definePreset(name, preset) { presets[name] = P(preset); },
+
+    defineEffect(name, parts) { effects[name] = parts; },
+
+    tagCount(tag) { return tagCounts[tag] | 0; },
 
     update(dt) {
       const h = viewportHeight();

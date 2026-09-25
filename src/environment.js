@@ -96,9 +96,66 @@
   const MAP_WORLD_CENTER_Z = (MAP_H - MAP_WORLD_ANCHOR_H) * CELL * 0.5;
   const WALL_H = 5;
   const PLAYER_H = 1.65;
-  // Open-air outdoor arena: skip the roof/ceiling and indoor light fixtures so the play
-  // space is a walled outdoor plaza under the daytime sky (grid collision/nav unchanged).
+  // The original interior is an unfinished building shell: its roof has not
+  // been poured yet. Keep daylight and open access above the construction slab.
   const OUTDOOR_MODE = true;
+
+  // Original, deterministic construction textures. Color is sRGB; the relief
+  // map stays linear. A tile represents 4 metres, so seams have a physical scale.
+  const constructionTextureCache = new Map();
+  function constructionMaterial(THREE, renderer, kind, repeatX = 1, repeatY = 1) {
+    let source = constructionTextureCache.get(kind);
+    if (!source) {
+      const color = document.createElement("canvas"), relief = document.createElement("canvas");
+      color.width = color.height = relief.width = relief.height = 512;
+      const c = color.getContext("2d"), h = relief.getContext("2d");
+      const rng = seededRandom(`construction-${kind}`);
+      c.fillStyle = kind === "plywood" ? "#b78b53" : kind === "block" ? "#aaa596" : "#a9a598";
+      c.fillRect(0, 0, 512, 512); h.fillStyle = "#b8b8b8"; h.fillRect(0, 0, 512, 512);
+      // Aggregate, cement mottling, and wood grain; no baked-in highlights.
+      for (let i = 0; i < 5500; i++) {
+        const x = rng()*512, y = rng()*512, dark = rng()>.5;
+        c.fillStyle = dark ? "rgba(54,45,32,.09)" : "rgba(244,237,213,.12)";
+        c.fillRect(x,y,kind==="plywood"?20+rng()*70:.4+rng()*1.2,.4+rng());
+      }
+      for (let i=0;i<70;i++) {
+        const x=rng()*512,y=rng()*512,r=12+rng()*65;
+        const g=c.createRadialGradient(x,y,0,x,y,r);
+        g.addColorStop(0,"rgba(73,66,53,.09)");g.addColorStop(1,"rgba(73,66,53,0)");
+        c.fillStyle=g;c.fillRect(x-r,y-r,r*2,r*2);
+      }
+      const joint = (x,y,w,d) => {
+        c.fillStyle="rgba(54,50,42,.3)";c.fillRect(x,y,w,d);
+        h.fillStyle="#555555";h.fillRect(x,y,w,d);
+      };
+      if (kind === "block") {
+        // 400 x 250 mm concrete masonry, staggered mortar beds.
+        for(let row=0;row<16;row++) {
+          joint(0,row*32,512,1.6);
+          for(let x=(row%2)*25.6;x<512;x+=51.2) joint(x,row*32,1.4,32);
+        }
+      } else {
+        // Large shuttering panels / plywood sheets, with recessed form ties.
+        for(let x=0;x<512;x+=128) joint(x,0,1.5,512);
+        for(let y=0;y<512;y+=256) joint(0,y,512,1.5);
+        for(let x=32;x<512;x+=64) for(let y=48;y<512;y+=128) {
+          c.fillStyle="rgba(53,47,36,.45)";c.beginPath();c.arc(x,y,2.1,0,Math.PI*2);c.fill();
+          h.fillStyle="#404040";h.beginPath();h.arc(x,y,1.8,0,Math.PI*2);h.fill();
+          if(kind!=="plywood") {c.fillStyle="rgba(102,73,41,.1)";c.fillRect(x-1,y+2,2,10+rng()*20);}
+        }
+      }
+      source={color,relief};constructionTextureCache.set(kind,source);
+    }
+    const tex = (canvas, color) => {
+      const t=new THREE.CanvasTexture(canvas);t.wrapS=t.wrapT=THREE.RepeatWrapping;
+      t.repeat.set(repeatX,repeatY);t.anisotropy=Math.min(4,renderer.capabilities.getMaxAnisotropy());
+      if(color)t.colorSpace=THREE.SRGBColorSpace;
+      return t;
+    };
+    const material=new THREE.MeshStandardMaterial({map:tex(source.color,true),bumpMap:tex(source.relief,false),bumpScale:kind==="block"?.018:.012,roughness:.94,metalness:0,envMapIntensity:.25});
+    material.name=`Construction / ${kind}`;
+    return material;
+  }
 
   for (let y = 0; y < MAP.length; y++) {
     if (MAP[y].length !== MAP_W) {
@@ -908,30 +965,13 @@
   // ---------------------------------------------------------------------------
   // North-wall glass — three room-width window bands looking out to the exterior
   // ---------------------------------------------------------------------------
-  function buildNorthWindowGlass(THREE, scene, wallMeshes) {
+  function buildNorthWindowGlass(THREE, scene, wallMeshes, renderer) {
     const northZ = mapToWorld(0, 0).z; // wall cell centres at z = -38
 
-    // Materials
-    const glassMat = new THREE.MeshStandardMaterial({
-      color:       0x8ab8cc,
-      transparent: true,
-      opacity:     0.22,
-      roughness:   0.04,
-      metalness:   0.08,
-      side:        THREE.DoubleSide,
-      depthWrite:  false,
-      envMapIntensity: 0.5,
-    });
-    const frameMat = new THREE.MeshStandardMaterial({
-      color:    0x1c2530,
-      roughness: 0.36,
-      metalness: 0.80,
-    });
-    const sillMat = new THREE.MeshStandardMaterial({
-      color:    0x222d3a,
-      roughness: 0.44,
-      metalness: 0.68,
-    });
+    // Temporary plywood enclosure in the existing collision openings.
+    const glassMat = constructionMaterial(THREE, renderer, "plywood", 8, 1);
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x725234, roughness: .92, metalness: 0 });
+    const sillMat = frameMat;
 
     // Three window groups, one per room
     const windowGroups = [
@@ -1002,12 +1042,12 @@
 
     const floorMaps = loadEnvironmentMaterialMaps(THREE, renderer, "floor", MAP_W * CELL / 6, MAP_H * CELL / 6);
     const floorMat = new THREE.MeshStandardMaterial({
-      color: 0xc5c2b9,
+      color: 0xd5cfc0,
       ...floorMaps,
-      roughnessMap: null, // dry outdoor concrete, without wet-looking specular patches
+      roughnessMap: null, // Dusty unfinished slab: uniformly dry, never polished
       lightMap: createSurfaceLightMapTexture(THREE, renderer, lightingProfile, "floor"),
       lightMapIntensity: OUTDOOR_MODE ? 0 : lightingProfile.lightMapIntensity,
-      normalScale: new THREE.Vector2(0.22, 0.22),
+      normalScale: new THREE.Vector2(0.32, 0.32),
       roughness: 0.94,
       metalness: 0,
       envMapIntensity: 0.42,
@@ -1047,15 +1087,7 @@
       scene.add(ceiling);
     }
 
-    const wallMaps = loadEnvironmentMaterialMaps(THREE, renderer, OUTDOOR_MODE ? "floor" : "wall", CELL / 4, WALL_H / 4);
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0xc7c3b9,
-      ...wallMaps,
-      normalScale: new THREE.Vector2(0.38, 0.38),
-      roughness: 0.9,
-      metalness: 0.02,
-      envMapIntensity: 0.34,
-    });
+    const wallMat = constructionMaterial(THREE, renderer, "formwork", CELL / 4, WALL_H / 4);
 
     const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
     copyUvToUv2(wallGeo);
@@ -1079,40 +1111,36 @@
       }
     }
 
-    const walls = new THREE.InstancedMesh(wallGeo, wallMat, wallPositions.length);
-    const wallMatrix = new THREE.Matrix4();
-
-    for (let i = 0; i < wallPositions.length; i++) {
-      const p = wallPositions[i];
-      wallMatrix.makeTranslation(p.x, WALL_H * 0.5, p.z);
-      walls.setMatrixAt(i, wallMatrix);
+    // Infill partitions expose masonry; structural perimeter walls retain their
+    // cast-concrete shuttering. Both batches still use the exact collision grid.
+    const blockPositions = wallPositions.filter(p => Math.abs(p.x) < MAP_W*CELL*.45 && p.z > 45);
+    const blockSet = new Set(blockPositions);
+    const formPositions = wallPositions.filter(p => !blockSet.has(p));
+    const blockMat = constructionMaterial(THREE, renderer, "block", CELL / 4, WALL_H / 4);
+    function wallBatch(positions, material, name) {
+      const mesh = new THREE.InstancedMesh(wallGeo, material, positions.length);
+      const matrix = new THREE.Matrix4(), tone = new THREE.Color();
+      positions.forEach((p, i) => {
+        matrix.makeTranslation(p.x, WALL_H*.5, p.z);mesh.setMatrixAt(i,matrix);
+        const variation=.9+(Math.sin(p.x*.173+p.z*.091)+1)*.04;
+        tone.setRGB(variation,variation*.99,variation*.97);mesh.setColorAt(i,tone);
+      });
+      mesh.name=name;mesh.instanceMatrix.needsUpdate=true;
+      if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+      mesh.castShadow=true;mesh.receiveShadow=true;wallMeshes.push(mesh);scene.add(mesh);
+      return mesh;
     }
-
-    walls.instanceMatrix.needsUpdate = true;
-    // Subtle per-section tint breaks the arena out of the unmistakable repeated
-    // grey-box look while retaining one instanced draw call and one wall material.
-    const wallTone = new THREE.Color();
-    for (let i = 0; i < wallPositions.length; i++) {
-      const p = wallPositions[i];
-      const variation = 0.86 + ((Math.sin(p.x * 0.173 + p.z * 0.091) + 1) * 0.055);
-      wallTone.setRGB(variation, variation * 0.98, variation * 0.94);
-      walls.setColorAt(i, wallTone);
-    }
-    if (walls.instanceColor) walls.instanceColor.needsUpdate = true;
-    walls.castShadow = true;
-    walls.receiveShadow = true;
-    wallMeshes.push(walls);
-    scene.add(walls);
-
-    scene.userData.environmentSurfaces = { floor, ceiling, walls, floorMat, ceilMat, wallMat };
+    const walls=wallBatch(formPositions,wallMat,"Construction / cast concrete walls");
+    const blockWalls=wallBatch(blockPositions,blockMat,"Construction / unfinished blockwork");
+    scene.userData.environmentSurfaces = { floor, ceiling, walls, blockWalls, floorMat, ceilMat, wallMat, blockMat };
 
     scene.userData.propColliders = [];
 
-    buildArenaFinishPass(THREE, scene, wallPositions);
+    buildArenaFinishPass(THREE, scene, wallPositions, renderer);
 
-    buildNorthWindowGlass(THREE, scene, wallMeshes);
+    buildNorthWindowGlass(THREE, scene, wallMeshes, renderer);
     if (!OUTDOOR_MODE) buildCheapLightFixtures(THREE, scene); // no floating indoor lamps outdoors
-    buildInteriorExteriorFacade(THREE, scene);
+    buildInteriorExteriorFacade(THREE, scene, renderer);
     // Cover is now the MAP-grid islands (pathfinding routes around them) rather than
     // free-floating prop crates, so the old soft-cover pass is disabled.
     // buildInteriorProps(THREE, scene);
@@ -1121,11 +1149,12 @@
   // Visual-only finish pass for the original arena. Everything hugs existing
   // floors/walls, so combat lanes, pathfinding, physics, and objective placement
   // remain unchanged. Shared instancing keeps the pass inexpensive.
-  function buildArenaFinishPass(THREE, scene, wallPositions) {
-    const darkMetal = new THREE.MeshStandardMaterial({ color: 0x27313a, roughness: 0.48, metalness: 0.72, envMapIntensity: 0.5 });
-    const edgeMetal = new THREE.MeshStandardMaterial({ color: 0x53616b, roughness: 0.58, metalness: 0.55 });
-    const routeMat = new THREE.MeshStandardMaterial({ color: 0x9eb3b9, roughness: 0.78, metalness: 0.08, transparent: true, opacity: 0.48, polygonOffset: true, polygonOffsetFactor: -2 });
-    const cautionMat = new THREE.MeshStandardMaterial({ color: 0xd09b3f, roughness: 0.72, metalness: 0.12, emissive: 0x3b2105, emissiveIntensity: 0.12 });
+  function buildArenaFinishPass(THREE, scene, wallPositions, renderer) {
+    const darkMetal = new THREE.MeshStandardMaterial({ color: 0x493d31, roughness: .84, metalness: .35, envMapIntensity: .3 });
+    const timber = constructionMaterial(THREE, renderer, "plywood", 1, .12);
+    const footing = constructionMaterial(THREE, renderer, "block", 1, .25);
+    const routeMat = new THREE.MeshStandardMaterial({ color: 0xdacba7, roughness: 1, metalness: 0, transparent: true, opacity: 0.48, polygonOffset: true, polygonOffsetFactor: -2 });
+    const cautionMat = new THREE.MeshStandardMaterial({ color: 0xdba539, roughness: .95, metalness: 0 });
 
     function instanceBoxes(geo, mat, positions, y) {
       const mesh = new THREE.InstancedMesh(geo, mat, positions.length);
@@ -1141,12 +1170,40 @@
       return mesh;
     }
 
-    // A continuous dark plinth and slightly proud coping cap make every block read
-    // as intentional architecture instead of an untextured editor primitive.
-    const plinth = instanceBoxes(new THREE.BoxGeometry(CELL * 1.015, 0.28, CELL * 1.015), darkMetal, wallPositions, 0.14);
+    // Exposed masonry footings and timber shuttering replace finished metal trim.
+    const plinth = instanceBoxes(new THREE.BoxGeometry(CELL * 1.005, 0.5, CELL * 1.005), footing, wallPositions, 0.25);
     plinth.name = "ArenaWallPlinths";
-    const caps = instanceBoxes(new THREE.BoxGeometry(CELL * 1.045, 0.12, CELL * 1.045), edgeMetal, wallPositions, WALL_H + 0.04);
+    const caps = instanceBoxes(new THREE.BoxGeometry(CELL * 1.01, 0.14, CELL * 1.01), timber, wallPositions, WALL_H + 0.04);
     caps.name = "ArenaWallCaps";
+
+    // Rebar emerges from existing solid wall footprints, never from walk lanes.
+    const rods=[];
+    wallPositions.forEach((p,i)=>{
+      if(i%5) return;
+      for(const dx of [-.65,.65]) for(const dz of [-.65,.65]) rods.push({x:p.x+dx,z:p.z+dz});
+    });
+    const rebar=instanceBoxes(new THREE.CylinderGeometry(.035,.035,1.1,5),darkMetal,rods,WALL_H+.58);
+    rebar.name="Construction / exposed reinforcement";
+
+    // Saw-cut slab joints and powdery mortar spills establish scale on the floor.
+    const jointMat=new THREE.MeshStandardMaterial({color:0x655e51,roughness:1,transparent:true,opacity:.24,depthWrite:false});
+    const width=MAP_W*CELL, depth=MAP_H*CELL;
+    const jointsX=[],jointsZ=[];
+    for(let x=-width/2+8;x<width/2;x+=8) jointsX.push({x,z:MAP_WORLD_CENTER_Z});
+    for(let z=MAP_WORLD_CENTER_Z-depth/2+8;z<MAP_WORLD_CENTER_Z+depth/2;z+=8) jointsZ.push({x:0,z});
+    instanceBoxes(new THREE.BoxGeometry(.018,.002,depth),jointMat,jointsX,.007).name="Construction / slab joints X";
+    instanceBoxes(new THREE.BoxGeometry(width,.002,.018),jointMat,jointsZ,.007).name="Construction / slab joints Z";
+    const spillCanvas=document.createElement("canvas");spillCanvas.width=spillCanvas.height=128;
+    const sc=spillCanvas.getContext("2d"),rng=seededRandom("mortar-spills");
+    const gradient=sc.createRadialGradient(64,64,5,64,64,62);
+    gradient.addColorStop(0,"rgba(215,200,168,.32)");gradient.addColorStop(1,"rgba(215,200,168,0)");
+    sc.fillStyle=gradient;sc.fillRect(0,0,128,128);
+    for(let i=0;i<170;i++) {sc.fillStyle="rgba(223,209,178,.24)";sc.fillRect(20+rng()*88,20+rng()*88,1+rng()*2,1);}
+    const spillTex=new THREE.CanvasTexture(spillCanvas);spillTex.colorSpace=THREE.SRGBColorSpace;
+    const spillMat=new THREE.MeshStandardMaterial({map:spillTex,transparent:true,depthWrite:false,roughness:1,polygonOffset:true,polygonOffsetFactor:-1});
+    const spills=wallPositions.filter((p,i)=>i%9===0).map(p=>({x:p.x+CELL*.65,z:p.z}));
+    const spillGeo=new THREE.PlaneGeometry(4.5,3);spillGeo.rotateX(-Math.PI/2);
+    instanceBoxes(spillGeo,spillMat,spills,.012).name="Construction / mortar dust";
 
     // Worn route language: a restrained centre guide and three exit thresholds.
     // These are deliberately interrupted instead of drawing pristine videogame
@@ -1178,20 +1235,20 @@
       const canvas = document.createElement("canvas");
       canvas.width = 512; canvas.height = 128;
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#111820"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#d7b85f"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#d3a64a"; ctx.fillRect(0, 0, 12, canvas.height);
       ctx.strokeStyle = "#607481"; ctx.lineWidth = 4; ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
-      ctx.fillStyle = "#dbe5e8"; ctx.font = "700 48px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#28271e"; ctx.font = "700 32px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(text, 270, 64);
       const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
-      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.54, metalness: 0.25, emissive: 0x17242b, emissiveIntensity: 0.32 });
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: .95, metalness: 0 });
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 1.4), mat);
       sign.position.set(x, 3.25, z); sign.rotation.y = ry;
       scene.add(sign);
     }
-    makeSectorSign("SECTOR 01  /  PLAZA", -65.94, 28, Math.PI * 0.5);
-    makeSectorSign("SECTOR 02  /  BREACH", 65.94, 78, -Math.PI * 0.5);
-    makeSectorSign("EXTERIOR ACCESS", 0, 117.92, Math.PI);
+    makeSectorSign("ZONE A / SLAB WORKS", -65.94, 28, Math.PI * 0.5);
+    makeSectorSign("ZONE B / FORMWORK", 65.94, 78, -Math.PI * 0.5);
+    makeSectorSign("SITE ACCESS / KEEP CLEAR", 0, 117.92, Math.PI);
 
     // Repeated service panels add human scale to long boundary runs. They sit
     // almost flush to existing walls and are visual only.
@@ -1252,7 +1309,7 @@
     }
   }
 
-  function buildInteriorExteriorFacade(THREE, scene) {
+  function buildInteriorExteriorFacade(THREE, scene, renderer) {
     // Geometry constants derived from the MAP grid
     const TOTAL_W  = MAP_W * CELL;                          // 136
     const SOUTH_Z  = (MAP_H - 1 - MAP_WORLD_ANCHOR_H * 0.5 + 0.5) * CELL + CELL * 0.5; // exterior face of south wall
@@ -1327,12 +1384,11 @@
     facadeTex.repeat.set(8, 2);
     const roofTex   = makeRoofTex();
     roofTex.repeat.set(14, 18);
-    const winTex    = makeWindowTex();
 
     const facadeMat = new THREE.MeshStandardMaterial({ map: facadeTex, roughness: 0.88, metalness: 0.04, color: 0xd0d4d8 });
     const roofMat   = new THREE.MeshStandardMaterial({ map: roofTex,   roughness: 0.95, metalness: 0.02, color: 0xb0b2b4 });
     const parapetMat= new THREE.MeshStandardMaterial({ map: facadeTex, roughness: 0.90, metalness: 0.02, color: 0xc8ccd0 });
-    const winMat    = new THREE.MeshStandardMaterial({ map: winTex,    roughness: 0.15, metalness: 0.4,  color: 0x8aaec8, emissive: 0x0a1520, emissiveIntensity: 0.6 });
+    const winMat = constructionMaterial(THREE, renderer, "plywood", 1, .4);
     const darkMat   = new THREE.MeshStandardMaterial({ roughness: 0.60, metalness: 0.55, color: 0x303438 });
 
     function box(w, h, d, x, y, z, mat) {

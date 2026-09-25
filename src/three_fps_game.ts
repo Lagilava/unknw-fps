@@ -1,6 +1,9 @@
+import { createDamageIndicators } from "./modules/damage_indicators";
+import { createWeaponMaterials } from "./modules/weapon_materials";
 import { showShadowPerformancePrompt } from "./modules/shadow_performance_prompt";
 import { accelerateStaticRaycasts } from "./modules/static_raycast";
 import { createBlackoutAtmosphere } from "./modules/blackout_atmosphere";
+import { createFlameJet, FLAMETHROWER_CONFIG } from "./modules/flame_jet";
 ﻿import { createBoltCore, createAbilityImpacts } from "./modules/ability_fx";
 import { createGameHud } from "./modules/game_hud";
 import { createWeaponHud } from "./modules/weapon_hud";
@@ -31,7 +34,7 @@ import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsB
          initDebrisPool, spawnDebrisBurst, spawnCasing, updateDebris, forEachDebris, DEBRIS_POOL_SIZE,
          initGrenadePool, throwGrenade, grenadeTranslation, grenadeRotation, despawnGrenade, GRENADE_POOL_SIZE } from "./modules/physics";
 import { createParticleFX, type ParticleFX } from "./modules/particle_fx";
-import { createStormWarden } from "./modules/storm_warden.js";
+import { createStormWarden, STORM_WARDEN_HOVER } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
 import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
 import { LANDMARKS } from "./modules/landmarks.js";
@@ -1244,7 +1247,10 @@ declare module "three" {
   const beamForward = new THREE.Vector3(0, 0, 1);
   const fireAnglesTmp = new THREE.Vector2();
   const pelletSpreadTmp = new THREE.Vector2();
-  const shotHitInfoTmp = { part: null };
+  // part = named hit volume; normal = outward surface normal at the entry point
+  // (so armour sparks spray off the plate, not straight back up the ray).
+  const shotHitInfoTmp = { part: null, normal: new THREE.Vector3() };
+  const shotBestNormalTmp = new THREE.Vector3();
   const raycastHitsTmp = [];
   const raycastFloorHitsTmp = [];
   const impactNormalTmp = new THREE.Vector3();
@@ -1301,6 +1307,8 @@ declare module "three" {
   const hitVolumeDiffTmp = new THREE.Vector3();
   const hitVolumeRayPointTmp = new THREE.Vector3();
   const hitVolumeSegPointTmp = new THREE.Vector3();
+  const hitVolumeBestATmp = new THREE.Vector3();
+  const hitVolumeBestBTmp = new THREE.Vector3();
   const teslaNodeWorldTmp = new THREE.Vector3();
   const teslaBranchTmp = new THREE.Vector3();
   const lanceAimTmp = new THREE.Vector3();
@@ -1792,6 +1800,22 @@ declare module "three" {
     bloomStrength: 0.22, bloomThreshold: 0.9, bloomRadius: 1,
     motionBlurMax: 0.6, motionBlurTurn: 1.1, motionBlurMove: 1,
     cssContrast: 1.2, cssSaturate: 1.14, cssBrightness: 0.74,
+    // Shader-side tonal curve. Kept here (not only on the uniforms) so the blackout
+    // grade can swap them out and restore them — see applyCinematicSettings.
+    gradeContrast: 1.05, gradeDarken: 0.86, gradeBlackCrush: 0.045,
+    shadowTint: [-0.068, 0.02, -0.02],
+  };
+  // Blackout waves (wave%10) render almost the whole frame at ~0.1–0.2 luminance.
+  // The daytime cinematic curve darkens in four stacked steps (black crush, contrast
+  // about mid-grey, ×0.86 darken, then CSS contrast 1.2 + brightness 0.74), which
+  // takes a 0.15 pixel to 0 — cinematic mode went pitch black while the plain
+  // grade stayed readable. During a blackout the tonal steps go neutral and only
+  // the look (desat, split-tone, grain, bloom, motion blur, chroma) remains.
+  // The shadow split-tone is cut too: it pulls 0.068 of red out of shadows, and
+  // when the whole frame is shadow that strips an orange vest down to green.
+  const CINEMATIC_BLACKOUT_GRADE = {
+    contrast: 1.0, darken: 1.0, blackCrush: 0.0, shadowTintMul: 0.2,
+    cssContrast: 1.04, cssBrightness: 1.02,
   };
   const cinematicControls = {
     toggles: Array.from(document.querySelectorAll("#cinematic-toggle")),
@@ -2219,7 +2243,17 @@ declare module "three" {
       // Whisper-only edge fringe by default (dev-tunable via cinematicCfg).
       cinematicPass.uniforms.uChromaIntensity.value = cinematicState.enabled ? cinematicCfg.chromaIntensity : 0.0;
       cinematicPass.uniforms.uChromaOffset.value = cinematicState.enabled ? cinematicCfg.chromaOffset : 0.0016;
+      // Uniform values only — no recompile when a blackout starts or ends.
+      const u = cinematicPass.uniforms;
+      u.uContrast.value   = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.contrast   : cinematicCfg.gradeContrast;
+      u.uDarken.value     = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.darken     : cinematicCfg.gradeDarken;
+      u.uBlackCrush.value = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.blackCrush : cinematicCfg.gradeBlackCrush;
+      const tintMul = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.shadowTintMul : 1;
+      const [sr, sg, sb] = cinematicCfg.shadowTint;
+      u.uShadowTint.value.set(sr * tintMul, sg * tintMul, sb * tintMul);
     }
+    const cssContrast = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.cssContrast : cinematicCfg.cssContrast;
+    const cssBrightness = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.cssBrightness : cinematicCfg.cssBrightness;
     if (afterimagePass) {
       afterimagePass.enabled = cinematicState.enabled;
       // damp=0 fully passes the current frame through (no trail) when disabled.
@@ -2238,8 +2272,8 @@ declare module "three" {
       // bright. On WebGL the shader owns the cross-process grade so CSS is a light
       // companion; on WebGPU (no shader) CSS emulates the whole look on its own.
       ? (cinematicPass
-          ? ("contrast(" + cinematicCfg.cssContrast + ") saturate(" + cinematicCfg.cssSaturate + ") brightness(" + cinematicCfg.cssBrightness + ")")
-          : ("contrast(" + (cinematicCfg.cssContrast * 1.07).toFixed(3) + ") saturate(" + (cinematicCfg.cssSaturate * 0.88).toFixed(3) + ") brightness(" + (cinematicCfg.cssBrightness * 0.98).toFixed(3) + ") hue-rotate(4deg)"))
+          ? ("contrast(" + cssContrast + ") saturate(" + cinematicCfg.cssSaturate + ") brightness(" + cssBrightness + ")")
+          : ("contrast(" + (cssContrast * 1.07).toFixed(3) + ") saturate(" + (cinematicCfg.cssSaturate * 0.88).toFixed(3) + ") brightness(" + (cssBrightness * 0.98).toFixed(3) + ") hue-rotate(4deg)"))
       // A light neutral grade preserves concrete, sky and enemy colour separation.
       : "contrast(1.03) saturate(1.08) brightness(1.0)";
     // Player contrast/saturation stack as additional chained filter functions;
@@ -2269,16 +2303,18 @@ declare module "three" {
     cinematicCfg.cssContrast    = cv("cssContrast", 1.2);
     cinematicCfg.cssSaturate    = cv("cssSaturate", 1.14);
     cinematicCfg.cssBrightness  = cv("cssBrightness", 0.74);
+    // Contrast / darken / black crush reach the shader via applyCinematicSettings,
+    // which swaps in the blackout grade while a blackout wave is running.
+    cinematicCfg.gradeContrast   = cv("contrast", 1.05);
+    cinematicCfg.gradeDarken     = cv("darken", 0.86);
+    cinematicCfg.gradeBlackCrush = cv("blackCrush", 0.045);
     if (cinematicPass) {
       const u = cinematicPass.uniforms;
-      u.uContrast.value   = cv("contrast", 1.05);
       u.uDesat.value      = cv("desaturate", 0.35);
-      u.uDarken.value     = cv("darken", 0.86);
-      u.uBlackCrush.value = cv("blackCrush", 0.045);
       u.uGloss.value      = cv("gloss", 1);
       u.uVignette.value   = 0;
       u.uGrain.value      = cv("grain", 0.01);
-      u.uShadowTint.value.set(cv("shadowR", -0.068), cv("shadowG", 0.02), cv("shadowB", -0.02));
+      cinematicCfg.shadowTint = [cv("shadowR", -0.068), cv("shadowG", 0.02), cv("shadowB", -0.02)];
       u.uHighTint.value.set(cv("highR", 0.2), cv("highG", 0.018), cv("highB", 0.106));
     }
     applyCinematicSettings(); // pushes chroma/bloom/css/exposure through
@@ -2794,6 +2830,7 @@ declare module "three" {
   // spawnImpactParticles(pos, normal, strength, kind) — see the EFFECTS table in
   // particle_fx.ts for the available `kind` values.
   let particleFX: ParticleFX | null = null;
+  let flameJetFX: ReturnType<typeof createFlameJet> | null = null;
   const tracerPool: Record<string, any> = {};
   for (const gt of Object.values(GUNS)) tracerPool[gt] = []; // one pool per roster gun
   const bulletHolePool = [];
@@ -2841,7 +2878,7 @@ declare module "three" {
   const lightningCoreMaterial = new THREE.LineBasicMaterial({ color: 0xeeddff,  transparent: true, opacity: 1,    blending: THREE.AdditiveBlending, depthWrite: false });
   const lightningGlowMaterial = new THREE.LineBasicMaterial({ color: 0xbb44ff,  transparent: true, opacity: 0.92, blending: THREE.AdditiveBlending, depthWrite: false });
   const lightningOuterMaterial = new THREE.LineBasicMaterial({ color: 0x7711cc, transparent: true, opacity: 0.50, blending: THREE.AdditiveBlending, depthWrite: false });
-  const lightningRingGeometry = new THREE.RingGeometry(0.04, 0.55, 24);
+  const lightningRingGeometry = new THREE.TorusGeometry(0.48, 0.045, 6, 32);
   const lightningRingMaterial = new THREE.MeshBasicMaterial({ color: 0xcc55ff, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
 
   // Glow-dot sprite: soft radial halo rendered at every segment vertex via THREE.Points
@@ -4394,7 +4431,9 @@ function createLightningEffect() {
 
   const particleViewportTmp = new THREE.Vector2();
 
+  let abilityImpacts: ReturnType<typeof createAbilityImpacts> | null = null;
   function prewarmEffectPools() {
+    abilityImpacts ??= createAbilityImpacts(THREE, scene, lowEndMode ? 6 : 12);
     // The two Points layers are permanent scene members and always visible (an
     // empty layer draws zero pixels because dead slots are parked off-screen),
     // so their programs link once here and never relink.
@@ -4403,6 +4442,16 @@ function createLightningEffect() {
       lowEnd: lowEndMode,
       viewerPosition: () => yaw.position,
       viewportHeight: () => renderer.getDrawingBufferSize(particleViewportTmp).y || 1080,
+    });
+    // The jet emitter is shared with src/fx_lab.html, which drives this exact
+    // function against this exact particle system — see modules/flame_jet.ts.
+    // Fire quality tier (particle budgets; see FLAMETHROWER_CONFIG.quality).
+    // Override with ?fireQuality=low|medium|high or __rbFlameQuality(q).
+    const fireQualityParam = new URLSearchParams(location.search).get("fireQuality");
+    flameJetFX = createFlameJet(THREE, particleFX, {
+      quality: fireQualityParam === "low" || fireQualityParam === "medium" || fireQualityParam === "high"
+        ? fireQualityParam
+        : lowEndMode ? "low" : mobileMode ? "medium" : "high",
     });
 
     for (const gunType of Object.values(GUNS)) {
@@ -4461,7 +4510,10 @@ function createLightningEffect() {
     if (darkWaveActive === shouldDarken && addedLights === 0) return;
     darkWaveActive = shouldDarken;
     document.body.classList.toggle("blackout-hud-disrupted", shouldDarken);
-    // Visually convert the equipped weapon into the blackout arc caster. Preserve
+    // Swap the cinematic grade to/from its blackout variant (see CINEMATIC_BLACKOUT_GRADE).
+    applyCinematicSettings();
+    // Visually convert the equipped weapon into the blackout incinerator: the
+    // casing runs fuel-hot orange. Preserve
     // every material's authored/Pack-a-Punch emissive state for exact restoration.
     for (const root of [weapon?.gun, thirdPerson?.weapon?.gun]) root?.traverse?.(obj => {
       if (!obj.isMesh) return;
@@ -4471,7 +4523,7 @@ function createLightningEffect() {
           if (!material.userData.blackoutCasterBase) material.userData.blackoutCasterBase = {
             emissive: material.emissive.getHex(), intensity: material.emissiveIntensity || 0,
           };
-          material.emissive.setHex(0x36cfff);
+          material.emissive.setHex(0xff6a18);
           material.emissiveIntensity = Math.max(2.4, material.emissiveIntensity || 0);
         } else if (material.userData.blackoutCasterBase) {
           material.emissive.setHex(material.userData.blackoutCasterBase.emissive);
@@ -4576,7 +4628,11 @@ function createLightningEffect() {
   camera.add(lensGlow);
 
   // Slightly larger range and gentler decay so reflections light nearby surfaces better
-  const gunFlash = new THREE.PointLight(0xffcc88, 0, 28, 1.5);
+  const GUN_FLASH_DISTANCE = 28;
+  const gunFlash = new THREE.PointLight(0xffcc88, 0, GUN_FLASH_DISTANCE, 1.5);
+  // Also the incinerator's fire light. Never a shadow caster: a point-light
+  // shadow is six extra depth renders of the scene per frame.
+  gunFlash.castShadow = false;
   gunFlash.position.set(0.12, -0.05, -0.45);
   camera.add(gunFlash);
 
@@ -4836,78 +4892,10 @@ function createLightningEffect() {
     return _weaponTexCache;
   }
 
-  // Shared fractal-tunnel GLSL skin (Shadertoy raymarch, adapted: gl_FragCoord ->
-  // screen-space coordinates shared by all weapon surfaces). Keep the original
-  // 43/10 iteration counts; calculate the rotated ray once instead of 43 times.
+  const damageIndicators = createDamageIndicators(document);
   const weaponSkinUniforms = { uTime: { value: 0 }, iResolution: { value: new THREE.Vector2(canvas.clientWidth, canvas.clientHeight) } };
-  const weaponSkinMaterial = new THREE.ShaderMaterial({
-    uniforms: weaponSkinUniforms,
-    fog: false,
-    vertexShader: /* glsl */`
-      varying vec2 vUv2;
-      void main() {
-        vUv2 = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */`
-      precision highp float;
-      uniform float uTime;
-      uniform vec2 iResolution;
-      mat2 c(float a){ float b=cos(a),d=sin(a); return mat2(b,-d,d,b); }
-      float l(float a){ return .8*a-2./.73*cos(.73*a)-1.3/1.61*cos(1.61*a+1.7)-.8/3.11*cos(3.11*a+4.2); }
-      void main() {
-        vec2 g = iResolution;
-        float b = uTime;
-        vec2 n = gl_FragCoord.xy;
-        float o = l(b);
-        float p = 1.*sin(.41*b+2.1)+.6*sin(.97*b+.3);
-        float q = .7*sin(.53*b+4.)+.5*sin(1.13*b+1.1);
-        float r = .4*sin(.29*b+1.2);
-        vec3 ray = vec3((n.xy*2.1-g)/g.y, 1.);
-        ray.xy*=c(r);
-        ray.yz*=c(q);
-        ray.xz*=c(p);
-        vec4 m = vec4(0.);
-        float d = .7;
-        float e = 0.;
-        float f = 0.;
-        for(float i=0.;i<43.;i++){
-          vec3 a=ray*d;
-          a.z+=o;
-          a=mod(a-1.,2.)-1.;
-          e=4.;
-          for(int j=0;j<10;j++){
-            a=abs(a)-.7;
-            a.yz*=c(.5);
-            float k=max(dot(a,a)*.4,1e-2);
-            e/=k;
-            a/=k;
-          }
-          f=1./e;
-          d+=f;
-          vec4 s=1.1+sin(log(e)*.6+vec4(1.,2.,4.,0.));
-          m+=s*.12/exp(f*1e3+d*.15);
-        }
-        gl_FragColor = m;
-      }
-    `,
-  });
-  weaponSkinMaterial.toneMapped = false;
-  // Pack-a-Punch tinting reads/writes emissive*/metalness/roughness on packMats;
-  // the shader has none of those, so stub them out as harmless no-op fields.
-  // (Cast: these aren't part of ShaderMaterial's type — they're runtime stubs.)
-  const weaponSkinStub = weaponSkinMaterial as any;
-  weaponSkinStub.emissive = new THREE.Color(0);
-  weaponSkinStub.emissiveIntensity = 0;
-  weaponSkinStub.metalness = 0;
-  weaponSkinStub.roughness = 1;
-  function updateWeaponSkinShader(dt) {
-    weaponSkinUniforms.uTime.value += dt;
-    // Canvas size changes on resize, not on each simulation substep. Reading
-    // clientWidth after HUD writes forced synchronous style/layout in gameplay.
-  }
-  window.__rbWeaponSkin = weaponSkinMaterial; // dev diagnostic
+  function updateWeaponSkinShader(dt) { weaponSkinUniforms.uTime.value += dt; }
+  window.__rbWeaponSkin = { uniforms: weaponSkinUniforms }; // dev diagnostic
 
   function createWeaponViewModel(gunType: GunType = GUNS.RIFLE, parent: any = camera) {
     const gun = new THREE.Group();
@@ -4918,11 +4906,11 @@ function createLightningEffect() {
     if (firstPersonModel) gun.scale.setScalar(0.76);
 
     const weaponTex = getWeaponTextures();
-    // Fractal-tunnel GLSL skin: every weapon surface shares the one shader material
-    // (var names kept as-is so downstream geometry/packMats wiring is untouched).
-    const bodyMat = weaponSkinMaterial, darkMat = weaponSkinMaterial, accentMat = weaponSkinMaterial,
-      woodMat = weaponSkinMaterial, rubberMat = weaponSkinMaterial, lensMat = weaponSkinMaterial,
-      brassMat = weaponSkinMaterial, edgeMat = weaponSkinMaterial, warningMat = weaponSkinMaterial;
+    const { bodyMat, darkMat, accentMat, woodMat, rubberMat, lensMat, brassMat, edgeMat, warningMat } =
+      createWeaponMaterials(gunType, weaponSkinUniforms.uTime, rendererBackend === "webgpu");
+    bodyMat.roughnessMap = weaponTex.metalTex;
+    woodMat.map = weaponTex.woodTex;
+    rubberMat.map = weaponTex.rubberTex;
 
     // Pack-a-Punch: tag the metal materials so they can take on the upgrade glow.
     // Each viewmodel owns its own material instances, so tinting is per-gun.
@@ -8670,6 +8658,21 @@ function createLightningEffect() {
     return Math.max(0.001, bestRayT - Math.sqrt(Math.max(0, radius * radius - distSq)));
   }
 
+  // World stretch of a node's local axes (matrixWorld column lengths — no
+  // decompose). With w (per-axis weights perpendicular to a capsule axis) it is
+  // the SMALLEST perpendicular stretch: a round world radius must not bulge past
+  // the mesh along a squashed axis (the Seraph is 0.88 deep but 1.12 tall).
+  function boneWorldScale(node, w = null) {
+    const e = node.matrixWorld.elements;
+    const sx = Math.hypot(e[0], e[1], e[2]), sy = Math.hypot(e[4], e[5], e[6]), sz = Math.hypot(e[8], e[9], e[10]);
+    if (!w) return (sx + sy + sz) / 3;
+    let s = Infinity;
+    if (w[0] > 0.5) s = Math.min(s, sx);
+    if (w[1] > 0.5) s = Math.min(s, sy);
+    if (w[2] > 0.5) s = Math.min(s, sz);
+    return s < Infinity ? s : (sx + sy + sz) / 3;
+  }
+
   function getEnemyShotDistance(enemy, origin, dir, shotRange, gunType, outInfo = null) {
     if (outInfo) outInfo.part = null;
     const hitVolumes = enemy.mesh.userData.hitVolumes;
@@ -8677,23 +8680,54 @@ function createLightningEffect() {
       const volumePad = gunType === GUNS.SNIPER ? 0.035 : gunType === GUNS.SHOTGUN ? 0.075 : 0.055;
       let best = Infinity;
       for (const volume of hitVolumes) {
-        enemy.mesh.localToWorld(hitVolumeATmp.copy(volume.a));
-        enemy.mesh.localToWorld(hitVolumeBTmp.copy(volume.b));
-        const d = rayCapsuleDistance(origin, dir, hitVolumeATmp, hitVolumeBTmp, volume.radius + volumePad);
+        // Bone-anchored volumes (the angels) follow the animated rig; the rest
+        // are fixed in the enemy root's space.
+        const space = volume.bone || enemy.mesh;
+        space.localToWorld(hitVolumeATmp.copy(volume.a));
+        space.localToWorld(hitVolumeBTmp.copy(volume.b));
+        const radius = volume.bone ? volume.boneRadius * boneWorldScale(volume.bone, volume.perpW) : volume.radius;
+        const d = rayCapsuleDistance(origin, dir, hitVolumeATmp, hitVolumeBTmp, radius + volumePad);
         if (d < best && d <= shotRange) {
           best = d;
-          if (outInfo) outInfo.part = volume.name || null;
+          if (outInfo) {
+            outInfo.part = volume.name || null;
+            hitVolumeBestATmp.copy(hitVolumeATmp);
+            hitVolumeBestBTmp.copy(hitVolumeBTmp);
+          }
         }
+      }
+      if (outInfo && best < Infinity) {
+        // Outward normal = entry point minus its closest point on the capsule axis.
+        hitVolumeRayPointTmp.copy(origin).addScaledVector(dir, best);
+        hitVolumeDiffTmp.copy(hitVolumeBestBTmp).sub(hitVolumeBestATmp);
+        const lenSq = hitVolumeDiffTmp.lengthSq();
+        const t = lenSq > 1e-6
+          ? Math.max(0, Math.min(1, hitVolumeSegPointTmp.copy(hitVolumeRayPointTmp).sub(hitVolumeBestATmp).dot(hitVolumeDiffTmp) / lenSq))
+          : 0;
+        hitVolumeSegPointTmp.copy(hitVolumeBestATmp).addScaledVector(hitVolumeDiffTmp, t);
+        outInfo.normal.copy(hitVolumeRayPointTmp).sub(hitVolumeSegPointTmp);
+        if (outInfo.normal.lengthSq() > 1e-8) outInfo.normal.normalize();
+        else outInfo.normal.copy(dir).negate();
       }
       return best;
     }
 
     const hitCenter = getEnemyHitCenter(enemy, enemyHitCenterTmp);
     const enemyRadius = enemy.mesh.userData.hitRadius ?? (0.32 + (enemy.mesh.userData.baseScale || 0.45) * 0.95);
-    return raySphereDistance(origin, dir, hitCenter, enemyRadius);
+    const d = raySphereDistance(origin, dir, hitCenter, enemyRadius);
+    if (outInfo && d < Infinity) {
+      outInfo.normal.copy(origin).addScaledVector(dir, d).sub(hitCenter);
+      if (outInfo.normal.lengthSq() > 1e-8) outInfo.normal.normalize();
+      else outInfo.normal.copy(dir).negate();
+    }
+    return d;
   }
 
   function getEnemyHitCenter(enemy, target) {
+    // Angels: centre of the chest bone, so melee, aim-assist and damage numbers
+    // track the hovering body instead of the grounded build-time box.
+    const bone = enemy.mesh.userData.hitCenterBone;
+    if (bone) return bone.localToWorld(target.copy(enemy.mesh.userData.hitCenterLocal));
     const offset = enemy.mesh.userData.hitOffset;
     if (offset) return enemy.mesh.localToWorld(target.copy(offset));
     return target.set(enemy.mesh.position.x, enemy.mesh.position.y, enemy.mesh.position.z);
@@ -9704,12 +9738,9 @@ function createLightningEffect() {
     // once (guarded by `seen`, since a material is shared across many plates) —
     // only scalar/colour props change, so no new shader program is compiled.
     //
-    // Blink Seraph: sleek/ethereal glass — low metalness/roughness + very strong
-    // sky-reflection (envMapIntensity) reads as smooth iridescent panels rather
-    // than battle-worn plate; only a faint edge emissive. Null Cherub: matte,
-    // near-void body pushed toward black with high roughness so the glowing
-    // energy veins/core read as corrupted cracks against a dead-flat surface.
-    const voidColor = new THREE.Color(0x060f0c);
+    // Preserve lit armor faces in every variant; reserve strong emission for
+    // the core and veins instead of flattening the entire silhouette.
+    const voidColor = new THREE.Color(0x253e37);
     const seen = new Set();
     root.traverse(obj => {
       if (!obj.isMesh || !obj.material) return;
@@ -9721,20 +9752,20 @@ function createLightningEffect() {
         if (isArmor) {
           if (next.color) {
             if (variant === "blink") next.color.lerp(tint, 0.5);
-            else if (variant === "null") next.color.lerp(voidColor, 0.62).lerp(tint, 0.12);
+            else if (variant === "null") next.color.lerp(voidColor, 0.38).lerp(tint, 0.12);
             else next.color.lerp(tint, 0.14);
           }
           // Armor emissive kept SUBTLE so plates read as lit metal, not neon.
           if (next.emissive) next.emissive.setHex(type.emissive);
-          next.emissiveIntensity = variant === "null" ? 0.14 : variant === "blink" ? 0.18 : 0.06;
+          next.emissiveIntensity = variant === "null" ? 0.045 : variant === "blink" ? 0.06 : 0.035;
           if (variant === "blink") {
-            next.roughness = Math.max(0.05, next.roughness - 0.34);
-            next.metalness = Math.max(0.0, next.metalness - 0.5);
-            next.envMapIntensity = 2.1;
+            next.roughness = Math.max(0.28, next.roughness - 0.12);
+            next.metalness = Math.max(0.25, next.metalness - 0.15);
+            next.envMapIntensity = 1.35;
           } else if (variant === "null") {
-            next.roughness = Math.min(0.98, next.roughness + 0.3);
-            next.metalness = Math.max(0.05, next.metalness - 0.35);
-            next.envMapIntensity = 0.45;
+            next.roughness = Math.min(0.76, next.roughness + 0.12);
+            next.metalness = Math.max(0.2, next.metalness - 0.15);
+            next.envMapIntensity = 0.9;
           }
         } else {
           // Energy / VFX glow parts (MeshBasicMaterial) — shift the glow hue to the
@@ -10020,15 +10051,53 @@ function createLightningEffect() {
 
       // Real-time PointLight removed for perf — angel/Warden types rely on their
       // emissive materials only now (see enemy light-budget removal).
+      //
+      // Hit volumes ride the rig's BONES, not the build-time bounding box. The
+      // model is measured grounded, but in play it hovers STORM_WARDEN_HOVER rig
+      // units up (~1.6 m once scaled), rises further while charging, pitches into
+      // dives and loosens its arms/head at speed — and it has no legs. Box-derived
+      // capsules sat under the visible body: shots through the empty air beneath
+      // a drone scored "leg" hits while head shots sailed over it. Each capsule is
+      // authored in its bone's local space (rig units, matching storm_warden.ts
+      // geometry) and resolved through bone.matrixWorld per shot, so what is on
+      // screen is what gets hit.
+      // Radii stay in bone units too (boneRadius) and are scaled by the bone's
+      // LIVE world scale per shot: the model editor rescales the root here at
+      // build time and the gameplay pulse overwrites mesh.scale later, so any
+      // scale baked now would be wrong in play.
+      const wardenRig = warden.rig;
+      // The Seraph/Cherub rigs are non-uniformly scaled, so a radius is scaled by
+      // the bone's stretch PERPENDICULAR to its capsule axis (perpW = 1 - axis²
+      // per local axis; see boneWorldScale), not the mean — the mean made the
+      // squat Cherub's torso dome up into its head and eat head shots.
+      const boneVolume = (name, bone, a, b, boneRadius) => {
+        if (!bone) return null;
+        const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b);
+        const u = vb.clone().sub(va);
+        if (u.lengthSq() > 1e-8) u.normalize(); else u.set(0, 0, 0);
+        return { name, bone, a: va, b: vb, boneRadius, radius: 0,
+          perpW: [1 - u.x * u.x, 1 - u.y * u.y, 1 - u.z * u.z] };
+      };
       const hitVolumes = [
-        { name: "head", a: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.84, visualCenter.z), b: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.94, visualCenter.z), radius: Math.max(0.11, bodyRadius * 0.18) },
-        { name: "torso", a: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.43, visualCenter.z), b: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.76, visualCenter.z), radius: Math.max(0.18, bodyRadius * 0.26) },
-        { name: "pelvis", a: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.31, visualCenter.z), b: new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.45, visualCenter.z), radius: Math.max(0.16, bodyRadius * 0.22) },
-        { name: "leftArm", a: new THREE.Vector3(visualCenter.x - bodyRadius * 0.26, visualBox.min.y + visualSize.y * 0.70, visualCenter.z), b: new THREE.Vector3(visualCenter.x - bodyRadius * 0.38, visualBox.min.y + visualSize.y * 0.42, visualCenter.z), radius: Math.max(0.065, bodyRadius * 0.075) },
-        { name: "rightArm", a: new THREE.Vector3(visualCenter.x + bodyRadius * 0.26, visualBox.min.y + visualSize.y * 0.70, visualCenter.z), b: new THREE.Vector3(visualCenter.x + bodyRadius * 0.38, visualBox.min.y + visualSize.y * 0.42, visualCenter.z), radius: Math.max(0.065, bodyRadius * 0.075) },
-        { name: "leftLeg", a: new THREE.Vector3(visualCenter.x - bodyRadius * 0.12, visualBox.min.y + visualSize.y * 0.33, visualCenter.z), b: new THREE.Vector3(visualCenter.x - bodyRadius * 0.13, visualBox.min.y + visualSize.y * 0.06, visualCenter.z), radius: Math.max(0.075, bodyRadius * 0.09) },
-        { name: "rightLeg", a: new THREE.Vector3(visualCenter.x + bodyRadius * 0.12, visualBox.min.y + visualSize.y * 0.33, visualCenter.z), b: new THREE.Vector3(visualCenter.x + bodyRadius * 0.13, visualBox.min.y + visualSize.y * 0.06, visualCenter.z), radius: Math.max(0.075, bodyRadius * 0.09) },
-      ];
+        // Extents measured from the skinned body in bone space. Torso stops below
+        // the collar and the pauldrons are separate, so nothing domes up in
+        // front of the neck and steals head shots.
+        boneVolume("head", wardenRig.head, [0, 0.03, 0.02], [0, 0.19, 0.01], 0.16),
+        boneVolume("torso", wardenRig.chest, [0, -0.04, 0.03], [0, 0.2, 0.02], 0.31), // dome tops out at the collar (0.51)
+        // Pauldrons are half-domes topping out ~0.66: keep the capsules under
+        // that, or side-on the near shoulder shadows a clearly visible head.
+        boneVolume("torso", wardenRig.chest, [-0.6, 0.43, 0], [-0.42, 0.43, 0], 0.2), // pauldron
+        boneVolume("torso", wardenRig.chest, [0.42, 0.43, 0], [0.6, 0.43, 0], 0.21),  // spiked pauldron
+        // Horizontal across the hips so it reaches the tassets without hanging
+        // below the lowest plate (-0.31).
+        boneVolume("pelvis", wardenRig.pelvis, [-0.11, -0.07, 0.02], [0.11, -0.07, 0.02], 0.24),
+        boneVolume("leftArm", wardenRig.upperArmL, [0, 0, 0], [0, -0.5, 0], 0.1),
+        boneVolume("leftArm", wardenRig.forearmL, [0, 0, 0], [0, -0.62, 0], 0.1),
+        boneVolume("rightArm", wardenRig.upperArmR, [0, 0, 0], [0, -0.42, 0], 0.11),
+        boneVolume("rightArm", wardenRig.forearmR, [0, 0, 0], [0, -0.8, 0], 0.13), // incl. cannon
+      ].filter(Boolean);
+      // Build-time anchors below are measured grounded; lift them to the hover.
+      const hoverLift = STORM_WARDEN_HOVER * modelScale * rig.scale.y;
 
       const lightningNode = new THREE.Object3D();
       lightningNode.position.set(visualCenter.x, visualBox.min.y + visualSize.y * 0.82, visualCenter.z);
@@ -10061,10 +10130,12 @@ function createLightningEffect() {
       root.userData.hoverPhase = Math.random() * Math.PI * 2;
       root.userData.baseScale = s;
       root.userData.siegeCharacterModel = true;
-      root.userData.hitOffset = new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.52, visualCenter.z);
+      root.userData.hitOffset = new THREE.Vector3(visualCenter.x, visualBox.min.y + visualSize.y * 0.52 + hoverLift, visualCenter.z);
+      root.userData.hitCenterBone = wardenRig.chest || null;
+      root.userData.hitCenterLocal = new THREE.Vector3(0, 0.1, 0);
       root.userData.hitRadius = Math.max(0.42, Math.max(visualSize.x, visualSize.y, visualSize.z) * 0.28);
       root.userData.hitVolumes = hitVolumes;
-      root.userData.healthOffset = new THREE.Vector3(visualCenter.x, visualBox.max.y + 0.38, visualCenter.z);
+      root.userData.healthOffset = new THREE.Vector3(visualCenter.x, visualBox.max.y + 0.38 + hoverLift, visualCenter.z);
       root.userData.collisionRadius = Math.min(0.92, Math.max(0.58, Math.max(visualSize.x, visualSize.z) * 0.38));
       root.userData.collisionMinY = 0.04;
       root.userData.collisionMaxY = Math.max(PLAYER_H, visualBox.max.y + 0.1);
@@ -10730,6 +10801,9 @@ function createLightningEffect() {
     // deaths shrapnel instead of bleeding. The enemy object stores typeName (a
     // string), not the type def, so mirror the flag we need onto the enemy.
     enemy.angelModel = !!type.angelModel;
+    // Armour-hit spark tint: each angel sparks in its own energy colour
+    // (Warden blue, Seraph violet, Cherub teal).
+    enemy.hitTint = type.angelModel ? type.color : undefined;
     enemy.xp = type.xp;
     enemy.aura = type.aura;
     enemy.navPath = [];
@@ -11177,7 +11251,7 @@ async function spawnEnemies(wave, options: any = {}) {
     enemy.attackPulse = Math.max(enemy.attackPulse, headshot ? 0.72 : 0.48);
 
     cameraFX.shake = Math.min(1, cameraFX.shake + weaponHit.shake * (headshot ? 1.2 : 1));
-    spawnDamageNumber(enemy, damage, { headshot, melee: !!options.melee });
+    spawnDamageNumber(enemy, damage, { headshot, melee: !!options.melee, point: options.point });
   }
 
   let audioCtx = null;
@@ -11438,6 +11512,114 @@ async function spawnEnemies(wave, options: any = {}) {
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     noiseBufferCache.set(key, buf);
     return buf;
+  }
+
+  // -- Flamethrower audio ----------------------------------------------------
+  // A flamethrower is not a one-shot, so it cannot ride the sample/one-shot path
+  // the other weapons use. It is a SUSTAINED voice: built once, left running for
+  // the session, and driven entirely by the trigger throttle each frame -- which
+  // is exactly how the visual jet is driven, so picture and sound stay locked.
+  //
+  // One looping noise buffer feeds three bands, each doing a different job:
+  //   roar    - lowpass ~300 Hz, the body/weight of the burn
+  //   flutter - bandpass whose cutoff is swept by a slow LFO. This is the part
+  //             that makes fire sound ALIVE instead of like static; real flame is
+  //             a noise band wobbling around, not a fixed hiss.
+  //   hiss    - highpass ~3.5 kHz for the nozzle jet, modulated faster so the
+  //             top end crackles.
+  // Throttle opens all three and pushes the cutoffs up, so a light tap sounds
+  // like a puff and a held trigger sounds like a torch.
+  let flameAudio: any = null;
+  function ensureFlameAudio() {
+    if (flameAudio !== null) return flameAudio;
+    try {
+      const ctx = getAudioCtx();
+      const out = ctx.createGain();
+      out.gain.value = 0;
+      inSfxCategory("weapons", () => connectWithPan(ctx, out, 0));
+
+      const src = ctx.createBufferSource();
+      src.buffer = getNoiseBuffer(ctx, 2.5);
+      src.loop = true;
+
+      const band = (type: BiquadFilterType, freq: number, q: number, gain: number) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = type;
+        filter.frequency.value = freq;
+        filter.Q.value = q;
+        const g = ctx.createGain();
+        g.gain.value = gain;
+        src.connect(filter);
+        filter.connect(g);
+        g.connect(out);
+        return { filter, gain: g };
+      };
+      const roar = band("lowpass", 300, 0.8, 0.9);
+      const flutter = band("bandpass", 900, 1.1, 0.55);
+      const hiss = band("highpass", 3500, 0.7, 0.28);
+
+      // LFO wiring. Each oscillator drives a parameter through a depth gain; the
+      // rates are deliberately coprime-ish so the texture never audibly repeats.
+      const lfo = (rate: number, depth: number, param: AudioParam) => {
+        const o = ctx.createOscillator();
+        o.type = "sine";
+        o.frequency.value = rate;
+        const d = ctx.createGain();
+        d.gain.value = depth;
+        o.connect(d);
+        d.connect(param);
+        o.start();
+        return o;
+      };
+      lfo(3.1, 520, flutter.filter.frequency);   // the wobble
+      lfo(7.7, 0.16, hiss.gain.gain);            // top-end crackle
+      lfo(1.7, 0.22, roar.gain.gain);            // slow breathing in the body
+      src.start();
+      flameAudio = { ctx, out, roar, flutter, hiss, level: 0 };
+    } catch (_e) {
+      flameAudio = false; // permanently give up rather than retry every frame
+    }
+    return flameAudio;
+  }
+
+  /** Drive the sustained flame voice. `throttle` is the jet's 0..1 output;
+   *  `idle` keeps a quiet pilot-light hiss alive while the weapon is holstered-hot. */
+  function setFlameAudio(throttle, idle) {
+    const target = throttle > 0.001 ? 0.2 + throttle * 0.5 : (idle && darkWaveActive ? 0.035 : 0);
+    // Never build the graph just to silence it -- a wave with no blackout, or a
+    // menu session, should allocate no audio nodes at all.
+    if (target <= 0 && !flameAudio) return;
+    const a = ensureFlameAudio();
+    if (!a) return;
+    if (Math.abs(target - a.level) < 0.002) return;
+    a.level = target;
+    const t = a.ctx.currentTime;
+    try {
+      a.out.gain.cancelScheduledValues(t);
+      a.out.gain.setTargetAtTime(target, t, target > 0 ? 0.05 : 0.12);
+      // Opening the throttle also opens the filters -- the burn gets brighter and
+      // bigger, not just louder.
+      a.roar.filter.frequency.setTargetAtTime(240 + throttle * 220, t, 0.08);
+      a.flutter.filter.frequency.setTargetAtTime(700 + throttle * 900, t, 0.08);
+      a.hiss.gain.gain.setTargetAtTime(0.14 + throttle * 0.3, t, 0.08);
+    } catch (_e) {}
+  }
+
+  /** Trigger pull: the fuel catching. A click, then a downward whoomp. */
+  function sfxFlameIgnite() {
+    inSfxCategory("weapons", () => {
+      playDistorted(0.06, 0.16, 2600, "highpass", 0, 0, 0.9, "hard");   // striker
+      playSweep(520, 90, 0.34, 0.2, "sawtooth", 0.02, 0);               // whoomp
+      playDistorted(0.3, 0.2, 700, "lowpass", 0.02, 0, 0.7, "med");     // ignition body
+    });
+  }
+
+  /** Trigger release: pressure bleeding off the nozzle. */
+  function sfxFlameRelease() {
+    inSfxCategory("weapons", () => {
+      playDistorted(0.42, 0.09, 2400, "highpass", 0, 0, 0.6, "soft");
+      playSweep(180, 70, 0.26, 0.06, "sine", 0.01, 0);
+    });
   }
 
   // Pre-baked soft-clipping curves — inject into WaveShaper for crunch/saturation
@@ -12243,14 +12425,19 @@ async function spawnEnemies(wave, options: any = {}) {
       opacity: 1,
     });
     const sprite = new THREE.Sprite(material);
-    getEnemyHitCenter(enemy, enemyHitCenterTmp);
-    const height = enemy.mesh.userData?.healthOffset?.y || 2.2;
     const side = (Math.random() - 0.5) * 0.55;
-    sprite.position.set(
-      enemyHitCenterTmp.x + side,
-      enemy.mesh.position.y + height * (headshot ? 0.92 : 0.72),
-      enemyHitCenterTmp.z
-    );
+    if (options.point) {
+      // Pop from where the round actually landed, nudged up off the surface.
+      sprite.position.set(options.point.x + side, options.point.y + 0.35, options.point.z);
+    } else {
+      getEnemyHitCenter(enemy, enemyHitCenterTmp);
+      const height = enemy.mesh.userData?.healthOffset?.y || 2.2;
+      sprite.position.set(
+        enemyHitCenterTmp.x + side,
+        enemy.mesh.position.y + height * (headshot ? 0.92 : 0.72),
+        enemyHitCenterTmp.z
+      );
+    }
     const size = (headshot ? 0.78 : 0.62) + Math.min(0.36, rounded / 620);
     sprite.scale.set(size * 1.7, size * 0.85, 1);
     sprite.renderOrder = 900;
@@ -12368,7 +12555,6 @@ async function spawnEnemies(wave, options: any = {}) {
     writeLightningPathFromScratch(effect, buildLightningPathScratch(start, end, segments, jitter, lift));
   }
 
-  let abilityImpacts: ReturnType<typeof createAbilityImpacts> | null = null;
   function impactFx(x, y, z, color, radius = 2, kind = "strike") {
     abilityImpacts ??= createAbilityImpacts(THREE, scene, lowEndMode ? 6 : 12);
     abilityImpacts.spawn(x, y, z, color, radius, kind);
@@ -12609,6 +12795,9 @@ async function spawnEnemies(wave, options: any = {}) {
       net.send(msg);
       return false;
     }
+    // God mode: report "no local hit" so callers skip the damage flash, the
+    // killstreak reset and debuffs like the Cherub's Null Field lock.
+    if (blackoutGodMode()) return false;
     damagePlayer(amount, options);
     return true;
   }
@@ -13612,6 +13801,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function clearTransientScreenEffects() {
+    damageIndicators.clear();
     player.hurtTimer = 0;
     game.hitMarkerTimer = 0;
     cameraFX.shake = 0;
@@ -14857,10 +15047,18 @@ async function spawnEnemies(wave, options: any = {}) {
     if (carAlarmState.active) { tryTriggerCarAlarm(); return; }
   }
 
+  // Blackout waves (wave % 10): the operator is in god mode for the whole wave —
+  // the incinerator run is a power fantasy, not a survival check. PvP never
+  // enters a blackout, but guard it anyway so a duel can't turn one-sided.
+  function blackoutGodMode() {
+    return darkWaveActive && gameMode !== "pvp";
+  }
+
   function damagePlayer(amount, options: any = {}) {
     if (amount <= 0) return false;
     if (player.pvpDead) return false;
     if (cutscene.active) return false; // invulnerable during blackout cutscene
+    if (blackoutGodMode()) return false;
     if ((player.waveInvulnerabilityTimer || 0) > 0) return false;
     player.unlimitedSprint = true;
     player.stamina = player.maxStamina;
@@ -14872,6 +15070,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // Aegis perk: flat damage reduction on all incoming damage.
     if (player.perkDamageResist > 0) amount *= (1 - player.perkDamageResist);
 
+    damageIndicators.hit(options.sx, options.sz, amount);
     player.hp = Math.max(0, player.hp - amount);
     return player.hp <= 0;
   }
@@ -15015,6 +15214,15 @@ async function spawnEnemies(wave, options: any = {}) {
   // caster are their objective rule. Network games retain host kill quotas until
   // objective state is included in the co-op snapshot protocol.
   let relay: { wave: number; x: number; z: number; progress: number; contested: boolean; playerInside: boolean } | null = null;
+  // Randomised placement tuning. The band keeps the beacon off the player's feet
+  // (MIN) while staying inside the traversable interior (MAX); REPEAT_RADIUS is
+  // how far a new relay has to be from the previous two before the penalty
+  // stops biting, and PICK_SAMPLES is how hard we try for a good draw.
+  const RELAY_MIN_DEPTH = 6;
+  const RELAY_MAX_DEPTH = 26;
+  const RELAY_REPEAT_RADIUS = 26;
+  const RELAY_PICK_SAMPLES = 24;
+  const recentRelaySites: Array<{ x: number; z: number }> = [];
   let relayMarker: import("three").Group | null = null;
   let relayShield: import("three").Mesh | null = null;
   let relayHudElapsed = 0;
@@ -15027,13 +15235,19 @@ async function spawnEnemies(wave, options: any = {}) {
     const start = worldToMap(yaw.position.x, yaw.position.z);
     const queue = [{ mx: start.mx, my: start.my, depth: 0 }];
     const seen = new Set([`${start.mx},${start.my}`]);
-    let target = null;
-    // Flood only traversable cells, so the beacon cannot land across a sealed wall.
+    // Flood the whole reachable region (not just the first few rings) and keep
+    // every cell inside the playable depth band as a candidate. The old loop
+    // overwrote `target` with whatever cell BFS happened to visit last at
+    // depth >= 4, which made the relay land in the same handful of spots every
+    // run. Collecting the band and sampling from it is what makes it random.
+    const candidates: Array<{ x: number; z: number; depth: number }> = [];
     for (let i = 0; i < queue.length && i < 4000; i++) {
       const cell = queue[i];
-      const pos = mapToWorld(cell.mx, cell.my);
-      if (cell.depth >= 4) target = pos;
-      if (cell.depth >= 8) break;
+      if (cell.depth >= RELAY_MIN_DEPTH) {
+        const pos = mapToWorld(cell.mx, cell.my);
+        candidates.push({ x: pos.x, z: pos.z, depth: cell.depth });
+      }
+      if (cell.depth >= RELAY_MAX_DEPTH) continue;
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const mx = cell.mx + dx, my = cell.my + dz, key = `${mx},${my}`;
         if (seen.has(key) || !isOpenCell(mx, my)) continue;
@@ -15043,8 +15257,24 @@ async function spawnEnemies(wave, options: any = {}) {
         queue.push({ mx, my, depth: cell.depth + 1 });
       }
     }
-    if (!target) return; // Tiny/custom maps safely fall back to elimination.
-    relay = { wave, ...target, progress: 0, contested: false, playerInside: false };
+    if (!candidates.length) return; // Tiny/custom maps safely fall back to elimination.
+    // Weighted sample: every candidate can win, but cells far from the last two
+    // relays win far more often, so consecutive waves don't reuse a corner and
+    // the objective keeps pulling the player across the map.
+    let target = candidates[0];
+    let bestScore = -Infinity;
+    for (let attempt = 0; attempt < RELAY_PICK_SAMPLES; attempt++) {
+      const c = candidates[(Math.random() * candidates.length) | 0];
+      let score = Math.random() * 0.55 + Math.min(1, c.depth / RELAY_MAX_DEPTH) * 0.45;
+      for (const prev of recentRelaySites) {
+        const away = Math.hypot(c.x - prev.x, c.z - prev.z);
+        score -= Math.max(0, 1 - away / RELAY_REPEAT_RADIUS);
+      }
+      if (score > bestScore) { bestScore = score; target = c; }
+    }
+    recentRelaySites.push({ x: target.x, z: target.z });
+    if (recentRelaySites.length > 2) recentRelaySites.shift();
+    relay = { wave, x: target.x, z: target.z, progress: 0, contested: false, playerInside: false };
     if (!relayMarker) {
       relayMarker = new THREE.Group();
       relayMarker.name = "Relay Portal";
@@ -15169,6 +15399,121 @@ async function spawnEnemies(wave, options: any = {}) {
     return !net?.active && relay?.wave === game.wave ? relay : null;
   }
 
+  // ── Relay waypoint ──────────────────────────────────────────────────────────
+  // Screen-space marker that tracks the relay portal, so a randomly placed
+  // objective is still findable. Built from JS (like #perk-row) so it works in
+  // BOTH HTML entry points with no markup edits. On-screen it sits on the
+  // portal; off-screen it pins to the edge of a margin rect and rotates a caret
+  // toward the target. Colour follows the portal: cyan idle, amber contested,
+  // and it swaps to the live upload percentage once the player is in the zone.
+  let relayWaypointEl: HTMLElement | null = null;
+  let relayWaypointParts: { ring: HTMLElement; caret: HTMLElement; label: HTMLElement } | null = null;
+  const relayWpCamPos = new THREE.Vector3();
+  const relayWpCamDir = new THREE.Vector3();
+  const relayWpTarget = new THREE.Vector3();
+  const relayWpProjected = new THREE.Vector3();
+
+  function ensureRelayWaypoint() {
+    if (relayWaypointEl) return relayWaypointEl;
+    const host = document.getElementById("hud") || document.body;
+    const root = document.createElement("div");
+    root.id = "relay-waypoint";
+    root.style.cssText =
+      "position:fixed;left:0;top:0;display:none;pointer-events:none;z-index:6;" +
+      "flex-direction:column;align-items:center;gap:3px;will-change:transform;" +
+      "font:700 11px/1 'Rajdhani','Segoe UI',sans-serif;letter-spacing:0.14em;" +
+      "text-transform:uppercase;transform:translate(-50%,-50%);";
+    // Diamond ring — a rotated square outline, so it costs no image/SVG.
+    const ring = document.createElement("div");
+    ring.style.cssText =
+      "width:17px;height:17px;border:2px solid #79d8d3;transform:rotate(45deg);" +
+      "box-shadow:0 0 10px rgba(121,216,211,0.55),inset 0 0 6px rgba(121,216,211,0.35);";
+    // Off-screen caret. Hidden while the portal is actually on screen.
+    const caret = document.createElement("div");
+    caret.style.cssText =
+      "position:absolute;top:50%;left:50%;width:0;height:0;display:none;" +
+      "border-left:7px solid transparent;border-right:7px solid transparent;" +
+      "border-bottom:12px solid #79d8d3;filter:drop-shadow(0 0 5px rgba(121,216,211,0.8));" +
+      "transform-origin:50% 50%;";
+    const label = document.createElement("div");
+    label.style.cssText =
+      "padding:2px 6px;background:rgba(6,16,22,0.62);color:#cdeef0;white-space:nowrap;" +
+      "border:1px solid rgba(121,216,211,0.35);text-shadow:0 0 8px rgba(121,216,211,0.5);";
+    root.append(ring, caret, label);
+    host.appendChild(root);
+    relayWaypointEl = root;
+    relayWaypointParts = { ring, caret, label };
+    return root;
+  }
+
+  function updateRelayWaypoint(objective) {
+    const el = objective ? ensureRelayWaypoint() : relayWaypointEl;
+    if (!el || !relayWaypointParts) return;
+    if (!objective) { el.style.display = "none"; return; }
+    const { ring, caret, label } = relayWaypointParts;
+
+    camera.getWorldPosition(relayWpCamPos);
+    camera.getWorldDirection(relayWpCamDir);
+    // Aim the marker at the top of the portal column, not the floor plate, so it
+    // reads as a beacon rather than sinking into the ground up close.
+    relayWpTarget.set(objective.x, 2.1, objective.z);
+    const distance = Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z);
+    const behind = (relayWpTarget.x - relayWpCamPos.x) * relayWpCamDir.x
+      + (relayWpTarget.y - relayWpCamPos.y) * relayWpCamDir.y
+      + (relayWpTarget.z - relayWpCamPos.z) * relayWpCamDir.z <= 0;
+
+    relayWpProjected.copy(relayWpTarget).project(camera);
+    const width = window.innerWidth, height = window.innerHeight;
+    let sx = (relayWpProjected.x * 0.5 + 0.5) * width;
+    let sy = (-relayWpProjected.y * 0.5 + 0.5) * height;
+    // A point behind the camera projects mirrored through the origin; flipping it
+    // back around screen centre gives the correct bearing for the edge clamp.
+    if (behind) { sx = width - sx; sy = height - sy; }
+
+    const margin = 46;
+    const minX = margin, maxX = width - margin, minY = margin, maxY = height - margin;
+    const offScreen = behind || sx < minX || sx > maxX || sy < minY || sy > maxY;
+    let angle = 0;
+    if (offScreen) {
+      // Clamp along the ray from screen centre so the caret sits on the rect edge
+      // pointing exactly at the objective's bearing.
+      const cx = width * 0.5, cy = height * 0.5;
+      const dx = sx - cx, dy = sy - cy;
+      angle = Math.atan2(dy, dx);
+      const scale = Math.min(
+        Math.abs(dx) > 0.001 ? (dx > 0 ? maxX - cx : cx - minX) / Math.abs(dx) : Infinity,
+        Math.abs(dy) > 0.001 ? (dy > 0 ? maxY - cy : cy - minY) / Math.abs(dy) : Infinity,
+      );
+      sx = cx + dx * (Number.isFinite(scale) ? scale : 0);
+      sy = cy + dy * (Number.isFinite(scale) ? scale : 0);
+    }
+
+    const uploading = distance <= 3.5 && !objective.contested;
+    const accent = objective.contested ? "#ffb767" : uploading ? "#9ef7a8" : "#79d8d3";
+    const pulse = 0.82 + Math.sin(performance.now() * 0.006) * 0.18;
+    el.style.display = "flex";
+    el.style.transform = `translate(${Math.round(sx)}px, ${Math.round(sy)}px) translate(-50%,-50%)`;
+    el.style.opacity = String(offScreen ? 0.9 : 0.72 + pulse * 0.28);
+    ring.style.display = offScreen ? "none" : "block";
+    ring.style.borderColor = accent;
+    ring.style.boxShadow = `0 0 10px ${accent}8c, inset 0 0 6px ${accent}59`;
+    // Up close the diamond opens up; far away it tightens to a pinpoint.
+    const ringSize = Math.round(13 + Math.min(10, 120 / Math.max(6, distance)));
+    ring.style.width = ring.style.height = `${ringSize}px`;
+    ring.style.transform = `rotate(45deg) scale(${(0.92 + pulse * 0.14).toFixed(3)})`;
+    caret.style.display = offScreen ? "block" : "none";
+    caret.style.borderBottomColor = accent;
+    // The caret art points up (-Y), so add a quarter turn to the screen bearing.
+    caret.style.transform = `translate(-50%,-50%) rotate(${(angle * 180 / Math.PI + 90).toFixed(1)}deg)`;
+    label.style.color = accent;
+    label.style.borderColor = `${accent}59`;
+    label.textContent = objective.contested
+      ? "RELAY CONTESTED"
+      : uploading
+        ? `UPLOAD ${Math.round((objective.progress / RELAY_UPLOAD_SECONDS) * 100)}%`
+        : `RELAY ${Math.round(distance)}M`;
+  }
+
   function updateRelay(dt) {
     const visible = !!activeRelay() && game.state === "playing";
     if (relayMarker) {
@@ -15212,6 +15557,7 @@ async function spawnEnemies(wave, options: any = {}) {
       }
     }
     const objective = activeRelay();
+    updateRelayWaypoint(visible && !cutscene.active && player.hp > 0 ? objective : null);
     if (!objective || game.state !== "playing" || cutscene.active || player.hp <= 0) return;
     const inside = Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z) <= 3.5;
     if (inside && !objective.playerInside) {
@@ -15832,7 +16178,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function switchGun(gunType, options: any = {}) {
-    if (darkWaveActive && game.state === "playing") return; // arc caster is locked for the event
+    if (darkWaveActive && game.state === "playing") return; // the incinerator is locked for the event
     if (gunType === currentGun) {
       if (pendingWeaponSwitch) {
         weaponAnim.switchBlend = pendingWeaponSwitch.elapsed / pendingWeaponSwitch.duration;
@@ -15886,64 +16232,256 @@ async function spawnEnemies(wave, options: any = {}) {
     addKillFeed(`SWITCHED TO ${GUN_SPECS[gunType].name.toUpperCase()}`);
   }
 
-  const blackoutCasterTint = { core: 0xf3ffff, glow: 0x51d9ff, outer: 0x1267ff, ring: 0x77e8ff, dot: 0xd9ffff };
-  function fireBlackoutArcCaster() {
-    // The blackout weapon is an event override, not inventory: it consumes no
-    // magazine, never reloads, and disappears automatically when power returns.
-    gunState.fireCooldown = 0.085;
-    gunState.muzzleTimer = Math.max(gunState.muzzleTimer, 0.08);
-    thirdPerson.fireTimer = Math.max(thirdPerson.fireTimer, 0.12);
-    player.shotsFired++;
-    lightingState.shootFlash = 1;
-    cameraFX.recoilVel += 0.18;
-    cameraFX.shake = Math.min(1, cameraFX.shake + 0.055);
-    weaponAnim.kickVel += 0.7;
+  // -- Blackout incinerator (flamethrower) ------------------------------------
+  // During a blackout wave the equipped weapon becomes a fuel-fed incinerator.
+  // It is an event override, not inventory: no magazine, no reload, and it
+  // disappears when power returns. Unlike every other weapon it is CONTINUOUS --
+  // updateFlamethrower() owns the trigger, so fireGun() steps aside entirely.
+  //
+  // Everything visual is the pooled particle system (two draw calls, no new
+  // lights -- see the light-count invariant in CLAUDE.md), driven by
+  // modules/flame_jet.ts: fuel is thrown from the muzzle as real projectiles,
+  // so the stream starts narrow and hot and widens, cools and breaks up
+  // downstream. Gameplay does NOT follow the particles: damage is one cone
+  // test on a fixed 15 Hz tick (applyFlameTick), whatever the effect does.
+  const FLAME_RANGE = FLAMETHROWER_CONFIG.range;
+  const FLAME_DPS = 150;           // point-blank damage per second
+  const FLAME_BURN_DPS = 30;       // lingering burn after contact
+  const FLAME_BURN_SECONDS = 3.2;
+  const FLAME_TICK = 1 / 15;       // damage/ignite resolution rate
+  const FLAME_SPINUP = 7;          // throttle units/sec on trigger pull
+  const FLAME_SPINDOWN = 3.2;      // ...and on release (fuel keeps burning a beat)
+  const flameState = {
+    throttle: 0, tick: 0, burnBeat: 0, wasFiring: false, pilot: 0,
+    time: 0, lightActive: false,
+    light: { x: 0, y: 0, z: 0, intensity: 0, flicker: 0 },
+  };
+  const flameFrame: any = { origin: null, dir: null, reach: 0, surface: false, throttle: 0, dt: 0, time: 0 };
+  const flameDirTmp = new THREE.Vector3();
+  const flameMuzzleTmp = new THREE.Vector3();
+  const flameNormalTmp = new THREE.Vector3();
+  const flameAimDirTmp = new THREE.Vector3();
+  const flameAimPointTmp = new THREE.Vector3();
+  const flameSplashDirTmp = new THREE.Vector3();
+  const flameToEnemyTmp = new THREE.Vector3();
+  const flameNormalMatrix = new THREE.Matrix3();
+  // Last surface the jet landed on, for __rbFlame(); impactValid is false when
+  // the throw ended in open air.
+  const flameImpactTmp = new THREE.Vector3();
+  let flameImpactValid = false;
+  const flameBurnPosTmp = { x: 0, y: 0, z: 0 };
+  const flameUpNormal = { x: 0, y: 1, z: 0 };
 
-    camera.getWorldPosition(cameraWorldTmp);
-    getAimCursorDirectionWorld(enemyShotDirTmp, 0, 0);
-    raycaster.set(cameraWorldTmp, enemyShotDirTmp);
-    raycaster.far = 48;
-    const floorMesh = scene.userData.environmentSurfaces?.floor || null;
-    const surfaceHit = getShotSurfaceHit(floorMesh);
-    const wallDist = surfaceHit ? surfaceHit.distance : 48;
-    let target = null;
-    let targetDist = Infinity;
-    for (const enemy of liveEnemies) {
-      const d = getEnemyShotDistance(enemy, raycaster.ray.origin, raycaster.ray.direction, 48, currentGun, shotHitInfoTmp);
-      if (d < targetDist) { target = enemy; targetDist = d; }
-    }
-    const hitEnemy = !!target && targetDist < wallDist && targetDist <= 48;
-    const end = hitEnemy
-      ? enemyHitPointTmp.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, targetDist)
-      : surfaceHit?.point || tracerFallbackEndTmp.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, 48);
-    getActiveMuzzleWorld(muzzleWorldTmp, 0);
-    spawnLightningEffect(muzzleWorldTmp, end, 1.35, {
-      segments: 13, branches: 3, sourceBranches: 2, jitter: 0.14, lift: 0.03,
-      life: 0.105, rings: true, electric: true, tint: blackoutCasterTint,
-    });
-    impactNormalTmp.copy(raycaster.ray.direction).multiplyScalar(-1);
-    impactFx(end.x, Math.max(0.04, end.y), end.z, blackoutCasterTint.ring, hitEnemy ? 1.35 : 0.9, hitEnemy ? "strike" : "blink");
-    spawnImpactParticles(end, impactNormalTmp, hitEnemy ? 4 : 3, hitEnemy ? (target.angelModel ? "enemyArmorHit" : "bulletFlesh") : "bulletMetal");
-    playEventSound("lightning", { volume: 0.48, rate: 1.18 + Math.random() * 0.1 });
+  function flameTriggerHeld() {
+    return darkWaveActive && mouse.down && game.state === "playing" && !player.pvpDead
+      && player.hp > 0 && !(cutscene.active && cutscene.phase < 2)
+      && !pendingWeaponSwitch && weaponAnim.switchBlend <= 0.12;
+  }
 
-    if (!hitEnemy) return;
-    const damage = 72 * (player.perkDamageMul || 1);
-    player.shotsHit++;
-    showHitMarker();
-    sfxHit();
+  /** Route flame damage through the same co-op path the other weapons use. */
+  function applyFlameDamage(target, damage, dir) {
     if (isCoopGuest() && target.isProxy) {
       net.send({ t: "hit", id: myNetId, seq: nextNetSeq(), sentAt: Math.round(performance.now()), i: target.netId, dmg: damage, hs: false });
-      spawnDamageNumber(target, damage);
       target.hp = Math.max(0, target.hp - damage);
       target.aggroed = true;
-      applyEnemyHitFeedback(target, damage, false, raycaster.ray.direction.x, raycaster.ray.direction.z);
+      applyEnemyHitFeedback(target, damage, false, dir?.x || 0, dir?.z || 0);
       if (target.hp <= 0 && !target._optimisticDead) { target._optimisticDead = true; setEnemyAlive(target, false); }
       return;
     }
     target.hp -= damage;
     target.aggroed = true;
-    applyEnemyHitFeedback(target, damage, false, raycaster.ray.direction.x, raycaster.ray.direction.z);
+    applyEnemyHitFeedback(target, damage, false, dir?.x || 0, dir?.z || 0);
     if (target.hp <= 0) killEnemy(target);
+  }
+
+  function igniteEnemy(enemy) {
+    enemy.burnTimer = Math.max(enemy.burnTimer || 0, FLAME_BURN_SECONDS);
+    enemy.burnDps = FLAME_BURN_DPS * (player.perkDamageMul || 1);
+  }
+
+  /** Lingering burn. Runs every frame regardless of wave, so fire set during a
+   *  blackout still finishes resolving after the lights come back. */
+  function updateBurningEnemies(dt) {
+    flameState.burnBeat += dt;
+    const puff = flameState.burnBeat >= 0.12;
+    if (puff) flameState.burnBeat = 0;
+    for (const enemy of enemies) {
+      if (!enemy.alive || !(enemy.burnTimer > 0)) continue;
+      enemy.burnTimer -= dt;
+      if (enemy.burnTimer <= 0) { enemy.burnTimer = 0; continue; }
+      if (puff && particleFX) {
+        // Around the body's hit centre, so a hovering angel burns on its torso
+        // instead of in the air below it.
+        const center = getEnemyHitCenter(enemy, enemyHitCenterTmp);
+        flameBurnPosTmp.x = center.x + (Math.random() - 0.5) * 0.5;
+        flameBurnPosTmp.y = center.y - 0.35 + Math.random() * 0.9;
+        flameBurnPosTmp.z = center.z + (Math.random() - 0.5) * 0.5;
+        particleFX.emit("flameBurn", flameBurnPosTmp, flameUpNormal, { intensity: 0.45, scale: 0.7 });
+      }
+      // DoT lands on the same 15 Hz grid as the jet, so a burn reads as a steady
+      // drip of damage numbers rather than one per frame.
+      enemy.burnTickAccum = (enemy.burnTickAccum || 0) + dt;
+      while (enemy.burnTickAccum >= FLAME_TICK) {
+        enemy.burnTickAccum -= FLAME_TICK;
+        if (!enemy.alive) break;
+        applyFlameDamage(enemy, (enemy.burnDps || FLAME_BURN_DPS) * FLAME_TICK, null);
+      }
+    }
+  }
+
+  function updateFlamethrower(dt) {
+    updateBurningEnemies(dt);
+    // Fuel left burning where the jet landed keeps going after release (and past
+    // the end of the blackout), so it runs before any early-out below.
+    flameJetFX?.updateResidue(dt);
+    if (!darkWaveActive) {
+      if (flameState.throttle > 0 || flameState.wasFiring) {
+        flameState.throttle = 0;
+        flameState.wasFiring = false;
+        flameState.lightActive = false;
+        flameJetFX?.stop();
+        setFlameAudio(0, false);
+      }
+      return;
+    }
+
+    const held = flameTriggerHeld();
+    if (held && !flameState.wasFiring) sfxFlameIgnite();
+    if (!held && flameState.wasFiring) sfxFlameRelease();
+    flameState.wasFiring = held;
+    flameState.throttle = held
+      ? Math.min(1, flameState.throttle + dt * FLAME_SPINUP)
+      : Math.max(0, flameState.throttle - dt * FLAME_SPINDOWN);
+
+    const idle = game.state === "playing" && !cutscene.active && player.hp > 0;
+    setFlameAudio(flameState.throttle, idle);
+    if (flameState.throttle <= 0.001) {
+      flameState.lightActive = false;
+      // Next pull starts a fresh stream from wherever the muzzle is then.
+      flameJetFX?.stop();
+      // The nozzle keeps a pilot light lit whenever the weapon is out during the
+      // blackout, so it reads as a flamethrower before the trigger is pulled.
+      if (idle && particleFX) {
+        flameState.pilot += dt;
+        if (flameState.pilot >= 0.07) {
+          flameState.pilot = 0;
+          getActiveMuzzleWorld(flameMuzzleTmp, 0);
+          getAimCursorDirectionWorld(flameDirTmp, 0, 0);
+          particleFX.emit("flamePilotLight", flameMuzzleTmp, flameDirTmp, { intensity: 0.6, scale: 0.8 });
+        }
+      }
+      return;
+    }
+
+    const throttle = flameState.throttle;
+    flameState.time += dt;
+
+    // Aim. The camera ray is what the crosshair means, but the fire leaves the
+    // GUN, and in third person those two are ~half a metre apart. Firing the jet
+    // along the camera ray from the muzzle sends it parallel to the crosshair
+    // instead of at it -- visibly wrong at 15 m. So: ray-cast on the camera ray
+    // to find the aim point, then point the jet from the muzzle AT that point.
+    camera.getWorldPosition(cameraWorldTmp);
+    getAimCursorDirectionWorld(flameAimDirTmp, 0, 0);
+    raycaster.set(cameraWorldTmp, flameAimDirTmp);
+    raycaster.far = FLAME_RANGE + 2;
+    const surfaceHit = getShotSurfaceHit(scene.userData.environmentSurfaces?.floor || null);
+    const camReach = Math.min(FLAME_RANGE, surfaceHit ? Math.max(0.6, surfaceHit.distance - 0.15) : FLAME_RANGE);
+    flameAimPointTmp.copy(cameraWorldTmp).addScaledVector(flameAimDirTmp, camReach);
+
+    getActiveMuzzleWorld(flameMuzzleTmp, 0);
+    flameDirTmp.copy(flameAimPointTmp).sub(flameMuzzleTmp);
+    const reach = Math.max(1, flameDirTmp.length());
+    flameDirTmp.divideScalar(reach);
+
+    // The jet's geometry, its surface splash and its light all live in
+    // modules/flame_jet.ts so that src/fx_lab.html can drive the identical code.
+    // Tune the look there (it renders in seconds, from any angle), never here.
+    flameFrame.origin = flameMuzzleTmp;
+    flameFrame.dir = flameDirTmp;
+    flameFrame.reach = reach;
+    // Whether the throw ends on geometry: the stream stalls there. (Enemies are
+    // not in this ray-cast, so fire passes through them visually while the
+    // damage cone below burns them.)
+    flameFrame.surface = !!(surfaceHit && surfaceHit.distance <= FLAME_RANGE);
+    flameFrame.throttle = throttle;
+    flameFrame.dt = dt;
+    flameFrame.time = flameState.time;
+    flameJetFX?.emit(flameFrame);
+
+    flameImpactValid = !!(surfaceHit && surfaceHit.distance <= FLAME_RANGE);
+    if (flameImpactValid) flameImpactTmp.copy(surfaceHit.point);
+    if (surfaceHit && surfaceHit.distance <= FLAME_RANGE) {
+      if (surfaceHit.face) {
+        flameNormalMatrix.getNormalMatrix(surfaceHit.object.matrixWorld);
+        flameNormalTmp.copy(surfaceHit.face.normal).applyMatrix3(flameNormalMatrix).normalize();
+      } else {
+        flameNormalTmp.copy(flameDirTmp).multiplyScalar(-1);
+      }
+      flameJetFX?.emitSurface(surfaceHit.point, flameNormalTmp, flameDirTmp, throttle, surfaceHit.distance);
+    }
+
+    // Fire light. A flamethrower that lights nothing reads as a decal pasted over
+    // the scene, and in a blackout wave the jet is the only real light source in
+    // the world. This does NOT create a light: it hands the sample to the gunFlash
+    // PointLight, which already exists permanently and is already repositioned to
+    // the muzzle each frame. Creating one here would relink every shader in the
+    // scene -- see the light-count invariant in CLAUDE.md.
+    flameJetFX?.lightSample(flameFrame, flameState.light);
+    flameState.lightActive = true;
+
+    // Feel: a low continuous rumble rather than per-shot kicks, plus the shared
+    // muzzle-flash exposure pulse (no light is created -- see CLAUDE.md).
+    // NOTE: deliberately NOT setting gunState.muzzleTimer -- that fires the
+    // bullet muzzle-flash sprite and its ~100-intensity white light. Sustained,
+    // it is a searchlight on the nozzle that washes out the near half of the jet.
+    // The flame particles are the muzzle glow; shootFlash only lifts exposure.
+    thirdPerson.fireTimer = Math.max(thirdPerson.fireTimer, 0.1);
+    lightingState.shootFlash = Math.max(lightingState.shootFlash, (0.1 + Math.random() * 0.05) * throttle);
+    cameraFX.shake = Math.min(1, cameraFX.shake + dt * 0.55 * throttle);
+    cameraFX.recoilVel += dt * 0.55 * throttle;
+    weaponAnim.kickVel += dt * 2.2 * throttle;
+
+    // Damage on a fixed grid, independent of frame rate.
+    flameState.tick += dt;
+    while (flameState.tick >= FLAME_TICK) {
+      flameState.tick -= FLAME_TICK;
+      applyFlameTick(FLAME_TICK * throttle, reach);
+    }
+  }
+
+  /** One damage/ignite resolution over the jet's cone. */
+  function applyFlameTick(tickSeconds, reach) {
+    let hitAny = false;
+    for (const enemy of liveEnemies) {
+      // Test against the enemy's whole vertical extent, not one point 0.85 m up.
+      // The angels hover with their bodies ~1.6–6.5 m off the ground, so the old
+      // fixed point sat UNDER them: hosing the visible drone missed while
+      // sweeping the empty air beneath it scored. Take the height on the body
+      // nearest the jet at this enemy's range.
+      const center = getEnemyHitCenter(enemy, enemyHitCenterTmp);
+      const baseY = enemy.mesh.position.y;
+      const bodyLow = Math.min(baseY + 0.3, center.y);
+      const bodyHigh = Math.max(baseY + (enemy.mesh.userData.healthOffset?.y ?? 2.2) - 0.45, center.y);
+      flameToEnemyTmp.set(center.x - flameMuzzleTmp.x, center.y - flameMuzzleTmp.y, center.z - flameMuzzleTmp.z);
+      const jetY = flameMuzzleTmp.y + flameDirTmp.y * Math.max(0, flameToEnemyTmp.dot(flameDirTmp));
+      flameToEnemyTmp.y = Math.min(bodyHigh, Math.max(bodyLow, jetY)) - flameMuzzleTmp.y;
+      const along = flameToEnemyTmp.dot(flameDirTmp);
+      if (along < -0.5 || along > reach) continue;
+      // Perpendicular distance to the jet axis vs. the cone's radius there.
+      const perp = Math.sqrt(Math.max(0, flameToEnemyTmp.lengthSq() - along * along));
+      const coneRadius = 0.75 + Math.max(0, along) * 0.17;
+      if (perp > coneRadius) continue;
+      // Falloff: full damage over the first third of the throw, then down to 45%.
+      const falloff = 1 - Math.min(1, Math.max(0, along - reach * 0.33) / Math.max(0.001, reach * 0.67)) * 0.55;
+      const damage = FLAME_DPS * tickSeconds * falloff * (player.perkDamageMul || 1);
+      player.shotsFired++;
+      player.shotsHit++;
+      hitAny = true;
+      igniteEnemy(enemy);
+      applyFlameDamage(enemy, damage, flameDirTmp);
+    }
+    if (hitAny) showHitMarker();
   }
 
   function fireGun() {
@@ -15952,7 +16490,7 @@ async function spawnEnemies(wave, options: any = {}) {
     if (pendingWeaponSwitch || weaponAnim.switchBlend > 0.12) return;
     if (gunState.fireCooldown > 0 || gunState.reloadTimer > 0) return;
     if (thirdPerson.inspecting) { thirdPerson.inspecting = false; thirdPerson.inspectT = 0; }
-    if (darkWaveActive) { fireBlackoutArcCaster(); return; }
+    if (darkWaveActive) return; // the blackout incinerator is driven by updateFlamethrower
     if (!player.unlimitedAmmo && gunState.mag <= 0) {
       if (!gunState.isAutoReloading) {
         sfxEmpty();
@@ -16059,12 +16597,16 @@ async function spawnEnemies(wave, options: any = {}) {
     const pendingDamage = new Map();
     const pendingHeadshot = new Set();
     const pendingHitDir = new Map();
+    // Where each enemy was first struck this shot — damage numbers pop from there.
+    const pendingHitPoint = new Map();
     let shotHitEnemy = false;
     let shotHitSurface = false;
-    // Angels (Warden/Seraph/Cherub — angelModel) are metal, so their bullet
-    // impacts spark instead of bleeding. Captured from the first enemy hit this
-    // shot, matching where shotEnemyImpactTmp is set below.
-    let shotEnemyMetal = false;
+    // Angels (Warden/Seraph/Cherub — angelModel) are metal: their impacts spark
+    // per pellet (capped) inside the loop. Flesh gets one burst per shot, at the
+    // first fleshy hit (shotEnemyImpactTmp).
+    let shotHitFlesh = false;
+    let armorImpacts = 0;
+    const ARMOR_IMPACTS_PER_SHOT = 4;
 
     for (let i = 0; i < gunState.pellets; i++) {
       getActiveMuzzleWorld(muzzleWorldTmp, i);
@@ -16095,6 +16637,7 @@ async function spawnEnemies(wave, options: any = {}) {
           bestEnemyDist = d;
           bestEnemy = enemy;
           bestEnemyPart = shotHitInfoTmp.part;
+          shotBestNormalTmp.copy(shotHitInfoTmp.normal);
         }
       }
 
@@ -16150,15 +16693,37 @@ async function spawnEnemies(wave, options: any = {}) {
       hitDir.z += raycaster.ray.direction.z;
       pendingHitDir.set(enemy, hitDir);
       player.shotsHit++;
-      if (!shotHitEnemy) { shotEnemyImpactTmp.copy(tracerEnd); shotEnemyMetal = !!enemy.angelModel; }
+      // A piercing tracer runs on to the wall, so the entry point is not tracerEnd.
+      const hitPoint = specPhys.pierce
+        ? enemyHitPointTmp.copy(raycaster.ray.origin).addScaledVector(raycaster.ray.direction, bestEnemyDist)
+        : tracerEnd;
+      if (!pendingHitPoint.has(enemy)) pendingHitPoint.set(enemy, hitPoint.clone());
       shotHitEnemy = true;
+      if (!enemy.angelModel) {
+        if (!shotHitFlesh) shotEnemyImpactTmp.copy(hitPoint);
+        shotHitFlesh = true;
+      } else if (armorImpacts < ARMOR_IMPACTS_PER_SHOT) {
+        // Armour: a spark burst at EACH pellet's real entry point, sprayed along
+        // the plate's surface normal and tinted to that angel's energy colour.
+        // It used to be one generic blue burst for the first pellet only, fired
+        // back up the ray from wherever the (misplaced) capsule was.
+        armorImpacts++;
+        const multiPellet = (gunState.pellets || 1) > 1;
+        particleFX?.emit(isHeadshot ? "enemyArmorHeadshot" : "enemyArmorHit", hitPoint, shotBestNormalTmp, {
+          intensity: multiPellet ? 0.55 : currentGun === GUNS.SNIPER ? 1.35 : 1,
+          scale: multiPellet ? 0.72 : currentGun === GUNS.SNIPER ? 1.2 : 1,
+          color: enemy.hitTint,
+        });
+      }
     }
 
     if (shotHitEnemy) {
       sfxHit();
       showHitMarker();
-      impactNormalTmp.copy(raycaster.ray.direction).multiplyScalar(-1);
-      spawnImpactParticles(shotEnemyImpactTmp, impactNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : 3, shotEnemyMetal ? "enemyArmorHit" : "bulletFlesh");
+      if (shotHitFlesh) {
+        impactNormalTmp.copy(raycaster.ray.direction).multiplyScalar(-1);
+        spawnImpactParticles(shotEnemyImpactTmp, impactNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : 3, "bulletFlesh");
+      }
     } else if (shotHitSurface) {
       spawnImpactParticles(shotWallImpactTmp, shotWallNormalTmp, currentGun === GUNS.SHOTGUN ? 2 : null);
     }
@@ -16169,12 +16734,13 @@ async function spawnEnemies(wave, options: any = {}) {
       // so the enemy visually reacts immediately rather than waiting 83ms for the next snapshot.
       if (isCoopGuest() && enemy.isProxy) {
         net.send({ t: "hit", id: myNetId, seq: nextNetSeq(), sentAt: Math.round(performance.now()), i: enemy.netId, dmg: damage, hs: pendingHeadshot.has(enemy) });
-        spawnDamageNumber(enemy, damage, { headshot: pendingHeadshot.has(enemy) });
         enemy.hp = Math.max(0, enemy.hp - damage);
         enemy.aggroed = true;
         enemy.attackPulse = Math.max(enemy.attackPulse, 0.35);
         const hitDir = pendingHitDir.get(enemy);
-        applyEnemyHitFeedback(enemy, damage, pendingHeadshot.has(enemy), hitDir?.x || 0, hitDir?.z || 0);
+        // (applyEnemyHitFeedback spawns the damage number — a second direct
+        // spawnDamageNumber here used to stack two on every guest hit.)
+        applyEnemyHitFeedback(enemy, damage, pendingHeadshot.has(enemy), hitDir?.x || 0, hitDir?.z || 0, { point: pendingHitPoint.get(enemy) });
         if (enemy.hp <= 0 && !enemy._optimisticDead) {
           enemy._optimisticDead = true;
           setEnemyAlive(enemy, false);
@@ -16186,7 +16752,7 @@ async function spawnEnemies(wave, options: any = {}) {
       enemy.aggroed = true;
       enemy.attackPulse = Math.max(enemy.attackPulse, 0.35);
       const hitDir = pendingHitDir.get(enemy);
-      applyEnemyHitFeedback(enemy, damage, pendingHeadshot.has(enemy), hitDir?.x || 0, hitDir?.z || 0);
+      applyEnemyHitFeedback(enemy, damage, pendingHeadshot.has(enemy), hitDir?.x || 0, hitDir?.z || 0, { point: pendingHitPoint.get(enemy) });
       if (enemy.hp <= 0) {
         enemy.killHeadshot = pendingHeadshot.has(enemy);
         if (currentGun === GUNS.SNIPER) {
@@ -16285,7 +16851,6 @@ async function spawnEnemies(wave, options: any = {}) {
       // Co-op guest: forward to host AND apply optimistic local feedback.
       if (isCoopGuest() && enemy.isProxy) {
         net.send({ t: "hit", id: myNetId, seq: nextNetSeq(), sentAt: Math.round(performance.now()), i: enemy.netId, dmg: MELEE_DAMAGE, hs: false });
-        spawnDamageNumber(enemy, MELEE_DAMAGE, { melee: true });
         enemy.hp = Math.max(0, enemy.hp - MELEE_DAMAGE);
         enemy.aggroed = true;
         enemy.attackPulse = Math.max(enemy.attackPulse, 0.5);
@@ -16313,7 +16878,8 @@ async function spawnEnemies(wave, options: any = {}) {
       if (best) {
         getEnemyHitCenter(best, enemyHitCenterTmp);
         impactNormalTmp.copy(enemyShotDirTmp).multiplyScalar(-1);
-        spawnImpactParticles(enemyHitCenterTmp, impactNormalTmp, 3, best.angelModel ? "enemyArmorHit" : "bulletFlesh");
+        if (best.angelModel) particleFX?.emit("enemyArmorHit", enemyHitCenterTmp, impactNormalTmp, { color: best.hitTint });
+        else spawnImpactParticles(enemyHitCenterTmp, impactNormalTmp, 3, "bulletFlesh");
       }
       // Resolve deaths after applying all damage so multi-kills register.
       // Stays on enemies[] (not the live archetype): killEnemy() below removes the
@@ -16504,7 +17070,7 @@ async function spawnEnemies(wave, options: any = {}) {
         // steady-on below if no cutscene plays.
         lightingState.flashlightOn = true;
         lightingState.flashlightBoot = { active: false, t: 0 };
-        addKillFeed("ARC CASTER ONLINE — UNLIMITED DISCHARGE");
+        addKillFeed("INCINERATOR ONLINE — UNLIMITED FUEL");
         addKillFeed("BLACKOUT — THEY HUNT FASTER. ×2 XP.");
         announce("vo_wave_start_final"); // the ominous announcer read
       } else if (game.wave > 10 && (game.wave - 1) % 10 === 0) {
@@ -16611,7 +17177,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function tryReload() {
-    if (darkWaveActive) return; // the blackout arc caster has no magazine
+    if (darkWaveActive) return; // the blackout incinerator has no magazine
     if (pendingWeaponSwitch) return;
     if ((player.nullLockTimer || 0) > 0) return; // Null Field: reload suppressed
     if (gunState.reloadTimer > 0) return;
@@ -18936,7 +19502,7 @@ async function spawnEnemies(wave, options: any = {}) {
           }
         }
 
-        if (auraT > 0) {
+        if (auraT > 0 && !blackoutGodMode()) {
           player.auraTimer = 0.22;
           if (auraDef.type === "slow") auraSpeedMul = Math.min(auraSpeedMul, 1 - auraT * 0.35);
           if (auraDef.type === "drain") {
@@ -19451,8 +20017,9 @@ async function spawnEnemies(wave, options: any = {}) {
     const flashlightWaveMul = darkWaveActive ? .72 : 0.2;
     // Cinematic's grade already lifts glow/bloom around bright sources, so the same
     // raw intensity read as blown-out under it — 30% dimmer keeps the beam readable
-    // instead of flaring. Cinematic-only: unaffected outside cinematic mode.
-    const flashlightCinematicMul = cinematicState.enabled ? 0.7 : 1;
+    // instead of flaring. Cinematic-only: unaffected outside cinematic mode. Not in a
+    // blackout, where the beam is effectively the only light in the world.
+    const flashlightCinematicMul = cinematicState.enabled && !darkWaveActive ? 0.7 : 1;
     flashlight.intensity = flashlightLevel > 0
       ? (60 + flashlightFlicker) * flashlightLevel * flashlightWaveMul * flashlightCinematicMul
       : 0;
@@ -19474,8 +20041,22 @@ async function spawnEnemies(wave, options: any = {}) {
     const flashLightMul = Number.isFinite(GUN_SPECS[currentGun]?.muzzleFlashScale) ? GUN_SPECS[currentGun].muzzleFlashScale : 1;
     const rawGunFlashIntensity = Math.max(lightingState.shootFlash * 48, flashT * (currentGun === GUNS.SHOTGUN ? 160 : currentGun === GUNS.SNIPER ? 110 : currentGun === GUNS.RIFLE ? 95 : 95 * flashLightMul));
     const MAX_GUN_FLASH_INTENSITY = 85;
+    // While the incinerator is firing, gunFlash IS the fire light: warm, flickering
+    // and parked partway down the jet rather than at the muzzle, so the ground and
+    // anything standing in the fire actually get lit. Reusing this light instead of
+    // adding one is not an optimisation, it is the rule — a new light at runtime
+    // relinks every shader in the scene (see CLAUDE.md).
+    if (flameState.lightActive && flameState.light.intensity > 0.01) {
+      gunFlash.intensity = Math.min(flameState.light.intensity, MAX_GUN_FLASH_INTENSITY);
+      gunFlash.color.setHex(FLAMETHROWER_CONFIG.lighting.color);
+      gunFlash.distance = FLAMETHROWER_CONFIG.lighting.distance;
+      gunFlashMuzzleTmp.set(flameState.light.x, flameState.light.y, flameState.light.z);
+      gunFlashMuzzleTmp.applyMatrix4(camera.matrixWorldInverse);
+      gunFlash.position.copy(gunFlashMuzzleTmp);
+    } else {
     gunFlash.intensity = Math.min(rawGunFlashIntensity, MAX_GUN_FLASH_INTENSITY);
     gunFlash.color.setHex(baseGunColorHex);
+    gunFlash.distance = GUN_FLASH_DISTANCE;
     // In TP mode, reposition the flash light to the muzzle world position so it
     // illuminates from in front of the player, not from inside the camera/model.
     if (thirdPerson.enabled && thirdPerson.weapon?.muzzle && gunFlash.intensity > 0) {
@@ -19485,8 +20066,12 @@ async function spawnEnemies(wave, options: any = {}) {
     } else {
       gunFlash.position.set(0.12, -0.05, -0.45);
     }
+    }
     const _flashlightExposureBump = flashlightEnabled ? 0.22 * flashlightLevel : 0;   // matches shootFlash*0.2 peak, slightly brighter; scales with the boot
-    const nextExposure = getBaseExposure() + Math.max(lightingState.shootFlash * 0.2, flashT * 0.12, lightingState.lightningFlash * 0.22, _flashlightExposureBump);
+    // Small on purpose: exposure lifts the fire itself too, and that is what
+    // turned the stream into a white fireball.
+    const _flameExposureBump = flameState.lightActive ? FLAMETHROWER_CONFIG.lighting.exposureBump * flameState.throttle * flameState.light.flicker : 0;
+    const nextExposure = getBaseExposure() + Math.max(lightingState.shootFlash * 0.2, flashT * 0.12, lightingState.lightningFlash * 0.22, _flashlightExposureBump, _flameExposureBump);
     if (Math.abs(nextExposure - renderer.toneMappingExposure) > 0.005) renderer.toneMappingExposure = nextExposure;
 
     if (gunState.muzzleTimer > 0) {
@@ -21256,8 +21841,8 @@ async function spawnEnemies(wave, options: any = {}) {
   function applyCoopEnemyDamage(msg) {
     if (gameMode !== "coop" || msg.target !== myNetId) return;
     const dmg = Math.max(0, msg.dmg || 0);
-    if (dmg <= 0) return;
-    damagePlayer(dmg, { staminaDamage: Math.max(0, msg.stamina || 0) });
+    if (dmg <= 0 || blackoutGodMode()) return;
+    damagePlayer(dmg, { staminaDamage: Math.max(0, msg.stamina || 0), sx: msg.ex, sz: msg.ez });
     cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.42);
     player.killStreak = 0;
     updateStreak();
@@ -22253,6 +22838,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const attacker = remotePlayers.get(fromId);
     const ax = attacker?.root?.position?.x ?? attacker?.target?.x;
     const az = attacker?.root?.position?.z ?? attacker?.target?.z;
+    damageIndicators.hit(ax, az, dmg);
     const dir = Number.isFinite(ax) && Number.isFinite(az) ? computeDamageDir(ax, az) : null;
     showDamageFlash({ opacity: hs ? 0.82 : 0.62, duration: hs ? 0.32 : 0.22, danger: true, dir });
     sfxDamage();
@@ -22464,6 +23050,112 @@ async function spawnEnemies(wave, options: any = {}) {
 
   // Fire an effect a few metres in front of the camera — for eyeballing preset
   // tuning without having to line up a real shot. e.g. __rbFx("explosion", 6).
+  // Blackout incinerator diagnostics: trigger state, jet throttle, live audio
+  // level and how many enemies are currently burning.
+  // Fire quality tier at runtime: __rbFlameQuality("low" | "medium" | "high").
+  window.__rbFlameQuality = (q) => flameJetFX?.setQuality(q) ?? null;
+  // Live-tune the fire in the running game (deep-merged into FLAMETHROWER_CONFIG,
+  // same as __fxLab.set in src/fx_lab.html), e.g.
+  //   __rbFlameTune({ flame: { particle: { occlusion: 1 } }, lighting: { intensity: 24 } })
+  // Not persisted: copy the values you like into modules/flame_jet.ts.
+  window.__rbFlameTune = (patch = {}) => {
+    const merge = (dst, src) => {
+      for (const [k, v] of Object.entries(src)) {
+        if (v && typeof v === "object" && !Array.isArray(v) && dst[k] && typeof dst[k] === "object") merge(dst[k], v);
+        else dst[k] = v;
+      }
+    };
+    merge(FLAMETHROWER_CONFIG, patch);
+    flameJetFX?.applyConfig();
+    return FLAMETHROWER_CONFIG;
+  };
+  let flameCaptureStats = null;
+  window.__rbFlame = function (simulateFrames = 0, capture = false) {
+    // Continuous-effect tuning aid. A jet only looks like a jet because many
+    // frames of particles coexist, so a screenshot taken at headless frame rates
+    // shows one puff and tells you nothing. Stepping the emitter and the particle
+    // system together builds the real steady state inside a single frame.
+    if (simulateFrames > 0) {
+      const step = 1 / 60;
+      const wasDown = mouse.down;
+      mouse.down = true;
+      for (let i = 0; i < simulateFrames; i++) {
+        updateFlamethrower(step);
+        particleFX?.update(step);
+      }
+      mouse.down = wasDown;
+    }
+    // Render and read back in this SAME task. The next real frame would age the
+    // jet by a whole headless frame time (~0.4 s) -- longer than most of these
+    // particles live -- so a screenshot taken after it shows an empty sky.
+    if (capture) {
+      // Whole-frame renderer stats: info auto-resets per render() call, and
+      // the composer issues several, so count across the entire frame.
+      const ri = renderer.info;
+      const autoReset = ri.autoReset;
+      ri.autoReset = false;
+      ri.reset();
+      renderScene();
+      flameCaptureStats = {
+        calls: ri.render.calls, triangles: ri.render.triangles,
+        geometries: ri.memory.geometries, textures: ri.memory.textures,
+      };
+      ri.autoReset = autoReset;
+      try { return renderer.domElement.toDataURL("image/png"); } catch (_e) {}
+    }
+    const info = {
+      blackout: darkWaveActive,
+      throttle: +flameState.throttle.toFixed(3),
+      firing: flameState.wasFiring,
+      audioLevel: flameAudio ? +flameAudio.level.toFixed(3) : null,
+      burning: enemies.filter((e) => e.alive && (e.burnTimer || 0) > 0).length,
+      particles: particleFX?.count() ?? 0,
+      residuePatches: flameJetFX?.residueCount() ?? 0,
+      // Geometry of the last jet frame: where it left the gun, which way, how far,
+      // where the shared fire light sat and what surface it landed on.
+      muzzle: flameMuzzleTmp.toArray().map((v) => +v.toFixed(3)),
+      dir: flameDirTmp.toArray().map((v) => +v.toFixed(3)),
+      reach: +(flameFrame.reach || 0).toFixed(2),
+      camera: camera.getWorldPosition(new THREE.Vector3()).toArray().map((v) => +v.toFixed(3)),
+      light: flameState.lightActive
+        ? { pos: [flameState.light.x, flameState.light.y, flameState.light.z].map((v) => +v.toFixed(2)), intensity: +flameState.light.intensity.toFixed(1) }
+        : null,
+      impact: flameImpactValid ? flameImpactTmp.toArray().map((v) => +v.toFixed(2)) : null,
+      jet: flameJetFX?.stats?.() ?? null,
+      // Renderer totals for the last __rbFlame(n, true) frame (whole frame).
+      lastCapture: flameCaptureStats,
+      // How the fire is composited: through the post composer (HDR sum, then
+      // one tone map) or straight to the canvas (tone-mapped per sprite).
+      render: {
+        composer: !!((cinematicState.enabled || antialiasState.enabled) && composer && rendererBackend !== "webgpu"),
+        cinematic: !!cinematicState.enabled,
+        exposure: +renderer.toneMappingExposure.toFixed(3),
+        toneMapping: renderer.toneMapping,
+      },
+    };
+    console.log(`flame blackout=${info.blackout} throttle=${info.throttle} burning=${info.burning} residue=${info.residuePatches}`);
+    return info;
+  };
+
+  // Relay objective diagnostics: where the randomised beacon landed, how far it
+  // is, and the recent sites the placement weighting is currently avoiding.
+  window.__rbRelay = function () {
+    const objective = activeRelay();
+    const info = {
+      active: !!objective,
+      wave: game.wave,
+      x: objective ? +objective.x.toFixed(2) : null,
+      z: objective ? +objective.z.toFixed(2) : null,
+      distance: objective ? +Math.hypot(yaw.position.x - objective.x, yaw.position.z - objective.z).toFixed(1) : null,
+      progress: objective ? +objective.progress.toFixed(2) : null,
+      contested: objective?.contested ?? null,
+      waypointVisible: relayWaypointEl ? relayWaypointEl.style.display !== "none" : false,
+      recentSites: recentRelaySites.map((r) => ({ x: +r.x.toFixed(1), z: +r.z.toFixed(1) })),
+    };
+    console.log(`relay wave=${info.wave} at ${info.x},${info.z} dist=${info.distance}`);
+    return info;
+  };
+
   window.__rbFx = function (kind = "bulletWall", distance = 4, opts = undefined) {
     const dir = camera.getWorldDirection(new THREE.Vector3());
     const at = camera.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, distance);
@@ -22831,7 +23523,7 @@ async function spawnEnemies(wave, options: any = {}) {
       player.velZ = (player.velZ || 0) + nz * push;
       player.jumpVel = Math.max(player.jumpVel || 0, 3.6 * falloff);
       player.grounded = false;
-      const died = damagePlayer(GRENADE_PLAYER_DAMAGE * falloff);
+      const died = damagePlayer(GRENADE_PLAYER_DAMAGE * falloff, { sx: x, sz: z });
       cameraFX.damageShake = Math.min(1, cameraFX.damageShake + 0.7 * falloff);
       showDamageFlash({ dir: computeDamageDir(x, z) });
       sfxDamage();
@@ -22906,6 +23598,17 @@ async function spawnEnemies(wave, options: any = {}) {
         updateGrenades(dt);
         updateExplosionFlashes(dt);
         updateWeaponSkinShader(dt);
+        damageIndicators.update(dt, yaw.position.x, yaw.position.z, yaw.rotation.y, game.state === "playing" && !cutscene.active && !player.pvpDead);
+
+        // The flame voice is sustained, so it must be silenced by anything that
+        // stops updateFlamethrower from running (pause, death, wave transition)
+        // or it would keep roaring over the pause menu.
+        if (game.state !== "playing" && flameAudio) {
+          flameState.throttle = 0;
+          flameState.wasFiring = false;
+          flameState.lightActive = false;
+          setFlameAudio(0, false);
+        }
 
         if (game.state === "playing") {
           const _pf0 = performance.now();
@@ -22965,6 +23668,11 @@ async function spawnEnemies(wave, options: any = {}) {
           updateHazardVisuals(dt, now);
           updateDroneAudio(dt);
           const _pf3 = performance.now();
+          // The incinerator emits from the muzzle's CURRENT pose, so it runs
+          // after updateThirdPersonCharacter has posed the weapon (earlier, the
+          // stream left from where the gun was last frame), and right before
+          // updateParticles, which is the order its sub-frame spawns expect.
+          updateFlamethrower(dt);
           updateParticles(dt);
           const _pf4 = performance.now(); frameProfileAccum.particles += _pf4 - _pf3;
           updateDamageNumbers(dt);
@@ -23055,6 +23763,7 @@ async function spawnEnemies(wave, options: any = {}) {
     showTransitionCover(); // hide the world/HUD until the restart terminal/intro (or gameplay) takes over
     try {
       particleFX?.clear();
+      flameJetFX?.clearResidue();
       abilityImpacts?.clear();
 
       for (const t of tracers) {
@@ -23243,6 +23952,9 @@ async function spawnEnemies(wave, options: any = {}) {
       // Test/diagnostic: force the lighting state of a given wave (10 → blackout
       // fire sky + repositioned ember sun, anything else → golden hour).
       setWaveLighting: (w) => { applyWaveLighting(w); return { darkWaveActive, sun: window.__extSun?.position.toArray() }; },
+      // Re-roll the relay objective in place, so a test can sample the
+      // randomised placement without cycling whole waves.
+      rollRelay: () => { beginRelay(game.wave); return window.__rbRelay(); },
       // Blackout cutscene test hooks: force-start (applies blackout lighting
       // first so phase A frames the fire dome), and inspect live state.
       startIntroCutscene: () => startIntroCutscene(true),
@@ -23466,6 +24178,28 @@ async function spawnEnemies(wave, options: any = {}) {
         const flat = Math.max(0.0001, Math.hypot(dx, dz));
         yaw.rotation.y = Math.atan2(-dx, -dz);
         pitch.rotation.x = -Math.atan2(dy, flat);
+        // Refine from the camera itself: shots are cast from the camera's world
+        // matrix, and the over-shoulder camera sits ~0.8 m right of the root, so
+        // root-based aim alone can pass beside a side-on target.
+        const camPos = new THREE.Vector3(), camDir = new THREE.Vector3();
+        const elevation = () => {
+          yaw.updateMatrixWorld(true);
+          camera.getWorldDirection(camDir);
+          return Math.atan2(camDir.y, Math.hypot(camDir.x, camDir.z));
+        };
+        // Which way does +pitch.x tilt the view? Measure it, don't assume it.
+        const e0 = elevation();
+        pitch.rotation.x += 0.01;
+        const pitchSign = elevation() >= e0 ? 1 : -1;
+        pitch.rotation.x -= 0.01;
+        for (let k = 0; k < 5; k++) {
+          const elev = elevation();
+          camera.getWorldPosition(camPos);
+          const tx = center.x - camPos.x, ty = center.y - camPos.y, tz = center.z - camPos.z;
+          yaw.rotation.y += angleDelta(Math.atan2(-camDir.x, -camDir.z), Math.atan2(-tx, -tz));
+          pitch.rotation.x += pitchSign * (Math.atan2(ty, Math.hypot(tx, tz)) - elev);
+        }
+        yaw.updateMatrixWorld(true);
         return true;
       },
       fireAtNearest: () => {
@@ -23474,13 +24208,101 @@ async function spawnEnemies(wave, options: any = {}) {
         fireGun();
         return true;
       },
-      forceDamage: (amount = 9999) => {
+      forceDamage: (amount = 9999, options = {}) => {
         player.waveInvulnerabilityTimer = 0;
-        if (damagePlayer(amount)) endGame("dead");
+        if (damagePlayer(amount, options)) endGame("dead");
         updateHUD(0);
         return { hp: player.hp, state: game.state };
       },
       getWaveProtection: () => player.waveInvulnerabilityTimer || 0,
+      isGodMode: () => blackoutGodMode(),
+      // Shoots probe rays from the camera at each live angel: at sampled vertices
+      // of its rendered (skinned) body — which should hit — and at points in the
+      // empty air under it — which should miss — plus one at the head bone.
+      probeAngelHitboxes: (samples = 60) => {
+        const out = [];
+        const v = new THREE.Vector3(), dir = new THREE.Vector3(), cam = new THREE.Vector3();
+        const info = { part: null, normal: new THREE.Vector3() };
+        scene.updateMatrixWorld(true);
+        camera.getWorldPosition(cam);
+        for (const enemy of liveEnemies) {
+          const body = enemy.mesh.userData.wardenAnim?.body;
+          if (!enemy.angelModel || !body) continue;
+          const pos = body.geometry.attributes.position;
+          const skinIndex = body.geometry.attributes.skinIndex;
+          const bones = body.skeleton.bones;
+          let bodyHits = 0, bodyShots = 0, minY = Infinity, maxY = -Infinity;
+          for (let i = 0, guard = 0; i < samples && guard < samples * 4; guard++) {
+            const vi = Math.floor(Math.random() * pos.count);
+            // The halo is a hair-thin ring on its own bone, deliberately not a hitbox.
+            if (bones[skinIndex.getX(vi)]?.name === "crown") continue;
+            i++;
+            body.getVertexPosition(vi, v);
+            v.applyMatrix4(body.matrixWorld);
+            minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+            dir.copy(v).sub(cam).normalize();
+            bodyShots++;
+            if (getEnemyShotDistance(enemy, cam, dir, 200, GUNS.RIFLE, info) < Infinity) bodyHits++;
+          }
+          // Air under the hovering body: from the floor up to 0.3 m below its TRUE
+          // lowest vertex (a full pass — random samples can miss the claw tips).
+          let lowY = Infinity;
+          for (let i = 0; i < pos.count; i++) {
+            body.getVertexPosition(i, v);
+            lowY = Math.min(lowY, v.applyMatrix4(body.matrixWorld).y);
+          }
+          let airHits = 0, airShots = 0;
+          const c = enemy.mesh.position;
+          for (let i = 0; i < 12; i++) {
+            const y = 0.15 + Math.random() * Math.max(0, lowY - 0.45);
+            if (y > lowY - 0.3) continue;
+            v.set(c.x + (Math.random() - 0.5) * 0.4, y, c.z + (Math.random() - 0.5) * 0.4);
+            dir.copy(v).sub(cam).normalize();
+            airShots++;
+            // Phantom = the registered entry point itself is in the air below the
+            // body. (A ray that clips the body's front on its way down is a real hit.)
+            const d = getEnemyShotDistance(enemy, cam, dir, 200, GUNS.RIFLE, info);
+            if (d < Infinity && cam.y + dir.y * d < lowY - 0.15) airHits++;
+          }
+          // Head: aim at head-bone vertices, raycast the RENDERED skinned mesh, and
+          // where the first surface hit really is the head, the shot must score
+          // "head". (When an arm or a forward-pitched chest is in front, it isn't.)
+          let headVisible = 0, headAgree = 0, headMiss = null;
+          const headRay = new THREE.Raycaster();
+          // The pauldrons are open half-domes with front-face materials, so a ray
+          // from below slips up through the hollow shoulder to the head. Armour is
+          // solid for gameplay: raycast double-sided (restored below, before any
+          // render, so no program changes).
+          const bodyMats = Array.isArray(body.material) ? body.material : [body.material];
+          const savedSides = bodyMats.map((m) => m.side);
+          bodyMats.forEach((m) => { m.side = THREE.DoubleSide; });
+          for (let vi = 0; vi < pos.count && headVisible < 12; vi += 3) {
+            if (bones[skinIndex.getX(vi)]?.name !== "head") continue;
+            body.getVertexPosition(vi, v);
+            v.applyMatrix4(body.matrixWorld);
+            dir.copy(v).sub(cam).normalize();
+            headRay.set(cam, dir);
+            const first = headRay.intersectObject(body, false)[0];
+            if (!first?.face || bones[skinIndex.getX(first.face.a)]?.name !== "head") continue;
+            headVisible++;
+            const d = getEnemyShotDistance(enemy, cam, dir, 200, GUNS.RIFLE, info);
+            if (info.part === "head") headAgree++;
+            else if (!headMiss) {
+              const chest = enemy.mesh.userData.wardenAnim.rig.chest;
+              const toChest = (p) => chest.worldToLocal(p.clone()).toArray().map((n) => +n.toFixed(2));
+              headMiss = { part: info.part, shotD: +d.toFixed(2), meshD: +first.distance.toFixed(2),
+                entryInChest: toChest(cam.clone().addScaledVector(dir, d)), meshHitInChest: toChest(first.point),
+                camInChest: toChest(cam) };
+            }
+          }
+          bodyMats.forEach((m, i) => { m.side = savedSides[i]; });
+          const ref = enemy as any;
+          out.push({ type: enemy.typeName, bodyHits, bodyShots, airHits, airShots, headVisible, headAgree, headMiss,
+            pose: { phaseOut: +(ref.phaseOut || 0).toFixed(2), megaBlast: +(ref.megaBlastTimer || 0).toFixed(2), emp: +(ref.empWindUp || 0).toFixed(2), aiPhase: ref.aiPhase || null, windUp: +(ref.lightningWindUp || 0).toFixed(2) },
+            bodyMinY: +lowY.toFixed(2), bodyMaxY: +maxY.toFixed(2), distance: +Math.hypot(c.x - cam.x, c.z - cam.z).toFixed(1) });
+        }
+        return out;
+      },
       isBlackoutHudDisrupted: () => document.body.classList.contains("blackout-hud-disrupted"),
       setUnlimitedHealth: (enabled = true) => {
         setUnlimitedHealth(!!enabled);
@@ -24333,7 +25155,19 @@ async function spawnEnemies(wave, options: any = {}) {
       thirdPerson.root.visible = true;
       applyViewModeVisibility();
     }
+    // compile() alone misses the final render-state variants of transparent
+    // instanced shards, bolt vertices, and point halos. Draw one real strike
+    // behind the loading screen with the final shadow/light state established.
+    abilityImpacts.spawn(yaw.position.x, .1, yaw.position.z - 2, 0x8bdfff, 2);
+    abilityImpacts.update(.1);
+    spawnLightningEffect(
+      new THREE.Vector3(yaw.position.x, 3, yaw.position.z - 2),
+      new THREE.Vector3(yaw.position.x, .1, yaw.position.z - 2),
+      1, { electric: true, rings: true }
+    );
     renderScene();
+    updateLightningEffects(1);
+    abilityImpacts.clear();
     for (const { enemy, mesh, hpBar } of primedVisibility) {
       enemy.mesh.visible = mesh;
       if (enemy.hpBar?.mesh) enemy.hpBar.mesh.visible = hpBar;
@@ -24625,5 +25459,3 @@ async function spawnEnemies(wave, options: any = {}) {
 
   bootGame();
 })();
-
-

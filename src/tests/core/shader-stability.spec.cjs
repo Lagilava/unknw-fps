@@ -33,6 +33,7 @@ test("starting a mission compiles no new shaders and keeps the light count fixed
   await page.waitForFunction(() => !!window.__rbTest && !!window.__rbCountLights, { timeout: 120000 });
 
   const progsAtMenu = await page.evaluate(() => window.__progs);
+  const keysAtMenu = await page.evaluate(() => window.__rbPrograms());
   const lightsAtMenu = await page.evaluate(() => window.__rbCountLights().PointLight);
 
   await page.locator("#startBtn").click();
@@ -51,6 +52,7 @@ test("starting a mission compiles no new shaders and keeps the light count fixed
 
   console.log("point lights at menu: %d, during play: %s", lightsAtMenu, [...new Set(lightSamples)].join(","));
   console.log("GL programs created after clicking New Mission: %d", newPrograms);
+  if (newPrograms) console.log('New program keys:', await page.evaluate(before => window.__rbPrograms().filter(key => !before.includes(key)), keysAtMenu));
 
   expect(new Set(lightSamples).size).toBe(1);
   expect(lightSamples[0]).toBe(lightsAtMenu);

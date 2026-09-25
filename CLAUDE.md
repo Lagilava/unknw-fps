@@ -81,6 +81,134 @@ Three.js is imported as an ES module inside `three_fps_game.js` (Vite bare impor
   `?sky=<basename>` URL param previews any hdr in assets/hdri.
 - **Blackout waves (wave%10)**: sky dome hidden, background/fog black, sun/hemi starved,
   and an animated **fire sky dome** (`buildFireSkyDome`) shows a burning horizon.
+  The equipped weapon becomes the **incinerator** (flamethrower) — see below.
+  **The player is in god mode for the whole blackout wave** (`blackoutGodMode()`:
+  `damagePlayer`, `applyCoopTargetDamage` — returns "no local hit", so no flash /
+  debuff / streak reset — the co-op guest `edamage` handler, and auras). Test hook
+  `__rbTest.isGodMode()`.
+- **Blackout incinerator**: during a blackout the weapon is a continuous
+  flamethrower, not an inventory item (no mag, no reload, locked weapon switch).
+  `fireGun()` steps aside entirely; `updateFlamethrower(dt)` owns the trigger.
+  The stream, its impact splash, residue, burn and pilot effects and its light
+  all live in **`modules/flame_jet.ts`**, which **`src/fx_lab.html`** drives
+  against the same particle system — tune the look in the lab, never in the
+  game. **Every fire number is in `FLAMETHROWER_CONFIG`** (particle_fx.ts holds
+  no flame presets; flame_jet registers them via `definePreset`/`defineEffect`).
+  - The stream is **thrown from the muzzle**: real projectiles at ~25 m/s with
+    drag, spawned with sub-frame interpolation of the muzzle's position/aim, so
+    it starts narrow and hot and widens, cools and breaks up downstream, and a
+    swing bends it like a hose. (It used to SEED particles at their final spots
+    along the ray — nothing travelled, and from the camera 2 m behind the nozzle
+    the whole depth stacked into a white fireball.) Smoke and embers fly with
+    it invisibly (`fadeInAt`) and appear only downstream. Surfaces cost nothing
+    per particle: each gets a closed-form cutoff age at which it stalls.
+  - `updateFlamethrower` runs **after** `updateThirdPersonCharacter` (so it
+    reads this frame's muzzle) and **right before** `updateParticles` — the
+    order `spawn()`'s sub-frame placement assumes.
+  - Quality tiers (`FLAMETHROWER_CONFIG.quality`, live-particle budgets):
+    low/medium/high ≈ 90/165/270 live particles. Picked from the device tier;
+    override with `?fireQuality=` or `__rbFlameQuality(q)`. Live-tune the
+    running game with `__rbFlameTune({...})` (not persisted). Gameplay does not
+    follow the particles: damage stays one cone test on a 15 Hz tick. Enemies get a
+  `burnTimer` DoT that keeps resolving after the lights come back. Sound is a
+  sustained synth voice (three LFO-modulated noise bands) whose gain and cutoffs
+  track the same throttle the visuals do. Diagnose with `window.__rbFlame()`;
+  `__rbFlame(frames)` steps emitter + particles together to build a real 60 fps
+  steady state inside one frame, and a second `true` renders and returns a PNG
+  data URL in the same task, recording whole-frame renderer stats in
+  `.lastCapture`. The info also reports muzzle/dir/reach/camera, the fire light,
+  the impact point, per-component live counts (`.jet`) and the render path
+  (`.render`). Tests: `src/tests/weapons/blackout-flamethrower.spec.cjs`,
+  `src/tests/weapons/fx-lab.spec.cjs` (asserts the stream travels, stays
+  attached to the nozzle, keeps smoke downstream, and respects tier budgets).
+- **Residue fire**: every surface contact deposits a burn patch (`flame_jet.ts`
+  `deposit`/`updateResidue`, pooled, `FLAMETHROWER_CONFIG.residue`, live cap per
+  quality tier) that keeps emitting
+  `flameResidue` for ~1–2 s after the jet leaves; ceilings excluded, no lights.
+  `updateResidue` runs at the top of `updateFlamethrower`, before any early-out.
+- **Cinematic grade in a blackout**: `CINEMATIC_BLACKOUT_GRADE` neutralises the
+  daytime curve (black crush, contrast, darken, CSS brightness 0.74, most of the
+  shadow tint) — stacked on a ~0.15-luma frame it rendered pitch black / green.
+  `applyWaveLighting` re-applies it on every blackout toggle (uniforms only).
+- **The fire lights the world by REUSING `gunFlash`.** While the jet runs, that
+  existing permanent PointLight (never a shadow caster) is recoloured, gently
+  flickered and parked ~3 m down the stream instead of at the muzzle. This is not an optimisation — creating a
+  light for the fire would relink every shader in the scene (see the light-count
+  invariant below). The blackout exposure also lifts with the jet's flicker.
+
+### `src/fx_lab.html` — the VFX lab (dev-only, like `dev.html`)
+
+A continuous effect **cannot be judged from one still at one angle**, and the
+game needs ~40 s of boot to reach a blackout wave. The lab loads the real
+`particle_fx.ts` + `flame_jet.ts` into a small dark room with lit blocks and
+steps everything by hand, so a headless browser at 2 fps produces the same image
+as a desktop at 144. Iteration is ~3 s instead of ~90 s.
+`http://127.0.0.1:8000/src/fx_lab.html` (via `src/tests/static-server.cjs`).
+- **It renders through the game's pipeline by default** (`__fxLab.pipeline("game")`:
+  HDR composer → bloom at the cinematic values → output tone map, at blackout
+  exposure 1.3). The game sums additive fire in linear HDR and tone-maps once;
+  the canvas path (`"direct"`) tone-maps each sprite and shows saturated colour
+  the game washes to peach. The fire was once tuned on the wrong one.
+- The lab does NOT include the cinematic grade (bleach-bypass, halation); that
+  global look desaturates bright fire further. Check in-game with the
+  `#cinematic-toggle` on and off.
+- `__fxLab.step(n)` / `settle(n)` — advance fixed 60 fps frames
+- `__fxLab.shot(view, frames)` — render + read back a PNG **in the same task**
+  (the next real frame would age the jet past most particles' lifetimes)
+- `__fxLab.view(name)` — `gameplay`, `side`, `threeQuarter`, `top`, `headOn`,
+  `closeLow`; a cone fired away from the viewer needs all of them. `gameplay`
+  is the real third-person geometry measured in-game (lens 1.7 m behind, 0.8 m
+  right of, 0.4 m above the muzzle).
+- `__fxLab.set({...})` — live-tune `FLAMETHROWER_CONFIG` (deep merge + re-register)
+- `__fxLab.quality(q)`, `setWall(d)` (0 = open air), `motion({vx, vz, yawRate})`
+  (walk / strafe / whip-pan while firing), `stats()` (per-component counts)
+- `__fxLab.atlasSheet()` — labelled 4×3 contact sheet of every particle mask.
+  When a stray silhouette shows up, this identifies the tile in one shot instead
+  of guessing which preset is responsible. It found two real bugs.
+
+### particle_fx gotchas (read before authoring any effect)
+
+Earned the hard way on the flamethrower:
+1. `emit()`'s `scale` multiplies particle **speed** as well as size, so it cannot
+   grow an effect along its length — it accelerates the far end into an
+   exploding cloud.
+2. `hard` is a falloff **exponent**, applied as `pow(a, hard*0.5)` and only to
+   shape 0 and the fire masks (8–11). **Below ~2 it flattens a mask outward**
+   toward its square sprite bounds: authored silhouettes dissolve and you see the
+   rotated quad as a diamond edge. Above 2 it tightens into a bright core.
+3. **Shapes 1 and 8 are the only masks the vertex shader rotates to the
+   particle's screen-space velocity.** They are the only way to get marks that
+   follow the flow — which is most of what separates fire from drifting blobs.
+4. **Mask silhouettes must stay amorphous.** Perimeter noise that is large
+   relative to the radius makes harmonics line up into arms/points, and since
+   one mask is reused hundreds of times the viewer reads a flock of identical
+   birds. Shape 4's periodic `sin()` grain likewise tiles into a honeycomb once a
+   particle is metres across. Presets that use the ragged blob set `shapeAlt` so
+   each particle picks between two variants.
+5. There is a **near-camera alpha fade** (`smoothstep(0.30, 1.90, -mv.z)` in the
+   vertex shader). Close up a sprite fills the screen and the viewer reads the
+   mask instead of the effect; this matters here because the third-person camera
+   sits only a few metres behind the muzzle.
+6. The GLSL lives in template literals — **no backticks in shader comments.**
+7. **The "additive" layer is premultiplied** (`One, OneMinusSrcAlpha`); a
+   preset's `occlusion` (0..1) says how much it also covers what is behind it.
+   0 is exactly the old additive result (sparks, energy). Fire needs ~1: pure
+   additive flames stacked in the game's HDR composer sum past 1 and the grade
+   washes them white; "over" blending converges to `colour / occlusion`.
+8. Continuous emitters use `spawn()` (one particle, explicit velocity, sub-frame
+   `age`, surface `cut` age, zero allocation). A spawned particle's FIRST
+   `update()` does not move or age it — it is already where it belongs for this
+   frame's render; advancing it would open a speed×dt gap at the emitter.
+9. Other per-preset knobs: `colorMid` (3-stop colour ramp), `sizePow` (growth
+   curve), `fadeInAt` (invisible until a life fraction), `turb` (coherent
+   turbulence that grows with age), `cutKeep`/`cutLife`, `tag` (live counts).
+- **Relay objective placement is randomised.** `beginRelay` floods the whole
+  reachable region and weight-samples a cell from a depth band, penalising the
+  last two relay sites, instead of taking whatever cell BFS visited last. A
+  screen-space **waypoint** (`updateRelayWaypoint`, a JS-created `#relay-waypoint`
+  so both HTML entry points get it) tracks the portal, pins to the screen edge
+  with a bearing caret when off-screen, and shows distance / upload %.
+  Diagnose with `window.__rbRelay()`.
 - **Per-enemy AI brains** (`updateEnemyBrain` dispatcher): each type has a specialised
   brain writing `aiAdvanceMul/aiLateralMul/aiRetreat/aiPhase`; the Warden rig poses per
   aiPhase in `storm_warden.js`. Clones move via a virtual-WASD resolver mirroring the
@@ -273,6 +401,26 @@ my = floor(z / CELL + MAP_ANCHOR_H/2)  // z: -38 → 122 maps to my: 0 → 40
 
 **Important:** Clear `pendingEnemyDeaths.length = 0` before `spawnEnemies()` on wave 1 restart, or stale death records corrupt kill counts.
 
+**Angel hit volumes are bone-anchored** (Warden/Seraph/Cherub, `createDroneMesh`
+angel branch). The rig is measured grounded at build time but hovers
+`STORM_WARDEN_HOVER` rig units up in play, pitches, scatters its arms/head, and has
+no legs — box-derived capsules sat under the body (phantom hits in the air below,
+head shots sailing over). Each capsule is `{ bone, a, b, boneRadius, perpW }` in
+bone space; `getEnemyShotDistance` resolves it through `bone.matrixWorld` and scales
+the radius by the bone's LIVE smallest perpendicular stretch (`boneWorldScale`) —
+never bake a scale at build time: the model editor rescales the root there and the
+gameplay pulse overwrites `mesh.scale` later. `getEnemyHitCenter` uses the chest
+bone (`hitCenterBone`). Verify with `__rbTest.probeAngelHitboxes()` /
+`src/tests/ai/angel-hitboxes.spec.cjs` (body coverage, no hits under the body,
+visible head → "head").
+
+**Hit feedback:** armour (angel) impacts emit `enemyArmorHit` /
+`enemyArmorHeadshot` per pellet (capped at 4/shot) at the real entry point, along
+the capsule surface normal, tinted `enemy.hitTint` (= type colour). The rig flares
+its plates additively from `enemyRef.hitFlash` (`storm_warden.ts`
+`ARMOR_FLASH_PEAK` — keep it low, the whole shell blooms). Damage numbers pop from
+the hit point (`spawnDamageNumber` `options.point`).
+
 ## Weapon System
 
 **Adding a new gun:**
@@ -354,10 +502,10 @@ capped the whole game at 36 particles (36 draws).
 
 ## Performance notes (perf-critical)
 
-- **Cinematic post-processing is OFF by default** (`cinematicState.enabled =
-  savedSettings?.cinematic === true`, ~line 1259). It runs 3–4 full-screen shader
+- **Cinematic post-processing is ON by default** (`cinematicState.enabled =
+  savedSettings?.cinematic !== false`). It runs 3–4 full-screen shader
   passes/frame (RenderPass + grade + chroma + output) — a big fill cost on weak
-  GPUs. Opt in via the pause-menu toggle (persists `savedSettings.cinematic`).
+  GPUs. Opt out via the pause-menu toggle (persists `savedSettings.cinematic`).
 - The frame is bound by **both** CPU draw-issue (~760 draws) **and** GPU fill;
   lowering render scale alone doesn't help (that's the tell). Levers: fewer
   real-time lights (`window.__rbCountLights()`), fewer draws, post-FX off.
@@ -552,3 +700,8 @@ attemptPackUpgrade();
 // Go to exterior:
 yaw.position.set(0, PLAYER_H, 135);  // just south of interior exit
 ```
+
+
+## Interior art direction ? construction in progress
+
+The user wants the original interior map to resemble a building under active construction. Keep exposed cast concrete with formwork seams, unfinished blockwork, dusty dry slabs, plywood hoarding, timber shuttering, exposed reinforcement, and temporary site signs. Avoid finished office ceilings, polished floors, decorative metal wall trim, and glazed storefront styling in this area. The open top represents an unfinished roof, not a finished plaza. Materials live in `src/environment.js`; preserve the existing navigation/collision grid and three exits when doing surface passes.

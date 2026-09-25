@@ -89,6 +89,11 @@ function getSharedWardenTextures(THREE) {
   return _sharedWardenTex;
 }
 
+/** Resting float height (rig units) the Warden hovers above its grounded build
+ *  pose once update() runs. Callers that measure the model at build time (hit
+ *  centres, overhead anchors) add this, scaled, to match the in-play body. */
+export const STORM_WARDEN_HOVER = 0.85;
+
 export function createStormWarden(THREE: any, mergeGeometries: any, options: any = {}) {
   const palette = options.palette || {};
   const DIAG = !!options.diagnostics; // when true, expose rig.gait for warden_diagnostics.mjs
@@ -105,7 +110,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
   const metal = (color, rough = 0.5, metalness = 0.95, envMul = 1.0) =>
     new THREE.MeshStandardMaterial({
       color, roughness: rough, metalness,
-      roughnessMap: detailMap, bumpMap: detailMap, bumpScale: 0.012,
+      roughnessMap: detailMap, bumpMap: detailMap, bumpScale: 0.006,
       envMapIntensity: 1.25 * envMul,
     });
 
@@ -127,14 +132,45 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
 
   // Battle-worn celestial plate: deep gunmetal base, brighter machined steel for
   // secondary plates, scorched under-armor, and a rich ceremonial gold for trim.
-  const matMetalDark = metal(0x212734, 0.5, 0.96, 1.05);
-  const matMetalSteel = metal(0x5a6678, 0.36, 0.92, 1.15);
-  const matMetalScorch = metal(0x191316, 0.66, 0.8, 0.9);
-  const matMetalGold = metal(0xb98a3c, 0.24, 1.0, 1.4);
+  // Painted armor needs diffuse response too: nearly black, fully metallic
+  // plates lost their face-to-face shading and read as a single cutout silhouette.
+  const matMetalDark = metal(0x465366, 0.56, 0.5, 1.05);
+  const matMetalSteel = metal(0x8a9aac, 0.44, 0.7, 1.15);
+  const matMetalScorch = metal(0x303640, 0.7, 0.3, 0.9);
+  const matMetalGold = metal(0xb98a3c, 0.34, 0.82, 1.15);
   const matCoreGlow = energy(accent);
   const matVeinGlow = energy(accent2);
   const matCrownGlow = energy(accent3);
   const allMaterials = [matMetalDark, matMetalSteel, matMetalScorch, matMetalGold, matCoreGlow, matVeinGlow, matCrownGlow];
+  // Armour hit flare: plates flash toward a hot version of the accent when struck
+  // (driven by enemyRef.hitFlash). Emissive colour/intensity are uniforms, so this
+  // never recompiles a shader. Base values are captured on the first update —
+  // after the game's variant pass has re-tinted these materials.
+  const armorMats = [matMetalDark, matMetalSteel, matMetalScorch, matMetalGold];
+  const armorFlashColor = accent.clone().lerp(new THREE.Color(0xffffff), 0.25);
+  // Peak ADDED emissive radiance. Kept low on purpose: the whole shell is a big
+  // surface under ACES + bloom, and a stronger flare (tried: ~0.4) turned the
+  // entire body into a flat white/violet cut-out on every hit.
+  const ARMOR_FLASH_PEAK = 0.16;
+  let armorBase = null;
+  let armorFlashOn = false;
+  function setArmorFlash(k) {
+    if (!armorBase) return;
+    for (let i = 0; i < armorMats.length; i++) {
+      const m = armorMats[i], b = armorBase[i];
+      // emissive × intensity = the material's own glow + the flare, additively,
+      // so plate shading and the variant tint survive underneath.
+      if (k <= 0) { m.emissive.copy(b.color); m.emissiveIntensity = b.intensity; continue; }
+      const f = ARMOR_FLASH_PEAK * k;
+      m.emissive.setRGB(
+        b.color.r * b.intensity + armorFlashColor.r * f,
+        b.color.g * b.intensity + armorFlashColor.g * f,
+        b.color.b * b.intensity + armorFlashColor.b * f,
+      );
+      m.emissiveIntensity = 1;
+    }
+    armorFlashOn = k > 0;
+  }
 
   const warden = new THREE.Group();
   warden.name = "StormWarden";
@@ -557,7 +593,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
   // Redesign: the Warden is a legless flying entity. When it RUSHES the player at
   // speed its parts (arms, head, crown, rods, shards) detach and float apart; when
   // it slows to ATTACK they snap back together and it fires a lightning strike.
-  const HOVER_BASE = 0.85;          // resting float height above the grounded base
+  const HOVER_BASE = STORM_WARDEN_HOVER; // resting float height above the grounded base
   let elapsed = 0;
   let baseY = null;
   let dead = false, deadTime = 0;
@@ -704,6 +740,13 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     prevHitFlash = hitFlash;
     flinchVel += (-flinch * 110 - flinchVel * 12) * dt;
     flinch += flinchVel * dt;
+    // Squared so the flare snaps on with the hit and falls off fast (hitFlash
+    // itself decays linearly in the game); a body hit (0.62) is a clear pulse,
+    // a head hit (1.0) about 2.5× that.
+    if (!armorBase) armorBase = armorMats.map((m) => ({ color: m.emissive.clone(), intensity: m.emissiveIntensity }));
+    const armorK = Math.min(1, hitFlash * hitFlash);
+    if (armorK > 0.002) setArmorFlash(armorK);
+    else if (armorFlashOn) setArmorFlash(0);
 
     // ── Halo wobble on hard direction changes (spring on turn-rate delta) ────
     crownWobbleVel += (visualTurn - prevTurn) * 2.4;
@@ -988,6 +1031,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
 
   function _updateDead(dt) {
     deadTime += dt;
+    if (armorFlashOn) setArmorFlash(0);
     if (!_captured) captureParts();
     const t = clamp01(deadTime / 1.4);
     const blast = smootherStep(t);
@@ -1028,6 +1072,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
       freezeTimer = 3; freezeHold = 0; freezeTilt = 0; bobGate = 1;
       prevSpeedNorm = 0; overshoot = 0; overshootVel = 0;
       flinch = 0; flinchVel = 0; prevHitFlash = 0; flinchSide = 1;
+      if (armorFlashOn) setArmorFlash(0);
       crownWobble = 0; crownWobbleVel = 0; prevTurn = 0;
       rodLagPitch = 0; shardFlare = 0;
       barrageBlend = 0; channelBlend = 0; empFlash = 0; prevEmpT = 0;
