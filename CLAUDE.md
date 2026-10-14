@@ -77,7 +77,7 @@ Three.js is imported as an ES module inside `three_fps_game.js` (Vite bare impor
 
 - **Sky**: ONE HDR skybox (`assets/hdri/kloppenheim_06_puresky_2k.hdr`, golden hour) on a
   camera-locked dome (`buildSkyDome`, works on WebGL+WebGPU). `SKY_DOME_DAMP = 0.35`
-  prevents ACES bleaching the clouds; sun/fog/horizon colours are matched to the HDR.
+  prevents the tone mapper bleaching the clouds; sun/fog/horizon colours are matched to the HDR.
   `?sky=<basename>` URL param previews any hdr in assets/hdri.
 - **Blackout waves (wave%10)**: sky dome hidden, background/fog black, sun/hemi starved,
   and an animated **fire sky dome** (`buildFireSkyDome`) shows a burning horizon.
@@ -595,6 +595,12 @@ The cinematic grade is tuned toward a photographic, near-neutral look (desat 0.0
 faint warm highlight tint, gloss 0.4, CSS saturate 1.0); fog and the clear colour
 (`0xa4978e`) are the HDR horizon's measured colour at the dome's 0.35 damp, so
 distant geometry fades into the sky it sits against.
+
+**Tone mapping is AgX** (`TONE_MAPPER` in three_fps_game.ts, applied by OutputPass), not
+ACES: ACES skews hues (skies cyan, oranges red, saturated colour clips flat), AgX keeps
+material colour and rolls highlights to white like a camera. AgX is flatter, so the
+base exposure is ×1.3 (`TONE_MAPPER_EXPOSURE_MUL`). `?tonemap=aces|neutral` and
+`?tmExposure=<mul>` compare. `fx_lab.html` mirrors AgX and the exposure.
 
 **Interior** (environment.js `setupEnvironmentLighting`, indoor build only):
 - `AmbientLight(0xfff4e4, 0.55)` — warm floor for all tiers

@@ -69,9 +69,10 @@ renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 // Match the game's tone mapping and exposure, or every brightness decision made
 // here is wrong the moment the effect is dropped back into the game.
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-// The game's blackout exposure: BASE_TONE_MAPPING_EXPOSURE 1.16 × 1.12.
-renderer.toneMappingExposure = 1.3;
+renderer.toneMapping = THREE.AgXToneMapping;
+// The game's blackout exposure: BASE_TONE_MAPPING_EXPOSURE (1.16 × the AgX
+// multiplier 1.3) × the blackout lift 1.12.
+renderer.toneMappingExposure = 1.16 * 1.3 * 1.12;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 

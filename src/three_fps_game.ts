@@ -426,7 +426,18 @@ declare module "three" {
   } = createLoadingController(document);
 
   let renderer;
-  const BASE_TONE_MAPPING_EXPOSURE = 1.16;
+  // Tone mapper. AgX (Blender's filmic view) rolls highlights off toward white
+  // without ACES's hue skew (ACES pushes skies cyan and oranges red, and clips
+  // saturated colour into flat blobs), so materials keep their real colour across
+  // the whole range. It is flatter than ACES at the same exposure, hence the lift.
+  // ?tonemap=aces|agx|neutral and ?tmExposure=<mul> override it for comparison.
+  const TONE_MAPPER_PARAM = (new URLSearchParams(window.location.search).get("tonemap") || "agx").toLowerCase();
+  const TONE_MAPPER = TONE_MAPPER_PARAM === "aces" ? THREE.ACESFilmicToneMapping
+    : TONE_MAPPER_PARAM === "neutral" ? THREE.NeutralToneMapping
+    : THREE.AgXToneMapping;
+  const TONE_MAPPER_EXPOSURE_MUL = Number(new URLSearchParams(window.location.search).get("tmExposure"))
+    || (TONE_MAPPER === THREE.AgXToneMapping ? 1.3 : TONE_MAPPER === THREE.NeutralToneMapping ? 0.85 : 1);
+  const BASE_TONE_MAPPING_EXPOSURE = 1.16 * TONE_MAPPER_EXPOSURE_MUL;
   // Player brightness (Settings → Video) multiplies the scene exposure. Every
   // read goes through baseToneMappingExposure, so the whole exposure chain
   // (cinematic mul, blackout lift, the per-frame ease) inherits it. Resolved
@@ -522,7 +533,7 @@ declare module "three" {
     if (typeof renderer.setPixelRatio === 'function') renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, deviceProfile.maxDpr));
     if (typeof renderer.setSize === 'function') renderer.setSize(window.innerWidth, window.innerHeight, false);
     if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
-    if ('toneMapping' in renderer) renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    if ('toneMapping' in renderer) renderer.toneMapping = TONE_MAPPER;
     if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = baseToneMappingExposure;
     if ('useLegacyLights' in renderer) renderer.useLegacyLights = false;
     if (renderer.shadowMap) {
