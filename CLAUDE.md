@@ -731,3 +731,12 @@ yaw.position.set(0, PLAYER_H, 135);  // just south of interior exit
 ## Interior art direction ? construction in progress
 
 The user wants the original interior map to resemble a building under active construction. Keep exposed cast concrete with formwork seams, unfinished blockwork, dusty dry slabs, plywood hoarding, timber shuttering, exposed reinforcement, and temporary site signs. Avoid finished office ceilings, polished floors, decorative metal wall trim, and glazed storefront styling in this area. The open top represents an unfinished roof, not a finished plaza. Materials live in `src/environment.js`; preserve the existing navigation/collision grid and three exits when doing surface passes.
+
+**Interior surfaces (how they avoid looking stamped).** Each wall structure gets its own material: the
+perimeter is cast-concrete formwork, and freestanding islands cycle through block, brick, plywood and
+formwork (`ISLAND_KINDS` in `buildLevel`; one InstancedMesh per kind). All of them, the slab, the wall
+kickers and the north hoarding go through `applyWorldSurface()`, which maps textures from world position
+(a run of cells is one continuous surface, not the same 4 m tile per cell) and breaks the period with one
+shared 256 px noise texture: per-panel tone, blotching, rain streaks and a damp foot on walls; two rotated
+slab samples, per-8 m-bay tone and dirt patches on the floor. Tune those numbers there. WebGPU ignores
+`onBeforeCompile`, so it falls back to plain UVs. Only the slab's two JPGs are downloaded.

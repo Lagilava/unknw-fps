@@ -80,14 +80,9 @@ export const PLAYER_ANIMATION_GLTF_PATHS = Object.fromEntries(
     .map(([key, path]) => [key, path.replace(/\.fbx$/i, ".glb")])
 );
 
+// Only the slab's maps are downloaded; walls are generated procedurally in
+// environment.js (constructionMaterial), so there is nothing else to prefetch.
 export const STARTUP_TEXTURE_ASSETS = [
-  "../assets/textures/ceiling/OfficeCeiling001_1K-JPG_Color.jpg",
-  "../assets/textures/ceiling/OfficeCeiling001_1K-JPG_NormalGL.jpg",
-  "../assets/textures/ceiling/OfficeCeiling001_1K-JPG_Roughness.jpg",
   "../assets/textures/floor/Concrete034_1K-JPG_Color.jpg",
   "../assets/textures/floor/Concrete034_1K-JPG_NormalGL.jpg",
-  "../assets/textures/floor/Concrete034_1K-JPG_Roughness.jpg",
-  "../assets/textures/wall/Metal063_1K-JPG_Color.jpg",
-  "../assets/textures/wall/Metal063_1K-JPG_NormalGL.jpg",
-  "../assets/textures/wall/Metal063_1K-JPG_Roughness.jpg",
 ];

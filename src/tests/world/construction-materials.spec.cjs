@@ -16,9 +16,9 @@ test('construction shell renders textured dry surfaces without changing its wall
   const s=scene.userData.environmentSurfaces;
   const wallCells=env.MAP.join('').split('#').length-1;
   const removedWindows=env.MAP_W-4;
-  return {count:s.walls.count+s.blockWalls.count,expected:wallCells-removedWindows,formwork:s.wallMat.name,block:s.blockMat.name,roughness:s.floorMat.roughness,metalness:s.floorMat.metalness,relief:!!s.wallMat.bumpMap,rebar:!!scene.getObjectByName('Construction / exposed reinforcement'),draws:renderer.info.render.calls};
+  return {count:s.walls.count+s.blockWalls.count+s.brickWalls.count+s.plywoodWalls.count,kinds:[s.walls,s.blockWalls,s.brickWalls,s.plywoodWalls].filter(m=>m.count>0).length,worldMapped:[s.wallMat,s.blockMat,s.brickMat,s.plywoodMat,s.floorMat].every(m=>typeof m.onBeforeCompile==='function'&&m.customProgramCacheKey().startsWith('rb-world')),expected:wallCells-removedWindows,formwork:s.wallMat.name,block:s.blockMat.name,roughness:s.floorMat.roughness,metalness:s.floorMat.metalness,relief:!!s.wallMat.bumpMap,rebar:!!scene.getObjectByName('Construction / exposed reinforcement'),draws:renderer.info.render.calls};
  });
- expect(report.count).toBe(report.expected);expect(report.formwork).toContain('formwork');expect(report.block).toContain('block');expect(report.relief).toBe(true);expect(report.rebar).toBe(true);expect(report.roughness).toBeGreaterThan(.9);expect(report.metalness).toBe(0);expect(report.draws).toBeLessThan(250);
+ expect(report.count).toBe(report.expected);expect(report.kinds).toBe(4);expect(report.worldMapped).toBe(true);expect(report.formwork).toContain('formwork');expect(report.block).toContain('block');expect(report.relief).toBe(true);expect(report.rebar).toBe(true);expect(report.roughness).toBeGreaterThan(.9);expect(report.metalness).toBe(0);expect(report.draws).toBeLessThan(250);
  await page.screenshot({path:'test-artifacts/construction-interior.png'});
  await page.evaluate(()=>{const {camera,scene,renderer}=window.preview;camera.position.set(24,3,90);camera.lookAt(10,2,66);renderer.render(scene,camera);});
  await page.screenshot({path:'test-artifacts/construction-blockwork.png'});

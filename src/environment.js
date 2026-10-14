@@ -101,7 +101,12 @@
   const OUTDOOR_MODE = true;
 
   // Original, deterministic construction textures. Color is sRGB; the relief
-  // map stays linear. A tile represents 4 metres, so seams have a physical scale.
+  // map stays linear. One 512px tile covers 4 metres (128 px/m), so joints have a
+  // physical scale. Each kind is a different material family, not a recolour:
+  //   formwork — cast-in-place concrete, 1 x 2 m shutter panels and form ties
+  //   block    — grey concrete masonry units, 400 x 200 mm, per-unit tone
+  //   brick    — common clay brick infill, stretcher bond, per-brick tone
+  //   plywood  — raw hoarding sheets with grain
   const constructionTextureCache = new Map();
   function constructionMaterial(THREE, renderer, kind, repeatX = 1, repeatY = 1) {
     let source = constructionTextureCache.get(kind);
@@ -110,50 +115,245 @@
       color.width = color.height = relief.width = relief.height = 512;
       const c = color.getContext("2d"), h = relief.getContext("2d");
       const rng = seededRandom(`construction-${kind}`);
-      c.fillStyle = kind === "plywood" ? "#b78b53" : kind === "block" ? "#aaa596" : "#a9a598";
+      const base = { plywood: "#b9895a", block: "#97968f", brick: "#9a5a42", formwork: "#aba69a" }[kind] || "#aba69a";
+      c.fillStyle = base;
       c.fillRect(0, 0, 512, 512); h.fillStyle = "#b8b8b8"; h.fillRect(0, 0, 512, 512);
-      // Aggregate, cement mottling, and wood grain; no baked-in highlights.
-      for (let i = 0; i < 5500; i++) {
-        const x = rng()*512, y = rng()*512, dark = rng()>.5;
-        c.fillStyle = dark ? "rgba(54,45,32,.09)" : "rgba(244,237,213,.12)";
-        c.fillRect(x,y,kind==="plywood"?20+rng()*70:.4+rng()*1.2,.4+rng());
-      }
-      for (let i=0;i<70;i++) {
-        const x=rng()*512,y=rng()*512,r=12+rng()*65;
-        const g=c.createRadialGradient(x,y,0,x,y,r);
-        g.addColorStop(0,"rgba(73,66,53,.09)");g.addColorStop(1,"rgba(73,66,53,0)");
-        c.fillStyle=g;c.fillRect(x-r,y-r,r*2,r*2);
-      }
-      const joint = (x,y,w,d) => {
-        c.fillStyle="rgba(54,50,42,.3)";c.fillRect(x,y,w,d);
-        h.fillStyle="#555555";h.fillRect(x,y,w,d);
+      const joint = (x, y, w, d, tone = "rgba(54,50,42,.3)") => {
+        c.fillStyle = tone; c.fillRect(x, y, w, d);
+        h.fillStyle = "#555555"; h.fillRect(x, y, w, d);
+      };
+      // Units laid in running bond: every unit gets its own tone and face
+      // texture before the mortar goes on, which is what keeps masonry from
+      // reading as one flat stamp.
+      const masonry = (rows, perRow, mortar, mortarTone, unitTone) => {
+        const rowH = 512 / rows, unitW = 512 / perRow;
+        for (let row = 0; row < rows; row++) {
+          const off = (row % 2) * unitW * 0.5;
+          for (let i = -1; i < perRow + 1; i++) {
+            const x = i * unitW + off, y = row * rowH;
+            c.fillStyle = unitTone(rng); c.fillRect(x, y, unitW, rowH);
+            h.fillStyle = `rgb(${170 + rng() * 40 | 0},${170 + rng() * 40 | 0},${170 + rng() * 40 | 0})`;
+            h.fillRect(x, y, unitW, rowH);
+          }
+        }
+        for (let i = 0; i < 9000; i++) {
+          const x = rng() * 512, y = rng() * 512;
+          c.fillStyle = rng() > .5 ? "rgba(40,32,26,.12)" : "rgba(250,240,220,.10)";
+          c.fillRect(x, y, .5 + rng() * 1.4, .5 + rng() * 1.2);
+        }
+        for (let row = 0; row < rows; row++) {
+          const off = (row % 2) * unitW * 0.5, y = row * rowH;
+          joint(0, y, 512, mortar, mortarTone);
+          for (let x = off; x < 512 + unitW; x += unitW) joint(x % 512, y, mortar, rowH, mortarTone);
+        }
+        // Mortar smears and the odd chipped arris.
+        for (let i = 0; i < 40; i++) {
+          c.fillStyle = mortarTone.replace(/[\d.]+\)$/, ".22)");
+          c.fillRect(rng() * 512, rng() * 512, 6 + rng() * 30, 1 + rng() * 3);
+        }
       };
       if (kind === "block") {
-        // 400 x 250 mm concrete masonry, staggered mortar beds.
-        for(let row=0;row<16;row++) {
-          joint(0,row*32,512,1.6);
-          for(let x=(row%2)*25.6;x<512;x+=51.2) joint(x,row*32,1.4,32);
-        }
+        // 400 x 200 mm CMU: 20 courses x 10 units per 4 m tile.
+        masonry(20, 10, 2.2, "rgba(176,170,156,.85)", r => {
+          const v = 138 + r() * 26 | 0;
+          return `rgb(${v},${v + 1},${v - 3 + r() * 4 | 0})`;
+        });
+      } else if (kind === "brick") {
+        // 215 x 65 mm brick, 10 mm joints: 54 courses x 18 bricks per 4 m tile.
+        masonry(54, 18, 1.4, "rgba(196,186,166,.9)", r => {
+          const burnt = r() < .12;
+          const red = burnt ? 96 + r() * 18 : 132 + r() * 34;
+          return `rgb(${red | 0},${red * (.5 + r() * .1) | 0},${red * (.38 + r() * .08) | 0})`;
+        });
       } else {
+        // Aggregate, cement mottling, and wood grain; no baked-in highlights.
+        for (let i = 0; i < 5500; i++) {
+          const x = rng() * 512, y = rng() * 512, dark = rng() > .5;
+          c.fillStyle = dark ? "rgba(54,45,32,.09)" : "rgba(244,237,213,.12)";
+          c.fillRect(x, y, kind === "plywood" ? 20 + rng() * 70 : .4 + rng() * 1.2, .4 + rng());
+        }
+        for (let i = 0; i < 70; i++) {
+          const x = rng() * 512, y = rng() * 512, r = 12 + rng() * 65;
+          const g = c.createRadialGradient(x, y, 0, x, y, r);
+          g.addColorStop(0, "rgba(73,66,53,.09)"); g.addColorStop(1, "rgba(73,66,53,0)");
+          c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+        }
+        if (kind === "plywood") {
+          // 1.2 x 2.4 m sheets would not tile a 4 m texture; 1 x 2 m reads the same.
+          for (let x = 0; x < 512; x += 128) for (let y = 0; y < 512; y += 256) {
+            c.fillStyle = `rgba(${rng() > .5 ? "255,236,200" : "70,44,20"},${.04 + rng() * .08})`;
+            c.fillRect(x, y, 128, 256);
+          }
+        }
         // Large shuttering panels / plywood sheets, with recessed form ties.
-        for(let x=0;x<512;x+=128) joint(x,0,1.5,512);
-        for(let y=0;y<512;y+=256) joint(0,y,512,1.5);
-        for(let x=32;x<512;x+=64) for(let y=48;y<512;y+=128) {
-          c.fillStyle="rgba(53,47,36,.45)";c.beginPath();c.arc(x,y,2.1,0,Math.PI*2);c.fill();
-          h.fillStyle="#404040";h.beginPath();h.arc(x,y,1.8,0,Math.PI*2);h.fill();
-          if(kind!=="plywood") {c.fillStyle="rgba(102,73,41,.1)";c.fillRect(x-1,y+2,2,10+rng()*20);}
+        for (let x = 0; x < 512; x += 128) joint(x, 0, 1.5, 512);
+        for (let y = 0; y < 512; y += 256) joint(0, y, 512, 1.5);
+        for (let x = 32; x < 512; x += 64) for (let y = 48; y < 512; y += 128) {
+          c.fillStyle = "rgba(53,47,36,.45)"; c.beginPath(); c.arc(x, y, 2.1, 0, Math.PI * 2); c.fill();
+          h.fillStyle = "#404040"; h.beginPath(); h.arc(x, y, 1.8, 0, Math.PI * 2); h.fill();
+          if (kind !== "plywood") { c.fillStyle = "rgba(102,73,41,.1)"; c.fillRect(x - 1, y + 2, 2, 10 + rng() * 20); }
         }
       }
-      source={color,relief};constructionTextureCache.set(kind,source);
+      source = { color, relief }; constructionTextureCache.set(kind, source);
     }
     const tex = (canvas, color) => {
-      const t=new THREE.CanvasTexture(canvas);t.wrapS=t.wrapT=THREE.RepeatWrapping;
-      t.repeat.set(repeatX,repeatY);t.anisotropy=Math.min(4,renderer.capabilities.getMaxAnisotropy());
-      if(color)t.colorSpace=THREE.SRGBColorSpace;
+      const t = new THREE.CanvasTexture(canvas); t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(repeatX, repeatY); t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      if (color) t.colorSpace = THREE.SRGBColorSpace;
       return t;
     };
-    const material=new THREE.MeshStandardMaterial({map:tex(source.color,true),bumpMap:tex(source.relief,false),bumpScale:kind==="block"?.018:.012,roughness:.94,metalness:0,envMapIntensity:.25});
-    material.name=`Construction / ${kind}`;
+    const material = new THREE.MeshStandardMaterial({
+      map: tex(source.color, true), bumpMap: tex(source.relief, false),
+      bumpScale: kind === "block" || kind === "brick" ? .02 : .012,
+      roughness: kind === "plywood" ? .86 : .94, metalness: 0, envMapIntensity: .25,
+    });
+    material.name = `Construction / ${kind}`;
+    return material;
+  }
+
+  // ── World-space surfacing ────────────────────────────────────────────────
+  // Every wall cell is the same BoxGeometry, so plain UVs stamp the identical
+  // 4 m tile onto every face of every cell, and the floor is one texture
+  // repeated every 6 m. Both read as an obvious grid from across the arena.
+  // This patch maps textures from WORLD position instead (so a run of wall cells
+  // is one continuous surface), then breaks the remaining period with a small
+  // tileable noise texture sampled at scales that do not divide the tile:
+  //   walls — per-panel/course tone, broad blotching, rain streaks from the top
+  //           edge, a damp band at the foot
+  //   floor — two rotated samples of the slab texture blended by noise
+  //           (no visible period), per-bay tone matching the saw-cut joints,
+  //           and patches of site dirt
+  // Cost: 2-4 extra texture fetches on these surfaces, one 256 px texture shared
+  // by all of them. WebGPU ignores onBeforeCompile, so it keeps the plain UVs.
+  let macroNoiseTexture = null;
+  function getMacroNoiseTexture(THREE) {
+    if (macroNoiseTexture) return macroNoiseTexture;
+    const N = 256, canvas = document.createElement("canvas");
+    canvas.width = canvas.height = N;
+    const ctx = canvas.getContext("2d"), img = ctx.createImageData(N, N);
+    // Periodic value noise, three independent channels, 4 octaves.
+    const channels = [0, 1, 2].map(ch => {
+      const rng = seededRandom(`surface-macro-${ch}`), out = new Float32Array(N * N);
+      let amp = 1, total = 0;
+      for (const cells of [4, 8, 16, 32]) {
+        const grid = new Float32Array(cells * cells).map(() => rng());
+        for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+          const gx = x / N * cells, gy = y / N * cells;
+          const x0 = Math.floor(gx), y0 = Math.floor(gy);
+          const fx = gx - x0, fy = gy - y0;
+          const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+          const at = (i, j) => grid[((j % cells) * cells) + (i % cells)];
+          const top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * sx;
+          const bot = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * sx;
+          out[y * N + x] += (top + (bot - top) * sy) * amp;
+        }
+        total += amp; amp *= 0.5;
+      }
+      for (let i = 0; i < out.length; i++) out[i] /= total;
+      return out;
+    });
+    for (let i = 0; i < N * N; i++) {
+      for (let ch = 0; ch < 3; ch++) {
+        // Stretch contrast around the mean; summed octaves cluster near 0.5.
+        img.data[i * 4 + ch] = Math.max(0, Math.min(255, (0.5 + (channels[ch][i] - 0.5) * 2.2) * 255));
+      }
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    macroNoiseTexture = new THREE.CanvasTexture(canvas);
+    macroNoiseTexture.wrapS = macroNoiseTexture.wrapT = THREE.RepeatWrapping;
+    macroNoiseTexture.name = "Construction / macro noise";
+    return macroNoiseTexture;
+  }
+
+  // mode "wall": u runs along the face, v up the wall. `tile` = metres per
+  // texture repeat, `panel` = metres per tone cell (shutter panel / block lift),
+  // `streaks` 0..1 rain-streak strength. mode "floor": u,v = world x,z.
+  function applyWorldSurface(THREE, material, mode, opts = {}) {
+    const tile = opts.tile ?? 4;
+    const panel = opts.panel ?? [1, 2];
+    const tone = opts.tone ?? 0.07;
+    const streaks = opts.streaks ?? 0.0;
+    const dirt = opts.dirt ?? new THREE.Color(0x938775);
+    for (const t of [material.map, material.bumpMap, material.normalMap]) t?.repeat.set(1, 1);
+    const macro = getMacroNoiseTexture(THREE);
+    const key = `rb-world-${mode}-${tile}-${panel.join("x")}-${tone}-${streaks}`;
+    material.customProgramCacheKey = () => key;
+    material.onBeforeCompile = shader => {
+      shader.uniforms.rbMacro = { value: macro };
+      shader.uniforms.rbDirt = { value: dirt };
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 rbWorld;\nvarying vec2 rbPlane;")
+        .replace("#include <worldpos_vertex>", `#include <worldpos_vertex>
+          vec4 rbW = vec4(transformed, 1.0);
+          vec3 rbN = objectNormal;
+          #ifdef USE_INSTANCING
+            rbW = instanceMatrix * rbW;
+            rbN = mat3(instanceMatrix) * rbN;
+          #endif
+          rbW = modelMatrix * rbW;
+          rbN = abs(mat3(modelMatrix) * rbN);
+          rbWorld = rbW.xyz;
+          ${mode === "floor"
+            ? "rbPlane = rbW.xz;"
+            : "rbPlane = rbN.y > 0.5 ? rbW.xz : vec2(rbN.x > rbN.z ? rbW.z : rbW.x, rbW.y);"}
+          vec2 rbUv = rbPlane / ${tile.toFixed(3)};
+          #ifdef USE_MAP
+            vMapUv = rbUv;
+          #endif
+          #ifdef USE_BUMPMAP
+            vBumpMapUv = rbUv;
+          #endif
+          #ifdef USE_NORMALMAP
+            vNormalMapUv = rbUv;
+          #endif`);
+      const hash = "float rbHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }";
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", `#include <common>
+          varying vec3 rbWorld;
+          varying vec2 rbPlane;
+          uniform sampler2D rbMacro;
+          uniform vec3 rbDirt;
+          ${hash}`);
+      if (mode === "floor") {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", `
+          #ifdef USE_MAP
+            // Two samples at unrelated scale + rotation; noise picks between them,
+            // so the slab texture has no repeat period at all.
+            vec2 rbUvB = mat2(0.8, -0.6, 0.6, 0.8) * vMapUv * 0.47 + vec2(0.31, 0.71);
+            float rbPick = smoothstep(0.38, 0.62, texture2D(rbMacro, rbPlane / 37.0).r);
+            diffuseColor *= mix(texture2D(map, vMapUv), texture2D(map, rbUvB), rbPick);
+          #endif
+          {
+            // Each 8 m pour bay (the saw-cut joint grid) cured a little differently.
+            float bay = rbHash(floor(rbPlane / 8.0));
+            diffuseColor.rgb *= 1.0 + (bay - 0.5) * ${(tone * 2).toFixed(3)};
+            vec3 m = texture2D(rbMacro, rbPlane / 23.0 + 0.5).rgb;
+            diffuseColor.rgb *= 0.9 + 0.2 * texture2D(rbMacro, rbPlane / 9.0).g;
+            // Site dirt tracked across the slab, and darker damp patches.
+            float dirtMask = smoothstep(0.62, 0.86, m.g) * (0.6 + 0.4 * texture2D(rbMacro, rbPlane / 2.7).b);
+            diffuseColor.rgb = mix(diffuseColor.rgb, rbDirt * (0.85 + 0.3 * m.r), dirtMask * 0.5);
+            diffuseColor.rgb *= 1.0 - 0.22 * smoothstep(0.62, 0.85, m.b);
+          }`);
+      } else {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", `#include <map_fragment>
+          {
+            vec2 p = rbPlane;
+            // Panel / course tone: every shutter panel or block lift differs.
+            float lift = rbHash(floor(p / vec2(${panel[0].toFixed(3)}, ${panel[1].toFixed(3)})) + floor(rbWorld.xz * 0.01));
+            diffuseColor.rgb *= 1.0 + (lift - 0.5) * ${(tone * 2).toFixed(3)};
+            vec3 m = texture2D(rbMacro, p / 19.0).rgb;
+            diffuseColor.rgb *= 0.86 + 0.28 * mix(m.r, texture2D(rbMacro, p / 6.3 + 0.37).g, 0.4);
+            // Rain streaks running down from the exposed top edge.
+            float streak = texture2D(rbMacro, vec2(p.x / 2.1, p.y / 41.0)).b;
+            float fromTop = smoothstep(0.0, 4.5, ${WALL_H.toFixed(2)} - rbWorld.y + 0.4 * m.g);
+            diffuseColor.rgb *= 1.0 - ${streaks.toFixed(3)} * smoothstep(0.45, 0.85, streak) * (1.0 - fromTop * 0.7);
+            // Damp, dirt-splashed foot of the wall.
+            float foot = 1.0 - smoothstep(0.0, 0.9 + 0.5 * m.b, rbWorld.y);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * rbDirt * 1.25, foot * 0.3);
+          }`);
+      }
+    };
     return material;
   }
 
@@ -530,46 +730,14 @@
     if (uv && !geometry.attributes.uv2) geometry.setAttribute("uv2", uv.clone());
   }
 
+  // Only the slab uses downloaded maps now; walls are procedural (see
+  // constructionMaterial). The slab is uniformly dry, so no roughness map.
   function loadEnvironmentMaterialMaps(THREE, renderer, kind, repeatX, repeatY) {
-    const sets = {
-      floor: {
-        base: "../assets/textures/floor/Concrete034_1K-JPG",
-        color: "Color",
-        normal: "NormalGL",
-        roughness: "Roughness",
-      },
-      wall: {
-        base: "../assets/textures/wall/Metal063_1K-JPG",
-        color: "Color",
-        normal: "NormalGL",
-        roughness: "Roughness",
-      },
-      ceiling: {
-        base: "../assets/textures/ceiling/OfficeCeiling001_1K-JPG",
-        color: "Color",
-        normal: "NormalGL",
-        roughness: "Roughness",
-      },
+    const base = "../assets/textures/floor/Concrete034_1K-JPG";
+    return {
+      map: loadMaterialTexture(THREE, renderer, `${base}_Color.jpg`, repeatX, repeatY, true),
+      normalMap: loadMaterialTexture(THREE, renderer, `${base}_NormalGL.jpg`, repeatX, repeatY),
     };
-
-    const set = sets[kind];
-    const maps = {
-      map: loadMaterialTexture(THREE, renderer, `${set.base}_${set.color}.jpg`, repeatX, repeatY, true),
-      normalMap: loadMaterialTexture(THREE, renderer, `${set.base}_${set.normal}.jpg`, repeatX, repeatY),
-      roughnessMap: loadMaterialTexture(THREE, renderer, `${set.base}_${set.roughness}.jpg`, repeatX, repeatY),
-    };
-
-    if (set.metalness) {
-      maps.metalnessMap = loadMaterialTexture(
-        THREE,
-        renderer,
-        `${set.base}_${set.metalness}.jpg`,
-        repeatX,
-        repeatY
-      );
-    }
-
-    return maps;
   }
 
   function makePatternTexture(THREE, renderer, kind) {
@@ -897,7 +1065,8 @@
     const northZ = mapToWorld(0, 0).z; // wall cell centres at z = -38
 
     // Temporary plywood enclosure in the existing collision openings.
-    const glassMat = constructionMaterial(THREE, renderer, "plywood", 8, 1);
+    const glassMat = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "plywood"), "wall",
+      { tile: 4, panel: [1, 2], tone: 0.08, streaks: 0.22 });
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x725234, roughness: .92, metalness: 0 });
     const sillMat = frameMat;
 
@@ -971,8 +1140,7 @@
     const floorMaps = loadEnvironmentMaterialMaps(THREE, renderer, "floor", MAP_W * CELL / 6, MAP_H * CELL / 6);
     const floorMat = new THREE.MeshStandardMaterial({
       color: 0xd5cfc0,
-      ...floorMaps,
-      roughnessMap: null, // Dusty unfinished slab: uniformly dry, never polished
+      ...floorMaps, // Dusty unfinished slab: uniformly dry, never polished
       lightMap: createSurfaceLightMapTexture(THREE, renderer, lightingProfile, "floor"),
       lightMapIntensity: OUTDOOR_MODE ? 0 : lightingProfile.lightMapIntensity,
       normalScale: new THREE.Vector2(0.32, 0.32),
@@ -980,6 +1148,10 @@
       metalness: 0,
       envMapIntensity: 0.42,
     });
+
+    floorMat.name = "Construction / slab";
+    applyWorldSurface(THREE, floorMat, "floor", { tile: 6, tone: 0.06 });
+    floorMaps.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
     const floorGeo = new THREE.PlaneGeometry(MAP_W * CELL, MAP_H * CELL, 1, 1);
     floorGeo.rotateX(-Math.PI * 0.5);
@@ -1015,8 +1187,6 @@
       scene.add(ceiling);
     }
 
-    const wallMat = constructionMaterial(THREE, renderer, "formwork", CELL / 4, WALL_H / 4);
-
     const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
     copyUvToUv2(wallGeo);
 
@@ -1030,37 +1200,76 @@
       return true;
     }
 
+    // Group wall cells into connected structures. The one that touches the map
+    // edge is the cast-concrete perimeter; every freestanding island gets its
+    // own construction material, so no two neighbouring structures look alike.
     const wallPositions = [];
+    const structureOf = new Map();
+    const structures = [];
     for (let y = 0; y < MAP_H; y++) {
       for (let x = 0; x < MAP_W; x++) {
-        if (MAP[y][x] === "#" && !isNorthWindowCell(x, y)) {
-          wallPositions.push(mapToWorld(x, y));
+        if (MAP[y][x] !== "#" || structureOf.has(y * MAP_W + x)) continue;
+        const cells = [], stack = [[x, y]];
+        let perimeter = false;
+        structureOf.set(y * MAP_W + x, structures.length);
+        while (stack.length) {
+          const [cx, cy] = stack.pop();
+          cells.push([cx, cy]);
+          if (cx === 0 || cy === 0 || cx === MAP_W - 1 || cy === MAP_H - 1) perimeter = true;
+          for (const [nx, ny] of [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]]) {
+            if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+            if (MAP[ny][nx] !== "#" || structureOf.has(ny * MAP_W + nx)) continue;
+            structureOf.set(ny * MAP_W + nx, structures.length);
+            stack.push([nx, ny]);
+          }
         }
+        structures.push({ cells, perimeter });
+      }
+    }
+    // Islands cycle through the infill materials in discovery (north→south,
+    // west→east) order. Mirrored island pairs land on different materials.
+    const ISLAND_KINDS = ["block", "brick", "plywood", "formwork", "brick", "block", "formwork", "plywood"];
+    const byKind = { formwork: [], block: [], brick: [], plywood: [] };
+    let island = 0;
+    for (const st of structures) {
+      const kind = st.perimeter ? "formwork" : ISLAND_KINDS[island++ % ISLAND_KINDS.length];
+      for (const [x, y] of st.cells) {
+        if (isNorthWindowCell(x, y)) continue;
+        const p = mapToWorld(x, y);
+        wallPositions.push(p);
+        byKind[kind].push(p);
       }
     }
 
-    // Infill partitions expose masonry; structural perimeter walls retain their
-    // cast-concrete shuttering. Both batches still use the exact collision grid.
-    const blockPositions = wallPositions.filter(p => Math.abs(p.x) < MAP_W*CELL*.45 && p.z > 45);
-    const blockSet = new Set(blockPositions);
-    const formPositions = wallPositions.filter(p => !blockSet.has(p));
-    const blockMat = constructionMaterial(THREE, renderer, "block", CELL / 4, WALL_H / 4);
+    // Surface settings per family: tile = metres per texture repeat; panel =
+    // the unit whose tone varies (shutter panel, block lift, brick course band,
+    // plywood sheet); streaks = how much rain staining runs down from the top.
+    const wallMat = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "formwork"), "wall",
+      { tile: 4, panel: [1, 2], tone: 0.09, streaks: 0.28 });
+    const blockMat = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "block"), "wall",
+      { tile: 4, panel: [4, 1.2], tone: 0.06, streaks: 0.16 });
+    const brickMat = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "brick"), "wall",
+      { tile: 4, panel: [4, 0.9], tone: 0.05, streaks: 0.12 });
+    const plywoodMat = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "plywood"), "wall",
+      { tile: 4, panel: [1, 2], tone: 0.08, streaks: 0.22 });
     function wallBatch(positions, material, name) {
       const mesh = new THREE.InstancedMesh(wallGeo, material, positions.length);
-      const matrix = new THREE.Matrix4(), tone = new THREE.Color();
+      const matrix = new THREE.Matrix4();
       positions.forEach((p, i) => {
         matrix.makeTranslation(p.x, WALL_H*.5, p.z);mesh.setMatrixAt(i,matrix);
-        const variation=.9+(Math.sin(p.x*.173+p.z*.091)+1)*.04;
-        tone.setRGB(variation,variation*.99,variation*.97);mesh.setColorAt(i,tone);
       });
       mesh.name=name;mesh.instanceMatrix.needsUpdate=true;
-      if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
       mesh.castShadow=true;mesh.receiveShadow=true;wallMeshes.push(mesh);scene.add(mesh);
       return mesh;
     }
-    const walls=wallBatch(formPositions,wallMat,"Construction / cast concrete walls");
-    const blockWalls=wallBatch(blockPositions,blockMat,"Construction / unfinished blockwork");
-    scene.userData.environmentSurfaces = { floor, ceiling, walls, blockWalls, floorMat, ceilMat, wallMat, blockMat };
+    const walls=wallBatch(byKind.formwork,wallMat,"Construction / cast concrete walls");
+    const blockWalls=wallBatch(byKind.block,blockMat,"Construction / unfinished blockwork");
+    const brickWalls=wallBatch(byKind.brick,brickMat,"Construction / brick infill");
+    const plywoodWalls=wallBatch(byKind.plywood,plywoodMat,"Construction / plywood hoarding");
+    scene.userData.environmentSurfaces = {
+      floor, ceiling, walls, blockWalls, brickWalls, plywoodWalls,
+      floorMat, ceilMat, wallMat, blockMat, brickMat, plywoodMat,
+    };
 
     scene.userData.propColliders = [];
 
@@ -1080,7 +1289,12 @@
   function buildArenaFinishPass(THREE, scene, wallPositions, renderer) {
     const darkMetal = new THREE.MeshStandardMaterial({ color: 0x493d31, roughness: .84, metalness: .35, envMapIntensity: .3 });
     const timber = constructionMaterial(THREE, renderer, "plywood", 1, .12);
-    const footing = constructionMaterial(THREE, renderer, "block", 1, .25);
+    // Cast kicker at the foot of every wall: darker, damp concrete, so it reads
+    // as its own pour instead of repeating the wall above it.
+    const footing = applyWorldSurface(THREE, constructionMaterial(THREE, renderer, "formwork"), "wall",
+      { tile: 4, panel: [2, 1], tone: 0.08 });
+    footing.color.setHex(0xa29c90);
+    footing.name = "Construction / kicker";
     const routeMat = new THREE.MeshStandardMaterial({ color: 0xdacba7, roughness: 1, metalness: 0, transparent: true, opacity: 0.48, polygonOffset: true, polygonOffsetFactor: -2 });
     const cautionMat = new THREE.MeshStandardMaterial({ color: 0xdba539, roughness: .95, metalness: 0 });
 
