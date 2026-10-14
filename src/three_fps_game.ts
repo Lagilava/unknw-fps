@@ -639,11 +639,11 @@ declare module "three" {
   // as "CG" instead of photographed. Measured from the HDR (src/scripts/find-sun.mjs
   // area): cosine-weighted horizontal sky irradiance ~(2.07, 2.60, 3.47); the sun disc
   // itself is hazed (peak ~33) and carries <1% of the energy, so the analytic sun does
-  // not double-count with the IBL. 1.3 keeps flat ground at the old fill brightness.
+  // not double-count with the IBL.
   // NOTE (three r166): with scene.environment, a material's own envMapIntensity is
   // IGNORED (the renderer writes scene.environmentIntensity into the uniform), so this
   // is the single knob for every material that has no explicit envMap.
-  const HDRI_ENV_INTENSITY = 1.3;
+  const HDRI_ENV_INTENSITY = 1.1;
 
   // The one visible skybox: a camera-locked sphere textured with the real HDR equirect
   // (same image driving the IBL below), so what you see matches what lights the scene —

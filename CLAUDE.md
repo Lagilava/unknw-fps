@@ -583,7 +583,7 @@ See **"The visible-light count is a shader-cache invariant"** above before addin
 removing, or toggling any light.
 
 **Daylight is lit by the HDRI (image-based lighting).** The PMREM-prefiltered
-sky HDR (`scene.environment`, `HDRI_ENV_INTENSITY = 1.3` in three_fps_game.ts) is
+sky HDR (`scene.environment`, `HDRI_ENV_INTENSITY = 1.1` in three_fps_game.ts) is
 the only sky/ambient light, and the exterior sun DirectionalLight (aimed at the
 HDR's sun) is the only direct light. No Ambient/Hemisphere fills in daylight: the
 exterior hemisphere stays in the scene at intensity 0 (blackout + cutscene fill,
