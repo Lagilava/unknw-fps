@@ -66,6 +66,13 @@ const PLAYER_ANIMATION_GLB_KEYS = new Set([
   "fallbackJump",
   "fire",
   "reload",
+  // Animation-only GLBs from src/scripts/convert-pistol-anims.mjs (the FBXs
+  // embed a full character, ~52 MB each).
+  "pistolRun",
+  "pistolStrafe",
+  "pistolJump",
+  "grabPistol",
+  "fallenIdle",
 ]);
 export const PLAYER_ANIMATION_GLTF_PATHS = Object.fromEntries(
   Object.entries(PLAYER_ANIMATION_PATHS)

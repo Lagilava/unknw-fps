@@ -23380,6 +23380,12 @@ async function spawnEnemies(wave, options: any = {}) {
       targetFov: cameraFX.targetFov,
       sight: AIM_PROFILES[currentGun].sight,
       gun: currentGun,
+      // Per player clip: "bound/total" tracks that resolved to a bone on the rig.
+      playerAnims: Object.fromEntries(Object.entries(thirdPerson.actions || {}).map(([key, action]: [string, any]) => {
+        const bindings = action?._propertyBindings || [];
+        const bound = bindings.filter((b: any) => b?.binding?.node).length;
+        return [key, `${bound}/${action?.getClip?.().tracks.length ?? 0}`];
+      })),
     };
   };
 
