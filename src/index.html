@@ -2026,7 +2026,7 @@
 </style>
 <!-- Halo-CE style menu + loading shell. Loaded LAST so it overrides the block
      above; shared verbatim with the legacy entry point. -->
-<link rel="stylesheet" href="/menu_halo.css">
+<link rel="stylesheet" href="./menu_halo.css">
 <base target="_blank">
 </head>
 <body>
@@ -2341,7 +2341,7 @@
 
           <div class="set-row">
             <span class="set-label">Anti-Aliasing
-              <span class="set-hint">FXAA edge smoothing. Cheap — negligible GPU cost.</span>
+              <span class="set-hint">MSAA edge smoothing on the 3D scene (FXAA on low-end devices).</span>
             </span>
             <span class="set-choice" id="opt-aa">
               <button type="button" data-value="off">Off</button>
@@ -2901,9 +2901,9 @@
 </script>
 
 <!-- ════════════════ GAME SCRIPTS ════════════════ -->
-<script defer src="/environment.js"></script>
-<script defer src="/exterior_map.js"></script>
-<script defer src="/modules/sjm.js"></script>
+<script defer src="./environment.js"></script>
+<script defer src="./exterior_map.js"></script>
+<script defer src="./modules/sjm.js"></script>
 <script type="module" src="./three_fps_game.js"></script>
 
 </body>

@@ -37,6 +37,10 @@ Normal waves aren't a clear-the-room kill quota: reach the relay marker (shown o
 
 Starting a mission plays a directed intro cutscene — the district draws itself in as a Tron wireframe, the choir arrives, and the operator materialises into the arena. Blackout waves get their own cut.
 
+## Play online
+
+**https://lagilava.github.io/unknw-fps/** — no install, works in any desktop Chromium/Firefox/Edge. Every push to `main` redeploys it (`.github/workflows/deploy-pages.yml`). For co-op, one player picks **Multiplayer → Host**, shares the room code, and the other joins it from the same link.
+
 ## Quick start
 
 ### Requirements

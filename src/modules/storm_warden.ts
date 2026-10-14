@@ -415,6 +415,12 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     const tipMesh = addMesh(rodGroup, new THREE.ConeGeometry(0.05, 0.1, 6), matCrownGlow, [0, d.h + 0.04, 0]);
     // Clone the crown glow material per rod so each tip can animate opacity independently
     const tipMat = matCrownGlow.clone();
+    // Material.clone() deep-copies userData through JSON, which turns the Color
+    // into a plain hex NUMBER. The rage lerp / spawn reset then did
+    // color.lerpColors(number, …) / color.copy(number) → a NaN colour, and the
+    // NaN pixels it rendered were smeared across the frame by bloom (a white
+    // haze with black specks once MSAA resolved them). Re-attach a real Color.
+    tipMat.userData.baseColor = matCrownGlow.userData.baseColor.clone();
     tipMat.userData.isRodTip = true; // animated separately below → skip in the bulk glow pass
     energyMats.push(tipMat);
     tipMesh.material = tipMat;
