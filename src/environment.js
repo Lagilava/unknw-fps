@@ -1141,7 +1141,7 @@
   }
 
   function buildLevel(THREE, scene, renderer, wallMeshes) {
-    scene.fog = new THREE.FogExp2(0xd8c4a8, 0.0042); // golden-hour haze matched to the HDR horizon so the distant skyline fades into it (density also set by applyWaveLighting)
+    scene.fog = new THREE.FogExp2(0xa4978e, 0.0042); // golden-hour haze matched to the HDR horizon so the distant skyline fades into it (density also set by applyWaveLighting)
     const lightingProfile = scene.userData.environmentLightingProfile || getLightingProfile(renderer);
 
     const floorMaps = loadEnvironmentMaterialMaps(THREE, renderer, "floor", MAP_W * CELL / 6, MAP_H * CELL / 6);

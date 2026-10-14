@@ -591,6 +591,10 @@ and the stand-in if the HDR fails), and `setupEnvironmentLighting` returns early
 in `OUTDOOR_MODE`. In three r166 a material's `envMapIntensity` is IGNORED when it
 lights from `scene.environment`; `scene.environmentIntensity` is the one knob.
 Keep albedos physically plausible (asphalt ~0.08) or sky-lit shade goes black.
+The cinematic grade is tuned toward a photographic, near-neutral look (desat 0.08,
+faint warm highlight tint, gloss 0.4, CSS saturate 1.0); fog and the clear colour
+(`0xa4978e`) are the HDR horizon's measured colour at the dome's 0.35 damp, so
+distant geometry fades into the sky it sits against.
 
 **Interior** (environment.js `setupEnvironmentLighting`, indoor build only):
 - `AmbientLight(0xfff4e4, 0.55)` — warm floor for all tiers

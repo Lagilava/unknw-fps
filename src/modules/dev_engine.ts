@@ -327,14 +327,14 @@ export const DEFAULTS = {
   cinematic: {
     exposureMul: 0.85,      // scene exposure multiplier while cinematic is on
     contrast: 1.05,         // S-curve strength (higher = punchier)
-    desaturate: 0.35,       // pull toward grey (bleach-bypass); 0 = full colour
+    desaturate: 0.08,       // pull toward grey (bleach-bypass); 0 = full colour
     darken: 0.94,           // overall multiply (lower = broodier)
     blackCrush: 0.015,      // deepen shadows toward zero (no lift)
-    gloss: 1,               // in-shader highlight glow amount
+    gloss: 0.4,               // in-shader highlight glow amount
     vignette: 0.34,         // edge darkening strength
     grain: 0.01,            // film grain amount
     shadowR: -0.015, shadowG: 0.0, shadowB: 0.015,   // shadow tint
-    highR: 0.2,    highG: 0.018,  highB: 0.106,       // highlight tint
+    highR: 0.012,  highG: 0.006,  highB: 0.0,       // highlight tint
     bloomStrength: 0.22,    // UnrealBloom strength
     bloomThreshold: 0.9,    // only pixels brighter than this bloom
     bloomRadius: 1,         // bloom spread
@@ -343,7 +343,7 @@ export const DEFAULTS = {
     motionBlurMax: 0.6,     // max motion-blur trail (afterimage damp cap)
     motionBlurTurn: 1.1,    // how much camera TURNING drives blur
     motionBlurMove: 1,      // how much camera MOVEMENT drives blur
-    cssContrast: 1.1, cssSaturate: 1.14, cssBrightness: 0.9, // WebGL CSS companion
+    cssContrast: 1.04, cssSaturate: 1.0, cssBrightness: 0.9, // WebGL CSS companion
   },
 };
 

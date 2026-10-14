@@ -531,10 +531,10 @@
       brick:     std({ color:0xd1b3a1, roughness:0.88, metalness:0,    map:T.brick,    normalMap:T.brickNormal, normalScale:new THREE.Vector2(0.45,0.45) }),
       brickDark: std({ color:0xa08e83, roughness:0.90, metalness:0,    map:T.brick,    normalMap:T.brickNormal, normalScale:new THREE.Vector2(0.40,0.40) }),
       stone:     std({ color:0x888880, roughness:0.92, metalness:0,    map:T.concrete }),
-      roof:      std({ color:0x282828, roughness:0.95, metalness:0.15 }),
+      roof:      std({ color:0x5c5a57, roughness:0.95, metalness:0 }),
       metal:     std({ color:0x909090, roughness:0.30, metalness:0.85, normalScale:new THREE.Vector2(0.5,0.5) }),
-      metalDark: std({ color:0x404040, roughness:0.45, metalness:0.80 }),
-      metalBase: std({ color:0x1a1a1a, roughness:0.35, metalness:0.90 }),
+      metalDark: std({ color:0x6e6e6e, roughness:0.45, metalness:0.80 }),
+      metalBase: std({ color:0x3e3e3e, roughness:0.45, metalness:0.30 }),
       lampPole:  std({ color:0x606058, roughness:0.50, metalness:0.70 }),
       wood:      std({ color:0x7a4e26, roughness:0.85, metalness:0,    map:T.wood }),
       glass:     std({ color:0x1a2030, roughness:0.05, metalness:0.1, transparent:true, opacity:0.45, emissive:new THREE.Color(0x121e34), emissiveIntensity:0.18 }),
@@ -548,9 +548,9 @@
       neon3:     std({ color:0x001020, roughness:0.10, metalness:0,   emissive:new THREE.Color(0x4488ff), emissiveIntensity:0.55 }),
       white:     std({ color:white_c,  roughness:0.60, metalness:0 }),
       yellow:    std({ color:yellow_c, roughness:0.60, metalness:0 }),
-      rust:      std({ color:0x8b4513, roughness:0.95, metalness:0.2 }),
+      rust:      std({ color:0x7a4a2c, roughness:0.95, metalness:0 }),
       water:     std({ color:0x3366aa, roughness:0.05, metalness:0.3, transparent:true, opacity:0.75, normalMap:T.waterNormals, normalScale:new THREE.Vector2(0.8,0.8) }),
-      manhole:   std({ color:0x2a2a2a, roughness:0.55, metalness:0.70 }),
+      manhole:   std({ color:0x5a5650, roughness:0.60, metalness:0.60 }),
       tireTrack: std({ color:0x0a0a0a, roughness:0.95, metalness:0, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-1 }),
     };
 
@@ -663,7 +663,7 @@
       // + IBL environment map AFTER the exterior (buildSkyEnvironment in three_fps_game.js),
       // which overrides this background and supplies the visible sun — so there is no
       // separate sun sprite here (a second sun would double up).
-      scene.background = new THREE.Color(0xd8c2a4);
+      scene.background = new THREE.Color(0xa4978e);
     }
 
 
