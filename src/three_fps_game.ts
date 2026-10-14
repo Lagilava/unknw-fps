@@ -113,7 +113,6 @@ declare module "three" {
   const { RenderPass } = await import("three/examples/jsm/postprocessing/RenderPass.js");
   const { ShaderPass } = await import("three/examples/jsm/postprocessing/ShaderPass.js");
   const { OutputPass } = await import("three/examples/jsm/postprocessing/OutputPass.js");
-  const { AfterimagePass } = await import("three/examples/jsm/postprocessing/AfterimagePass.js");
   const { UnrealBloomPass } = await import("three/examples/jsm/postprocessing/UnrealBloomPass.js");
   const { FXAAShader } = await import("three/examples/jsm/shaders/FXAAShader.js");
   const { CopyShader } = await import("three/examples/jsm/shaders/CopyShader.js");
@@ -1789,9 +1788,9 @@ declare module "three" {
     `,
   };
   const cinematicState: any = {
-    // Default ON (user request): the retro/VHS grade + motion blur is part of the
-    // intended look now. It runs several full-screen shader passes (grade+chroma
-    // combined into one pass, plus afterimage + bloom + output), a real fill cost
+    // Default ON (user request): the retro/VHS grade is part of the intended look.
+    // It runs several full-screen shader passes (grade+chroma combined into one
+    // pass, plus bloom + output), a real fill cost
     // on weak GPUs, so a player can still turn it OFF from the menu toggle
     // (persisted as savedSettings.cinematic = false) and that choice is respected
     // on the next load. See applyRenderScale / updateAdaptiveQuality: cinematic no
@@ -1809,7 +1808,8 @@ declare module "three" {
   // Resolved cinematic tuning (the non-shader bits: exposure, chroma, bloom, motion
   // blur, CSS companion). Defaults mirror the built-in grade; applyDevCinematic()
   // overlays the "cinematic" dev-console category on top. Referenced by
-  // getBaseExposure / applyCinematicSettings / updateMotionBlurDamp.
+  // getBaseExposure / applyCinematicSettings. (The motionBlur* keys are unused
+  // since the afterimage motion blur was removed; kept so old dev presets load.)
   const cinematicCfg: any = {
     exposureMul: 0.66, chromaIntensity: 0.1, chromaOffset: 0.0016,
     bloomStrength: 0.22, bloomThreshold: 0.9, bloomRadius: 1,
@@ -2146,7 +2146,6 @@ declare module "three" {
   let composer = null;
   let cinematicRenderPass = null;
   let cinematicPass = null;
-  let afterimagePass = null;
   let bloomPass = null;
   let fxaaPass = null;
   let darkWaveActive = false;
@@ -2264,11 +2263,6 @@ declare module "three" {
       // pass uncompiled until the first gameplay frame, which reintroduced the
       // "New Mission" shader-link stall (src/tests/shader-stability.spec.cjs).
       cinematicRenderPass = renderPass;
-      // Motion blur (cheap frame-feedback afterimage) BEFORE the grade so the trails
-      // pick up the retro scanlines/grain/vignette on their way out. damp = how much
-      // of the previous frame persists; 0.78 is a visible smear on fast motion without
-      // ghosting the whole screen.
-      afterimagePass = new AfterimagePass(0.6);
       // Glossy highlight bloom (the defining early-2000s music-video glow). Only bright
       // pixels bloom (threshold 0.82) so it lifts practical/emissive highlights and the
       // sun into a dreamy halo without washing the whole frame. Sits before the grade
@@ -2294,7 +2288,6 @@ declare module "three" {
       fxaaPass = new ShaderPass(FXAAShader);
       const outputPass = new OutputPass();
       composer.addPass(renderPass);
-      composer.addPass(afterimagePass);
       composer.addPass(bloomPass);
       composer.addPass(cinematicPass);
       composer.addPass(outputPass);
@@ -2310,7 +2303,6 @@ declare module "three" {
       console.warn('Failed to initialize cinematic postprocessing composer:', e);
       composer = null;
       cinematicPass = null;
-      afterimagePass = null;
       bloomPass = null;
       fxaaPass = null;
       cinematicState.enabled = false;
@@ -2351,11 +2343,6 @@ declare module "three" {
     }
     const cssContrast = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.cssContrast : cinematicCfg.cssContrast;
     const cssBrightness = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.cssBrightness : cinematicCfg.cssBrightness;
-    if (afterimagePass) {
-      afterimagePass.enabled = cinematicState.enabled;
-      // damp=0 fully passes the current frame through (no trail) when disabled.
-      if (afterimagePass.uniforms?.damp) afterimagePass.uniforms.damp.value = cinematicState.enabled ? 0.6 : 0.0;
-    }
     if (bloomPass) {
       bloomPass.enabled = cinematicState.enabled;
       bloomPass.strength = cinematicState.enabled ? cinematicCfg.bloomStrength : 0.0;
@@ -2423,60 +2410,6 @@ declare module "three" {
     // lighter music-video grade + bloom it blew the bright daytime scene out to milky
     // white (killing contrast/detail). Keep near-neutral so the grade/bloom do the work.
     return cinematicState.enabled ? baseToneMappingExposure * cinematicCfg.exposureMul : baseToneMappingExposure;
-  }
-
-  // Velocity-driven motion blur state: the afterimage trail length is derived from
-  // how much the CAMERA actually moved/turned this frame, so a still camera is fully
-  // crisp (no whole-frame ghosting) and the smear only appears — and scales — with
-  // real motion. This is the "smart" part: naive feedback blur trails everything all
-  // the time; this trails only what's moving.
-  const _mbCamPos = new THREE.Vector3();
-  const _mbCamQuat = new THREE.Quaternion();
-  let _mbLastPos: any = null;
-  let _mbLastQuat: any = null;
-  let _mbDamp = 0;
-  let _mbWarmFrames = 0;
-  let _mbSkipped = false;
-  function updateMotionBlurDamp() {
-    if (!afterimagePass?.uniforms?.damp || !cinematicState.enabled) return;
-    camera.getWorldPosition(_mbCamPos);
-    camera.getWorldQuaternion(_mbCamQuat);
-    if (!_mbLastPos) { _mbLastPos = _mbCamPos.clone(); _mbLastQuat = _mbCamQuat.clone(); }
-    const posDelta = _mbCamPos.distanceTo(_mbLastPos);
-    const angDelta = _mbCamQuat.angleTo(_mbLastQuat);
-    _mbLastPos.copy(_mbCamPos);
-    _mbLastQuat.copy(_mbCamQuat);
-    // Weight turning more than translation (pans read blur best). Frame-step based,
-    // so slower fps → bigger steps → more blur, which is physically correct.
-    const motion = posDelta * cinematicCfg.motionBlurMove + angDelta * cinematicCfg.motionBlurTurn;
-    const target = Math.min(cinematicCfg.motionBlurMax, motion * 1.5);
-    // Ramp up fast (blur appears the instant you move), decay slower so it trails
-    // off naturally rather than snapping back to crisp.
-    _mbDamp += (target - _mbDamp) * (target > _mbDamp ? 0.5 : 0.16);
-    // Let it render a few frames first so its programs are linked at boot, not
-    // on the first camera move mid-mission (see shader-stability.spec).
-    if (_mbWarmFrames < 3) {
-      _mbWarmFrames++;
-      afterimagePass.uniforms.damp.value = _mbDamp;
-      return;
-    }
-    // With the camera still, damp ≈ 0 turns the afterimage into an identity
-    // copy that still costs two full-screen half-float passes per frame. Skip
-    // it until the camera moves again. Its history is stale by then, so the
-    // first frame back runs at damp 0 (a pure refresh) — otherwise the max()
-    // blend would flash bright parts of whatever frame it last saw.
-    if (_mbDamp < 0.004) {
-      afterimagePass.enabled = false;
-      _mbSkipped = true;
-      return;
-    }
-    afterimagePass.enabled = true;
-    if (_mbSkipped) {
-      _mbSkipped = false;
-      afterimagePass.uniforms.damp.value = 0;
-      return;
-    }
-    afterimagePass.uniforms.damp.value = _mbDamp;
   }
 
   // ── Halo-style menu backdrop camera ───────────────────────────────────────
@@ -2568,7 +2501,6 @@ declare module "three" {
       cinematicPass.enabled = cinematicState.enabled;
       cinematicPass.uniforms.time.value = performance.now() * 0.001;
     }
-    updateMotionBlurDamp();
     if (debugOrbit.active) {
       // Position the debug cam on a sphere around the player torso and look at it.
       const tx = yaw.position.x, ty = (thirdPerson.root?.position.y ?? (yaw.position.y - PLAYER_H)) + 1.3, tz = yaw.position.z;

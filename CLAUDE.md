@@ -628,15 +628,15 @@ Backend is chosen in the renderer-selection block (~line 280) and is **device-aw
 - Medium/high tiers: **`MsaaRenderPass`** renders the scene into a private 4× MSAA
   half-float target and copies the resolve into the composer (only the scene is
   multisampled, not every post pass). The copy also zeroes NaN and clamps to
-  `MSAA_HDR_CAP`, because bloom + afterimage spread one bad pixel over the frame.
+  `MSAA_HDR_CAP`, because bloom spreads one bad pixel over the frame.
 - Low tier: FXAA, and it must stay the **last** pass (after `OutputPass`). FXAA
   needs tone-mapped sRGB luma; before OutputPass it ran on linear HDR and missed
   dark edges / smeared bright ones / crawled on the film grain.
-- Pass order: Render(MSAA) → Afterimage → Bloom → Grade → Output → FXAA.
+- Pass order: Render(MSAA) → Bloom → Grade → Output → FXAA.
 - Film grain is keyed to `gl_FragCoord` (real target pixels), not `uv * resolution`
   (CSS pixels, which stair-stepped at non-1 pixel ratios).
-- The afterimage (motion blur) pass is skipped while the camera is still, with one
-  damp-0 refresh frame when it wakes.
+- There is **no motion blur**. The afterimage pass was removed: its frame-feedback
+  trail read as input lag, and it cost two full-screen half-float passes per frame.
 - Diagnose with `window.__rbAA()` (pass list, MSAA/FXAA state; `{msaa, fxaa}` toggles).
 
 ## Deployment (GitHub Pages)
