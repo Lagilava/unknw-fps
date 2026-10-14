@@ -14124,20 +14124,18 @@ async function spawnEnemies(wave, options: any = {}) {
       motes.push(sp);
     }
 
-    // Point light for ambient illumination — purple energy glow.
-    const stationLight = new THREE.PointLight(0xb84dff, 2.4, 6.5, 1.8);
-    stationLight.position.y = 1.65;
+    // No PointLight: the emissive core/halo already read as the glow, and every
+    // real light is paid for on every lit fragment in the map.
 
     root.add(baseLow, baseMid, baseTrim, column, screen, screenFrame,
              slot, slotGlow, sideAccL, sideAccR,
              ring1, ring2, ring3, holoCyl, aura,
-             energyCore, coreInner, halo, stationLight);
+             energyCore, coreInner, halo);
 
     root.userData.ring  = ring1;
     root.userData.ring2 = ring2;
     root.userData.ring3 = ring3;
     root.userData.holoCyl      = holoCyl;
-    root.userData.stationLight = stationLight;
     root.userData.energyCore   = energyCore;
     root.userData.coreInner    = coreInner;
     root.userData.halo         = halo;

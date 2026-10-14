@@ -508,83 +508,11 @@
     scene.add(ceilFill.target);
     tagEnvironmentLight(ceilFill.target);
 
-    const activeLights = ROOM_LIGHTS.filter(light =>
-      light &&
-      light.real &&
-      Number.isFinite(light.x) &&
-      Number.isFinite(light.y) &&
-      Number.isFinite(light.z) &&
-      Number.isFinite(light.i) &&
-      light.i > 0 &&
-      Number.isFinite(light.d) &&
-      light.d > 0
-    );
-
-    const selectedLights = activeLights
-      .map((light, index) => ({ light, score: scoreRoomLight(light, index) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, profile.pointCount)
-      .map(entry => entry.light);
-
-    for (let i = 0; i < selectedLights.length; i++) {
-      const light = selectedLights[i];
-      const isHero = i === 0;
-
-      const point = tagEnvironmentLight(
-        new THREE.PointLight(
-          light.color,
-          light.i * profile.pointIntensity * (isHero ? 1.18 : 1.0),
-          light.d * profile.pointDistanceScale * (isHero ? 1.08 : 1.0),
-          profile.pointDecay
-        )
-      );
-
-      point.position.set(light.x, light.y - 0.28, light.z);
-      point.castShadow = false;
-      point.name = isHero ? "HeroCeilingLight" : "CeilingLight";
-      scene.add(point);
-    }
-
-    if (THREE.RectAreaLight && profile.areaCount > 0) {
-      for (let i = 0; i < Math.min(profile.areaCount, selectedLights.length); i++) {
-        const light = selectedLights[i];
-        const area = tagEnvironmentLight(
-          new THREE.RectAreaLight(light.color, 2.4 + light.i * 0.18, 3.1, 1.15)
-        );
-        area.position.set(light.x, WALL_H - 0.16, light.z);
-        area.rotation.x = -Math.PI * 0.5;
-        area.name = "CeilingPanelAreaLight";
-        scene.add(area);
-      }
-    }
-
-    // Low-hung bounce fills simulate indirect light bounced from floor/walls.
-    const bounceSeeds = [
-      { x:  0,  z:  0,  color: 0xa0b4c8, distance: 36 },   // central cool floor bounce
-      { x: -14, z: -14, color: 0xc8b090, distance: 26 },   // warm NW corner bounce
-      { x:  14, z:  14, color: 0xaabcda, distance: 26 },   // cool SE corner bounce
-      { x:  0,  z:  30, color: 0x9ab0c0, distance: 32 },   // south zone fill
-      { x: -12, z:  54, color: 0xb8c8d8, distance: 28 },   // far south NW
-      { x:  12, z:  54, color: 0xc8b898, distance: 28 },   // far south NE — warm contrast
-    ];
-
-    for (let i = 0; i < Math.min(profile.bounceCount, bounceSeeds.length); i++) {
-      const seed = bounceSeeds[i];
-
-      const bounce = tagEnvironmentLight(
-        new THREE.PointLight(
-          seed.color,
-          profile.bounceIntensity,
-          seed.distance,
-          2.0
-        )
-      );
-
-      bounce.position.set(seed.x, 0.85, seed.z);
-      bounce.castShadow = false;
-      bounce.name = "SoftBounceLight";
-      scene.add(bounce);
-    }
+    // No interior PointLights (ceiling or floor-bounce). Every real light is
+    // evaluated for every lit fragment across the whole map, and these ~9 cost
+    // real framerate while mostly painting bright pools on the floor. The
+    // ambient + hemisphere + directional fill above light the interior; the
+    // ceiling fixtures stay as emissive meshes. ROOM_LIGHTS still drives those.
   }
 
   function loadMaterialTexture(THREE, renderer, url, repeatX, repeatY, color = false) {
