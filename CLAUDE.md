@@ -620,6 +620,32 @@ Backend is chosen in the renderer-selection block (~line 280) and is **device-aw
 - Diagnostics: `window.__rbDraws()` logs per-group draw counts; `src/tests/perf/perf-probe.spec.cjs`
   dumps the steady-state breakdown.
 
+## Anti-aliasing (read before touching the composer)
+
+- The WebGL canvas is created with `antialias: false` **on purpose**: post FX render
+  the scene into the composer's offscreen targets, so canvas MSAA only ever saw the
+  final full-screen triangle (cost, no smoothing).
+- Medium/high tiers: **`MsaaRenderPass`** renders the scene into a private 4× MSAA
+  half-float target and copies the resolve into the composer (only the scene is
+  multisampled, not every post pass). The copy also zeroes NaN and clamps to
+  `MSAA_HDR_CAP`, because bloom + afterimage spread one bad pixel over the frame.
+- Low tier: FXAA, and it must stay the **last** pass (after `OutputPass`). FXAA
+  needs tone-mapped sRGB luma; before OutputPass it ran on linear HDR and missed
+  dark edges / smeared bright ones / crawled on the film grain.
+- Pass order: Render(MSAA) → Afterimage → Bloom → Grade → Output → FXAA.
+- Film grain is keyed to `gl_FragCoord` (real target pixels), not `uv * resolution`
+  (CSS pixels, which stair-stepped at non-1 pixel ratios).
+- The afterimage (motion blur) pass is skipped while the camera is still, with one
+  damp-0 refresh frame when it wakes.
+- Diagnose with `window.__rbAA()` (pass list, MSAA/FXAA state; `{msaa, fxaa}` toggles).
+
+## Deployment (GitHub Pages)
+
+`.github/workflows/deploy-pages.yml` builds on every push to `main` and publishes
+`/play/` (the Vite build, `base: './'`, chunks in `bundle/`) with `assets/` as its
+sibling, because runtime paths are `../assets/...`. Keep entry-point script/link
+URLs relative (`./environment.js`, not `/environment.js`) or the sub-path breaks.
+
 ## Post-Processing / Cinematic Mode
 
 Custom `CinematicGradeShader` (GLSL in three_fps_game.js ~line 575):

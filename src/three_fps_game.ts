@@ -116,6 +116,8 @@ declare module "three" {
   const { AfterimagePass } = await import("three/examples/jsm/postprocessing/AfterimagePass.js");
   const { UnrealBloomPass } = await import("three/examples/jsm/postprocessing/UnrealBloomPass.js");
   const { FXAAShader } = await import("three/examples/jsm/shaders/FXAAShader.js");
+  const { CopyShader } = await import("three/examples/jsm/shaders/CopyShader.js");
+  const { FullScreenQuad } = await import("three/examples/jsm/postprocessing/Pass.js");
   THREE.Cache.enabled = true;
   RectAreaLightUniformsLib.init();
 
@@ -149,7 +151,10 @@ declare module "three" {
       return { tier: "low", mobile: false, antialias: false, maxDpr: 0.95, startScale: 0.66, minScale: 0.36, maxScale: 0.82, cinematic: true };
     }
     if (cores >= 8 && memory >= 8) {
-      return { tier: "high", mobile: false, antialias: true, maxDpr: 1.55, startScale: 1, minScale: 0.62, maxScale: 1.1, cinematic: true };
+      // maxScale 1.0, not 1.1: the old >1 ceiling was supersampling standing in
+      // for anti-aliasing (21% more pixels through every pass). The scene now
+      // gets real MSAA, so the extra resolution only cost frame rate.
+      return { tier: "high", mobile: false, antialias: true, maxDpr: 1.55, startScale: 1, minScale: 0.62, maxScale: 1.0, cinematic: true };
     }
     return { tier: "medium", mobile: false, antialias: true, maxDpr: 1.25, startScale: 0.92, minScale: 0.54, maxScale: 1, cinematic: true };
   }
@@ -490,7 +495,13 @@ declare module "three" {
   }
 
   if (!renderer) {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: deviceProfile.antialias, powerPreference: deviceProfile.tier === "low" ? "low-power" : "high-performance" });
+    // antialias:false on purpose. On WebGL every frame with cinematic FX or AA on
+    // goes through the EffectComposer, which renders the scene into its own
+    // offscreen targets — the canvas's MSAA buffer only ever received the final
+    // full-screen triangle, so it smoothed nothing while still costing a
+    // multisampled default framebuffer + resolve every frame. Real MSAA now runs
+    // on the scene pass itself (MsaaRenderPass in ensureCinematicComposer).
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: deviceProfile.tier === "low" ? "low-power" : "high-performance" });
     console.info('Using WebGL renderer');
   }
   const rendererBackend = renderer.isWebGPURenderer || /WebGPU/i.test(renderer.constructor?.name || "") ? "webgpu" : "webgl";
@@ -1767,7 +1778,10 @@ declare module "three" {
         color *= mix(1.0, uDarken, intensity);
 
         // --- Fine film grain (per-pixel) ---
-        float g = hash(floor(uv * resolution) + floor(time * 24.0)) - 0.5;
+        // gl_FragCoord, not uv * resolution: resolution is the CSS size, while the
+        // target is CSS size * pixel ratio * render scale, so the old grain cells
+        // straddled pixels and stair-stepped into blocky aliasing.
+        float g = hash(floor(gl_FragCoord.xy) + floor(time * 24.0)) - 0.5;
         color += g * uGrain * intensity;
 
         gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
@@ -1784,10 +1798,11 @@ declare module "three" {
     // longer forces a resolution cut — its GPU cost is paid in framerate instead.
     enabled: savedSettings?.cinematic !== false,
   };
-  // FXAA (cheap post-process AA, ~0.1ms) is independent of cinematic FX — it
-  // needs the composer too, so ensureCinematicComposer() is shared by both and
-  // builds itself whenever either is enabled. WebGPU has no composer here, so
-  // this only ever applies on the WebGL path (native MSAA covers WebGPU).
+  // Anti-aliasing is independent of cinematic FX — it needs the composer too, so
+  // ensureCinematicComposer() is shared by both and builds itself whenever either
+  // is enabled. On medium/high tiers it is real MSAA on the scene render
+  // (MsaaRenderPass); on the low tier it is FXAA as the very LAST pass, after
+  // tone mapping + sRGB. WebGPU has no composer here (native MSAA covers it).
   const antialiasState: any = {
     enabled: savedSettings?.antialiasing !== false,
   };
@@ -2164,20 +2179,86 @@ declare module "three" {
   function applyAntialiasSettings() {
     if (antialiasState.enabled) ensureCinematicComposer();
     if (fxaaPass) {
-      fxaaPass.enabled = antialiasState.enabled;
+      // MSAA already resolved the scene edges; FXAA on top would only blur.
+      fxaaPass.enabled = antialiasState.enabled && SCENE_MSAA_SAMPLES === 0;
       applyFxaaResolution();
     }
+    if (cinematicRenderPass && "useMsaa" in cinematicRenderPass) cinematicRenderPass.useMsaa = antialiasState.enabled;
   }
   function setUserAntialiasing(v) {
     antialiasState.enabled = !!v;
     applyAntialiasSettings();
     saveSettings({ antialiasing: antialiasState.enabled });
   }
+  // MSAA sample count for the scene pass. 0 = no MSAA (low tier → FXAA instead).
+  const SCENE_MSAA_SAMPLES = rendererBackend === "webgl" && deviceProfile.antialias
+    ? Math.max(0, Math.min(4, renderer.capabilities?.maxSamples || 0))
+    : 0;
+  // The scene is the only thing that has geometric edges, so it is the only
+  // thing that should be multisampled. Giving the composer itself an MSAA target
+  // would multisample (and resolve) every full-screen pass after it too, so this
+  // pass renders into a private multisampled HDR target and copies the resolved
+  // result into the composer's read buffer (one cheap non-MSAA blit).
+  // The resolve copy also sanitises the HDR scene (NaN → 0, clamp to
+  // MSAA_HDR_CAP) before bloom and the afterimage feedback see it. A single NaN
+  // pixel (the Warden rod tips once rendered a NaN colour, see storm_warden.ts)
+  // is spread by bloom's blur chain into a full-frame white haze, and the
+  // afterimage pass then keeps feeding it back. The cap sits far above any real
+  // scene radiance — everything past ~1 is tone-mapped to white anyway.
+  const MSAA_HDR_CAP = 1024;
+  class MsaaRenderPass extends RenderPass {
+    msaaTarget: any;
+    copyQuad: any;
+    useMsaa = true; // driven by the Anti-Aliasing setting (applyAntialiasSettings)
+    constructor(sceneRef, cameraRef, samples) {
+      super(sceneRef, cameraRef);
+      this.msaaTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples });
+      this.msaaTarget.texture.name = "MsaaRenderPass.rt";
+      const copyMat = new THREE.ShaderMaterial({
+        uniforms: { tDiffuse: { value: null }, uMaxHdr: { value: MSAA_HDR_CAP } },
+        vertexShader: CopyShader.vertexShader,
+        fragmentShader: `
+          uniform sampler2D tDiffuse;
+          uniform float uMaxHdr;
+          varying vec2 vUv;
+          void main() {
+            vec4 c = texture2D(tDiffuse, vUv);
+            c = mix(c, vec4(0.0), vec4(isnan(c)));
+            gl_FragColor = clamp(c, 0.0, uMaxHdr);
+          }
+        `,
+        blending: THREE.NoBlending,
+        depthTest: false,
+        depthWrite: false,
+      });
+      copyMat.uniforms.tDiffuse.value = this.msaaTarget.texture;
+      this.copyQuad = new FullScreenQuad(copyMat);
+    }
+    setSize(width, height) {
+      this.msaaTarget.setSize(Math.max(1, width), Math.max(1, height));
+    }
+    render(r, writeBuffer, readBuffer, deltaTime, maskActive) {
+      if (this.renderToScreen || !this.useMsaa) {
+        super.render(r, writeBuffer, readBuffer, deltaTime, maskActive);
+        return;
+      }
+      super.render(r, writeBuffer, this.msaaTarget, deltaTime, maskActive);
+      r.setRenderTarget(readBuffer);
+      this.copyQuad.render(r);
+    }
+    dispose() {
+      this.msaaTarget.dispose();
+      this.copyQuad.material.dispose();
+      this.copyQuad.dispose();
+    }
+  }
   function ensureCinematicComposer() {
     if (rendererBackend !== "webgl" || composer || (!cinematicState.enabled && !antialiasState.enabled)) return;
     try {
       composer = new EffectComposer(renderer);
-      const renderPass = new RenderPass(scene, camera);
+      const renderPass = SCENE_MSAA_SAMPLES > 0
+        ? new MsaaRenderPass(scene, camera, SCENE_MSAA_SAMPLES)
+        : new RenderPass(scene, camera);
       // Kept so the menu backdrop can borrow the composer with its own camera —
       // see renderScene. Rendering the menu OUTSIDE the composer left every post
       // pass uncompiled until the first gameplay frame, which reintroduced the
@@ -2204,16 +2285,20 @@ declare module "three" {
       // Grade + chromatic aberration are one ShaderPass now (see CinematicGradeShader's
       // uChromaOffset/uChromaIntensity) — used to be two full-screen passes.
       cinematicPass = new ShaderPass(CinematicGradeShader);
-      // Cheap edge-smoothing pass (FXAA), independent of cinematic FX. Sits after
-      // the grade so it smooths the final image rather than pre-grade edges.
+      // FXAA fallback (low tier, no MSAA). It MUST be the last pass: FXAA's edge
+      // detection is tuned for display-referred (tone-mapped, sRGB) luma. It used
+      // to sit before OutputPass, i.e. on linear HDR half-float data — dark edges
+      // (most of this game) were never detected and stayed jagged, bright HDR
+      // edges were over-detected and smeared, and the film grain was treated as
+      // edges and crawled.
       fxaaPass = new ShaderPass(FXAAShader);
       const outputPass = new OutputPass();
       composer.addPass(renderPass);
       composer.addPass(afterimagePass);
       composer.addPass(bloomPass);
       composer.addPass(cinematicPass);
-      composer.addPass(fxaaPass);
       composer.addPass(outputPass);
+      composer.addPass(fxaaPass);
       composer.setPixelRatio(basePixelRatio * quality.scale);
       composer.setSize(window.innerWidth, window.innerHeight);
       applyBloomResolution();
@@ -2233,6 +2318,18 @@ declare module "three" {
     }
   }
   ensureCinematicComposer();
+  // Diagnostics: which AA path is live, and the composer's pass order.
+  window.__rbAA = function (opts: any = {}) {
+    if (opts.msaa !== undefined && cinematicRenderPass && "useMsaa" in cinematicRenderPass) cinematicRenderPass.useMsaa = !!opts.msaa;
+    if (opts.fxaa !== undefined && fxaaPass) fxaaPass.enabled = !!opts.fxaa;
+    return {
+      enabled: antialiasState.enabled,
+      msaaSamples: SCENE_MSAA_SAMPLES,
+      msaaActive: !!(cinematicRenderPass && cinematicRenderPass.useMsaa && SCENE_MSAA_SAMPLES > 0),
+      fxaaActive: !!fxaaPass?.enabled,
+      passes: composer ? composer.passes.filter(p => p.enabled).map(p => p.constructor?.name) : [],
+    };
+  };
 
   function applyCinematicSettings() {
     if (cinematicState.enabled) ensureCinematicComposer();
@@ -2338,6 +2435,8 @@ declare module "three" {
   let _mbLastPos: any = null;
   let _mbLastQuat: any = null;
   let _mbDamp = 0;
+  let _mbWarmFrames = 0;
+  let _mbSkipped = false;
   function updateMotionBlurDamp() {
     if (!afterimagePass?.uniforms?.damp || !cinematicState.enabled) return;
     camera.getWorldPosition(_mbCamPos);
@@ -2354,6 +2453,29 @@ declare module "three" {
     // Ramp up fast (blur appears the instant you move), decay slower so it trails
     // off naturally rather than snapping back to crisp.
     _mbDamp += (target - _mbDamp) * (target > _mbDamp ? 0.5 : 0.16);
+    // Let it render a few frames first so its programs are linked at boot, not
+    // on the first camera move mid-mission (see shader-stability.spec).
+    if (_mbWarmFrames < 3) {
+      _mbWarmFrames++;
+      afterimagePass.uniforms.damp.value = _mbDamp;
+      return;
+    }
+    // With the camera still, damp ≈ 0 turns the afterimage into an identity
+    // copy that still costs two full-screen half-float passes per frame. Skip
+    // it until the camera moves again. Its history is stale by then, so the
+    // first frame back runs at damp 0 (a pure refresh) — otherwise the max()
+    // blend would flash bright parts of whatever frame it last saw.
+    if (_mbDamp < 0.004) {
+      afterimagePass.enabled = false;
+      _mbSkipped = true;
+      return;
+    }
+    afterimagePass.enabled = true;
+    if (_mbSkipped) {
+      _mbSkipped = false;
+      afterimagePass.uniforms.damp.value = 0;
+      return;
+    }
     afterimagePass.uniforms.damp.value = _mbDamp;
   }
 

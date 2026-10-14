@@ -52,12 +52,19 @@ function copySiblingAssetsOnBuild(): Plugin {
 
 export default defineConfig({
   root: 'src',
+  // Relative URLs so the build works from any sub-path (GitHub Pages serves the
+  // game under /<repo>/play/, see .github/workflows/deploy-pages.yml).
+  base: './',
   plugins: [serveSiblingAssetsInDev(), copySiblingAssetsOnBuild()],
   server: { port: 3000 },
   build: {
     outDir: resolve(projectRoot, 'dist'),
     emptyOutDir: true,
     target: 'esnext',
+    // Vite's own chunks go to bundle/, so dist/assets/ holds only the game's
+    // runtime assets and can be hoisted to a sibling of the page on deploy
+    // (the game loads them as '../assets/...' relative to the page URL).
+    assetsDir: 'bundle',
     // Three.js + the ~13.5k-line game file produce large chunks by design;
     // silence the default 500 kB warning rather than chasing artificial splits.
     chunkSizeWarningLimit: 4000,

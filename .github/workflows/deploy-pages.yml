@@ -1,0 +1,63 @@
+# Builds the game and publishes it to GitHub Pages so anyone can play it from a
+# link: https://<owner>.github.io/<repo>/
+#
+# Site layout (the game loads its runtime assets as '../assets/...' relative to
+# the page, so assets/ has to be a sibling of the page's folder):
+#   /index.html   → redirects to play/
+#   /play/        → the Vite build (index.html, bundle/, classic scripts)
+#   /assets/      → the game's textures / models / audio
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Assemble site
+        run: |
+          rm -rf _site
+          mkdir -p _site/play
+          mv dist/assets _site/assets
+          cp -r dist/. _site/play/
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>UNKNW</title>
+          <meta http-equiv="refresh" content="0; url=play/">
+          <a href="play/">Play UNKNW</a>
+          HTML
+          du -sh _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}play/
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
