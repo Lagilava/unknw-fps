@@ -168,9 +168,11 @@
       const canvas = document.createElement("canvas");
       canvas.width = W; canvas.height = H;
       const ctx = canvas.getContext("2d");
-      // Dark wet asphalt base
+      // Asphalt base. Kept at a physically plausible albedo (~0.08 once multiplied by
+      // the material colour): the HDRI is the only sky light, and the old rgb(60) base
+      // x grey tint came to ~0.02 albedo, so the street rendered near-black in shade.
       const grad = ctx.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, "rgb(65,69,73)"); grad.addColorStop(1, "rgb(56,60,64)");
+      grad.addColorStop(0, "rgb(92,96,100)"); grad.addColorStop(1, "rgb(82,86,90)");
       ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
       const rng = seededRandom("road-v3");
       // Surface imperfections
@@ -521,8 +523,8 @@
     const M = {
       // polygonOffset pushes the exterior ground slightly deeper so it never
       // z-fights with the interior floor where the two overlap near the exits.
-      ground:    std({ color:0xa5a6aa, roughness:0.96, metalness:0,    map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.04,0.04), polygonOffset:true, polygonOffsetFactor:1.5, polygonOffsetUnits:1.5 }),
-      asphalt:   std({ color:0x888b90, roughness:0.94, metalness:0, map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.035,0.035) }),
+      ground:    std({ color:0xd6d7da, roughness:0.96, metalness:0,    map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.04,0.04), polygonOffset:true, polygonOffsetFactor:1.5, polygonOffsetUnits:1.5 }),
+      asphalt:   std({ color:0xc4c6ca, roughness:0.94, metalness:0, map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.035,0.035) }),
       wetRoad:   std({ color:0x646a70, roughness:0.24, metalness:0, map:T.road,     normalMap:T.wetRoadNormal, normalScale:new THREE.Vector2(0.6,0.6), envMapIntensity:0.7 }),
       sidewalk:  std({ color:0x8a8480, roughness:0.88, metalness:0,    map:T.sidewalk }),
       concrete:  std({ color:0x909090, roughness:0.85, metalness:0,    map:T.concrete }),
@@ -686,11 +688,13 @@
       const sunShadows = true; // Shadow removal requires the player's performance-prompt choice.
       // No shadows → lean on fill for even light across the whole scene.
       // With shadows → keep fill low so the cast shadows read as contrast.
-      scene.add(new THREE.AmbientLight(0xe3eaf0, sunShadows ? 0.18 : 0.24));
-      // Dusk sky fill: cool blue-grey from above, warm earth bounce from below.
-      // With shadows on, fill is kept LOW on purpose — it's what pools inside cast
-      // shadows, so every bit of it lightens them and kills contrast.
-      const hemi = new THREE.HemisphereLight(0xc4d6e6, 0x858278, sunShadows ? 0.65 : 0.75);
+      // Sky fill comes from the HDRI itself (scene.environment, PMREM-prefiltered in
+      // the game's buildSkyEnvironment): it is directional, carries the real sky
+      // colours, and gives reflections, so there is no AmbientLight. The hemisphere
+      // stays in the scene at intensity 0 (removing it later would change the light
+      // count and relink every shader): blackout waves and the cutscene use it as their
+      // own fill, and it stands in for the sky if the HDR fails to load.
+      const hemi = new THREE.HemisphereLight(0xc4d6e6, 0x858278, 0);
       hemi.position.set(0, 40, 176);
       scene.add(hemi);
       // Warm golden-hour sun — the KEY light (+ shadow caster on medium/high).

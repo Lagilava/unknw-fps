@@ -631,6 +631,19 @@ declare module "three" {
   // The HDR's sky values are hot; this damps the visible dome so ACES doesn't bleach
   // the clouds to white. IBL (scene.environment) uses the undamped texture.
   const SKY_DOME_DAMP = 0.35;
+  // The HDRI is the scene's ONLY sky/ambient light: the PMREM-prefiltered equirect
+  // (scene.environment) gives every PBR material its diffuse sky fill and reflections,
+  // and the one DirectionalLight (exterior_map.js) stands in for the sun, aimed at the
+  // HDR's sun. There are no Ambient/Hemisphere fills in daylight any more: they were
+  // flat, uniform light stacked on top of the IBL, which is what made the lighting read
+  // as "CG" instead of photographed. Measured from the HDR (src/scripts/find-sun.mjs
+  // area): cosine-weighted horizontal sky irradiance ~(2.07, 2.60, 3.47); the sun disc
+  // itself is hazed (peak ~33) and carries <1% of the energy, so the analytic sun does
+  // not double-count with the IBL. 1.3 keeps flat ground at the old fill brightness.
+  // NOTE (three r166): with scene.environment, a material's own envMapIntensity is
+  // IGNORED (the renderer writes scene.environmentIntensity into the uniform), so this
+  // is the single knob for every material that has no explicit envMap.
+  const HDRI_ENV_INTENSITY = 1.3;
 
   // The one visible skybox: a camera-locked sphere textured with the real HDR equirect
   // (same image driving the IBL below), so what you see matches what lights the scene —
@@ -1045,7 +1058,7 @@ declare module "three" {
         // equirect assigned directly to scene.environment IS the supported IBL path (see
         // three r166 examples/webgpu_loader_gltf.html, which sets scene.environment = texture).
         scene.environment = equirect;   // node renderer builds the prefiltered IBL internally
-        scene.environmentIntensity = 0.58; // golden-hour IBL — strong enough that materials visibly pick up the sky's warmth
+        scene.environmentIntensity = HDRI_ENV_INTENSITY;
         // Convert any incompatible ShaderMaterials now so compileAsync doesn't trip on them
         // (the normal one-time sanitize otherwise happens later, at the first renderScene).
         sanitizeWebGPUMaterials(scene);
@@ -1067,13 +1080,17 @@ declare module "three" {
         console.warn("[sky] PMREM prefilter unavailable — using raw equirect for IBL", e);
       }
       scene.environment = env;      // image-based lighting for all PBR materials
-      scene.environmentIntensity = 0.58; // golden-hour IBL — strong enough that materials visibly pick up the sky's warmth
+      scene.environmentIntensity = HDRI_ENV_INTENSITY;
       skyEnvActive = true;
     } catch (e) {
       console.warn("[sky] buildSkyEnvironment failed — keeping solid daytime background", e);
       scene.background = new THREE.Color(0xd8c2a4);
       scene.environment = null; // never leave a half-applied env map that would crash render
       skyEnvActive = false;
+      // No IBL means no sky light at all (daylight has no ambient fills) — bring the
+      // exterior hemisphere up as a stand-in so the world isn't lit by the sun alone.
+      const hemi = window.__extHemi;
+      if (hemi) { hemi.userData.baseIntensity = 0.85; hemi.intensity = 0.85; }
     }
   }
 
@@ -1684,12 +1701,12 @@ declare module "three" {
       // Dev-tunable grade params (see the "cinematic" dev-console category).
       uContrast:   { value: 1.05 },
       uDesat:      { value: 0.35 },
-      uDarken:     { value: 0.86 },
-      uBlackCrush: { value: 0.045 },
+      uDarken:     { value: 0.94 },
+      uBlackCrush: { value: 0.015 },
       uGloss:      { value: 1 },
       uVignette:   { value: 0 },
       uGrain:      { value: 0.01 },
-      uShadowTint: { value: new THREE.Vector3(-0.068, 0.02, -0.02) },
+      uShadowTint: { value: new THREE.Vector3(-0.015, 0.0, 0.015) },
       uHighTint:   { value: new THREE.Vector3(0.2, 0.018, 0.106) },
       // Chromatic aberration, folded in from the old standalone ChromaticAberrationShader
       // pass — same math, but one fewer full-screen shader pass (a real GPU-fill win;
@@ -1811,14 +1828,19 @@ declare module "three" {
   // getBaseExposure / applyCinematicSettings. (The motionBlur* keys are unused
   // since the afterimage motion blur was removed; kept so old dev presets load.)
   const cinematicCfg: any = {
-    exposureMul: 0.66, chromaIntensity: 0.1, chromaOffset: 0.0016,
+    exposureMul: 0.85, chromaIntensity: 0.1, chromaOffset: 0.0016,
     bloomStrength: 0.22, bloomThreshold: 0.9, bloomRadius: 1,
     motionBlurMax: 0.6, motionBlurTurn: 1.1, motionBlurMove: 1,
-    cssContrast: 1.2, cssSaturate: 1.14, cssBrightness: 0.74,
+    cssContrast: 1.1, cssSaturate: 1.14, cssBrightness: 0.9,
     // Shader-side tonal curve. Kept here (not only on the uniforms) so the blackout
     // grade can swap them out and restore them — see applyCinematicSettings.
-    gradeContrast: 1.05, gradeDarken: 0.86, gradeBlackCrush: 0.045,
-    shadowTint: [-0.068, 0.02, -0.02],
+    // Daytime tonal steps were eased when the HDRI became the only sky light: the
+    // old chain (exposure x0.66, darken x0.86, CSS brightness 0.74 = ~0.42 overall,
+    // plus a 0.045 black crush and a shadow tint that pulled red out) crushed every
+    // surface lit only by the sky to near-black green. The shadow tint now leans
+    // slightly cool, the colour of real skylight in shade.
+    gradeContrast: 1.05, gradeDarken: 0.94, gradeBlackCrush: 0.015,
+    shadowTint: [-0.015, 0.0, 0.015],
   };
   // Blackout waves (wave%10) render almost the whole frame at ~0.1–0.2 luminance.
   // The daytime cinematic curve darkens in four stacked steps (black crush, contrast
@@ -2375,7 +2397,7 @@ declare module "three" {
   // dev-console change (devReapply). Safe before the passes exist (guards nulls).
   function applyDevCinematic() {
     const cv = (k, d) => devVal("cinematic", k, d);
-    cinematicCfg.exposureMul    = cv("exposureMul", 0.66);
+    cinematicCfg.exposureMul    = cv("exposureMul", 0.85);
     cinematicCfg.chromaIntensity= cv("chromaIntensity", 0.1);
     cinematicCfg.chromaOffset   = cv("chromaOffset", 0.0016);
     cinematicCfg.bloomStrength  = cv("bloomStrength", 0.22);
@@ -2384,21 +2406,21 @@ declare module "three" {
     cinematicCfg.motionBlurMax  = cv("motionBlurMax", 0.6);
     cinematicCfg.motionBlurTurn = cv("motionBlurTurn", 1.1);
     cinematicCfg.motionBlurMove = cv("motionBlurMove", 1);
-    cinematicCfg.cssContrast    = cv("cssContrast", 1.2);
+    cinematicCfg.cssContrast    = cv("cssContrast", 1.1);
     cinematicCfg.cssSaturate    = cv("cssSaturate", 1.14);
-    cinematicCfg.cssBrightness  = cv("cssBrightness", 0.74);
+    cinematicCfg.cssBrightness  = cv("cssBrightness", 0.9);
     // Contrast / darken / black crush reach the shader via applyCinematicSettings,
     // which swaps in the blackout grade while a blackout wave is running.
     cinematicCfg.gradeContrast   = cv("contrast", 1.05);
-    cinematicCfg.gradeDarken     = cv("darken", 0.86);
-    cinematicCfg.gradeBlackCrush = cv("blackCrush", 0.045);
+    cinematicCfg.gradeDarken     = cv("darken", 0.94);
+    cinematicCfg.gradeBlackCrush = cv("blackCrush", 0.015);
     if (cinematicPass) {
       const u = cinematicPass.uniforms;
       u.uDesat.value      = cv("desaturate", 0.35);
       u.uGloss.value      = cv("gloss", 1);
       u.uVignette.value   = 0;
       u.uGrain.value      = cv("grain", 0.01);
-      cinematicCfg.shadowTint = [cv("shadowR", -0.068), cv("shadowG", 0.02), cv("shadowB", -0.02)];
+      cinematicCfg.shadowTint = [cv("shadowR", -0.015), cv("shadowG", 0.0), cv("shadowB", 0.015)];
       u.uHighTint.value.set(cv("highR", 0.2), cv("highG", 0.018), cv("highB", 0.106));
     }
     applyCinematicSettings(); // pushes chroma/bloom/css/exposure through
@@ -4625,7 +4647,7 @@ function createLightningEffect() {
     if (scene.background && (scene.background as any).isColor) (scene.background as any).setHex(shouldDarken ? 0x273b49 : 0xd8c2a4);
     // Disable HDRI lighting and reflections completely during the eclipse.
     // Retain the texture binding to avoid recompiling every PBR material at wave changes.
-    scene.environmentIntensity = shouldDarken ? 0 : 0.58;
+    scene.environmentIntensity = shouldDarken ? 0 : HDRI_ENV_INTENSITY;
     // No sky = no sun. Drop the exterior key/fill so the world goes truly dark
     // instead of "daylight under a black ceiling" (intensity change only — never
     // visibility, per the light-count shader-cache invariant).
@@ -4638,7 +4660,9 @@ function createLightningEffect() {
     }
     const extHemi = window.__extHemi;
     if (extHemi) {
-      extHemi.intensity = shouldDarken ? 1.1 : (extHemi.userData.baseIntensity ?? extHemi.intensity);
+      // 1.28 = the old 1.1 + the 0.18 exterior AmbientLight that used to stay on in
+      // a blackout (the ambient is gone: the HDRI carries daylight fill).
+      extHemi.intensity = shouldDarken ? 1.28 : (extHemi.userData.baseIntensity ?? extHemi.intensity);
       if (!extHemi.userData.baseSkyHex) {
         extHemi.userData.baseSkyHex = extHemi.color.getHex();
         extHemi.userData.baseGroundHex = extHemi.groundColor.getHex();
@@ -17372,7 +17396,7 @@ async function spawnEnemies(wave, options: any = {}) {
     sun.intensity = (sun.userData.baseIntensity ?? 2.1) * (1 - 0.85 * t);
     const hemi = window.__extHemi;
     if (hemi) hemi.intensity = (hemi.userData.baseIntensity ?? 0.45) * (1 - 0.55 * t);
-    if (scene.environment) scene.environmentIntensity = darkWaveActive ? 0 : 0.45 * (1 - 0.68 * t);
+    if (scene.environment) scene.environmentIntensity = darkWaveActive ? 0 : HDRI_ENV_INTENSITY * (1 - 0.68 * t);
   }
 
   // Highest prop top the player is standing over and can rest on (within a small

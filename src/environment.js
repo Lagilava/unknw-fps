@@ -676,6 +676,13 @@
       return parseInt(v.slice(1), 16);
     };
 
+    // Open-air build: the HDRI (scene.environment, set by the game's
+    // buildSkyEnvironment) is the sky light, and the exterior sun is the key. The
+    // ambient / hemisphere / overhead fills below were flat light stacked on top of
+    // the IBL, so they are not created outdoors (one fewer DirectionalLight per lit
+    // fragment, too). The indoor build still needs them.
+    if (OUTDOOR_MODE) return;
+
     // Warm filament ambient — fills shadows so far walls don't go pitch black
     const ambient = tagEnvironmentLight(
       new THREE.AmbientLight(hexOr(devLight.ambientColor, 0xfff4e4), profile.ambient)

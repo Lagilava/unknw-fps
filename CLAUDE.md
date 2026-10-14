@@ -582,7 +582,17 @@ actually was.
 See **"The visible-light count is a shader-cache invariant"** above before adding,
 removing, or toggling any light.
 
-**Interior** (environment.js `setupEnvironmentLighting`):
+**Daylight is lit by the HDRI (image-based lighting).** The PMREM-prefiltered
+sky HDR (`scene.environment`, `HDRI_ENV_INTENSITY = 1.3` in three_fps_game.ts) is
+the only sky/ambient light, and the exterior sun DirectionalLight (aimed at the
+HDR's sun) is the only direct light. No Ambient/Hemisphere fills in daylight: the
+exterior hemisphere stays in the scene at intensity 0 (blackout + cutscene fill,
+and the stand-in if the HDR fails), and `setupEnvironmentLighting` returns early
+in `OUTDOOR_MODE`. In three r166 a material's `envMapIntensity` is IGNORED when it
+lights from `scene.environment`; `scene.environmentIntensity` is the one knob.
+Keep albedos physically plausible (asphalt ~0.08) or sky-lit shade goes black.
+
+**Interior** (environment.js `setupEnvironmentLighting`, indoor build only):
 - `AmbientLight(0xfff4e4, 0.55)` — warm floor for all tiers
 - `HemisphereLight(sky, ground)` — gradient fill
 - `DirectionalLight` — ceiling fill
