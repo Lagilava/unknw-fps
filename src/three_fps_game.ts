@@ -1710,15 +1710,19 @@ declare module "three" {
       resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
       intensity: { value: 1 },
       // Dev-tunable grade params (see the "cinematic" dev-console category).
-      uContrast:   { value: 1.05 },
-      uDesat:      { value: 0.08 },
-      uDarken:     { value: 0.94 },
-      uBlackCrush: { value: 0.015 },
-      uGloss:      { value: 0.4 },
-      uVignette:   { value: 0 },
-      uGrain:      { value: 0.01 },
-      uShadowTint: { value: new THREE.Vector3(-0.015, 0.0, 0.015) },
-      uHighTint:   { value: new THREE.Vector3(0.012, 0.006, 0.0) },
+      // The grade runs AFTER OutputPass, on display-referred (tone-mapped sRGB)
+      // values, so every number here means what it would in a grading suite.
+      uContrast:   { value: 1.5 },   // filmic S-curve: 1 = none, 2 = full smoothstep
+      uDesat:      { value: -0.06 },  // negative = saturation boost
+      uDarken:     { value: 1.0 },    // overall gain
+      uBlackCrush: { value: 0.06 },  // levels: input black point
+      uWhitePoint: { value: 0.95 },   // levels: input white point
+      uGamma:      { value: 1.12 },   // midtone density (>1 = richer, darker mids)
+      uGloss:      { value: 0.22 },
+      uVignette:   { value: 0.3 },
+      uGrain:      { value: 0.016 },
+      uShadowTint: { value: new THREE.Vector3(-0.022, 0.006, 0.026) },
+      uHighTint:   { value: new THREE.Vector3(0.026, 0.01, -0.016) },
       // Chromatic aberration, folded in from the old standalone ChromaticAberrationShader
       // pass — same math, but one fewer full-screen shader pass (a real GPU-fill win;
       // beta feedback was that cinematic shouldn't cost resolution, so it should at
@@ -1737,7 +1741,7 @@ declare module "three" {
       uniform sampler2D tDiffuse;
       uniform float time;
       uniform vec2 resolution;
-      uniform float uContrast, uDesat, uDarken, uBlackCrush, uGloss, uVignette, uGrain;
+      uniform float uContrast, uDesat, uDarken, uBlackCrush, uWhitePoint, uGamma, uGloss, uVignette, uGrain;
       uniform vec3 uShadowTint, uHighTint;
       uniform float intensity;
       uniform float uChromaOffset, uChromaIntensity;
@@ -1783,33 +1787,54 @@ declare module "three" {
         vec2 uv = clamp(vUv, 0.001, 0.999);
         vec3 color = chromaSample(tDiffuse, uv, resolution, uChromaOffset, uChromaIntensity);
 
-        // --- Highlight glow (in-shader horizontal halation) ---
+        // Input is display-referred: this pass sits AFTER OutputPass. It used to run
+        // before it, on linear HDR, and its clamp() cut every highlight at 1.0
+        // before tone mapping, so nothing on screen ever got brighter than ~0.76.
+        float BW = uBlackCrush * intensity;
+        float WP = mix(1.0, uWhitePoint, intensity);
+
+        // --- Halation: warm glow around only the brightest highlights ---
         vec3 bloom = bloomX(tDiffuse, uv, 7.0);
         float lumaB = dot(color, vec3(0.2126, 0.7152, 0.0722));
-        float bloomMask = smoothstep(0.55, 1.0, lumaB);
-        color += bloom * bloomMask * uGloss * intensity;
+        float bloomMask = smoothstep(0.72, 1.0, lumaB);
+        color += bloom * vec3(1.0, 0.86, 0.72) * bloomMask * uGloss * intensity;
 
-        // --- Crush blacks (no lift), hard S-curve contrast ---
-        color = max(color - uBlackCrush * intensity, 0.0);
-        color = mix(color, clamp((color - 0.5) * uContrast + 0.5, 0.0, 1.0), intensity);
+        // --- Levels: set a true black and a true white ---
+        color = clamp((color - BW) / max(WP - BW, 0.05), 0.0, 1.0);
+        color = pow(color, vec3(mix(1.0, uGamma, intensity)));
 
-        // --- Bleach-bypass desaturation ---
+        // --- Filmic S-curve on luminance (hue-preserving), blended per channel a
+        // little so saturated colour gains density the way print film does ---
+        float l0 = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float sAmt = clamp(uContrast - 1.0, 0.0, 1.0) * intensity;
+        float l1 = mix(l0, l0 * l0 * (3.0 - 2.0 * l0), sAmt);
+        vec3 lumaCurve = color * (l1 / max(l0, 1e-4));
+        vec3 chanCurve = mix(color, color * color * (3.0 - 2.0 * color), sAmt);
+        color = mix(lumaCurve, chanCurve, 0.3);
+
+        // --- Saturation (uDesat < 0 boosts), weighted off near-white and near-black ---
         float luma2 = dot(color, vec3(0.2126, 0.7152, 0.0722));
-        color = mix(color, vec3(luma2), uDesat * intensity);
+        float satW = smoothstep(0.0, 0.15, luma2) * (1.0 - smoothstep(0.85, 1.0, luma2));
+        color = mix(vec3(luma2), color, 1.0 - uDesat * intensity * mix(1.0, satW, step(uDesat, 0.0)));
 
-        // --- Split-tone: shadow + highlight tints, then overall darken ---
-        float shadow    = 1.0 - smoothstep(0.0, 0.5, luma2);
-        float highlight = smoothstep(0.5, 1.0, luma2);
+        // --- Split tone: cool shadows, warm highlights, midtones left alone ---
+        float shadow    = 1.0 - smoothstep(0.05, 0.45, luma2);
+        float highlight = smoothstep(0.55, 0.95, luma2);
         color += shadow    * uShadowTint * intensity;
         color += highlight * uHighTint   * intensity;
         color *= mix(1.0, uDarken, intensity);
 
-        // --- Fine film grain (per-pixel) ---
+        // --- Lens vignette (optical falloff, never a black frame) ---
+        vec2 vd = (uv - 0.5) * vec2(resolution.x / max(1.0, resolution.y), 1.0);
+        float vig = smoothstep(0.35, 1.05, length(vd));
+        color *= 1.0 - vig * uVignette * intensity;
+
+        // --- Film grain, strongest in the mids like real stock ---
         // gl_FragCoord, not uv * resolution: resolution is the CSS size, while the
         // target is CSS size * pixel ratio * render scale, so the old grain cells
         // straddled pixels and stair-stepped into blocky aliasing.
         float g = hash(floor(gl_FragCoord.xy) + floor(time * 24.0)) - 0.5;
-        color += g * uGrain * intensity;
+        color += g * uGrain * intensity * (0.4 + 2.4 * luma2 * (1.0 - luma2));
 
         gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
       }
@@ -1842,7 +1867,7 @@ declare module "three" {
     exposureMul: 0.85, chromaIntensity: 0.1, chromaOffset: 0.0016,
     bloomStrength: 0.22, bloomThreshold: 0.9, bloomRadius: 1,
     motionBlurMax: 0.6, motionBlurTurn: 1.1, motionBlurMove: 1,
-    cssContrast: 1.04, cssSaturate: 1.0, cssBrightness: 0.9,
+    cssContrast: 1.0, cssSaturate: 1.0, cssBrightness: 1.0,
     // Shader-side tonal curve. Kept here (not only on the uniforms) so the blackout
     // grade can swap them out and restore them — see applyCinematicSettings.
     // Daytime tonal steps were eased when the HDRI became the only sky light: the
@@ -1850,8 +1875,11 @@ declare module "three" {
     // plus a 0.045 black crush and a shadow tint that pulled red out) crushed every
     // surface lit only by the sky to near-black green. The shadow tint now leans
     // slightly cool, the colour of real skylight in shade.
-    gradeContrast: 1.05, gradeDarken: 0.94, gradeBlackCrush: 0.015,
-    shadowTint: [-0.015, 0.0, 0.015],
+    // Cinematic pass (2026-10): the grade moved after tone mapping and became a real
+    // levels + filmic S-curve, so CSS goes neutral and the shader owns
+    // contrast: black point 0.06, white point 0.95, mid gamma 1.12, teal shadows / warm highlights.
+    gradeContrast: 1.5, gradeDarken: 1.0, gradeBlackCrush: 0.06, gradeWhitePoint: 0.95, gradeGamma: 1.12,
+    shadowTint: [-0.022, 0.006, 0.026],
   };
   // Blackout waves (wave%10) render almost the whole frame at ~0.1–0.2 luminance.
   // The daytime cinematic curve darkens in four stacked steps (black crush, contrast
@@ -1861,9 +1889,12 @@ declare module "three" {
   // the look (desat, split-tone, grain, bloom, motion blur, chroma) remains.
   // The shadow split-tone is cut too: it pulls 0.068 of red out of shadows, and
   // when the whole frame is shadow that strips an orange vest down to green.
+  // In display space a blackout can have a real black point again (a 0.15 frame is
+  // no longer pushed through a linear-HDR crush), just gentler than daytime so the
+  // fire-lit midtones keep their detail.
   const CINEMATIC_BLACKOUT_GRADE = {
-    contrast: 1.0, darken: 1.0, blackCrush: 0.0, shadowTintMul: 0.2,
-    cssContrast: 1.04, cssBrightness: 1.02,
+    contrast: 1.28, darken: 1.0, blackCrush: 0.07, whitePoint: 0.95, gamma: 1.0, shadowTintMul: 0.2,
+    cssContrast: 1.0, cssBrightness: 1.0,
   };
   const cinematicControls = {
     toggles: Array.from(document.querySelectorAll("#cinematic-toggle")),
@@ -1879,12 +1910,10 @@ declare module "three" {
     zIndex: "1",
     opacity: "0",
     transition: "opacity 520ms ease",
-    background: [
-      // Dreamy bloom wash — warm cream glow blooming from the centre (fake soft-focus halation)
-      "radial-gradient(ellipse 75% 65% at 50% 42%, rgba(255,238,205,0.12), rgba(255,224,188,0.045) 38%, rgba(255,224,188,0) 66%)",
-      // Pastel dream cast — peach top fading to a faint magenta/violet base
-      "linear-gradient(176deg, rgba(255,176,138,0.07), rgba(0,0,0,0) 45%, rgba(150,110,180,0.06))",
-    ].join(", "),
+    // WebGPU fallback only (WebGL vignettes in the grade shader). It used to be a
+    // cream "dream" wash, which in normal blend lifted every black by ~0.1 and was
+    // most of why the picture looked milky.
+    background: "radial-gradient(ellipse 85% 80% at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.28) 100%)",
     mixBlendMode: "normal",
   });
   canvas.insertAdjacentElement("afterend", cinematicOverlay);
@@ -1904,9 +1933,10 @@ declare module "three" {
     zIndex: "1",
     background: [
       // Cool steel cast from the sky, faint warm lift near the ground line
-      "linear-gradient(178deg, rgba(120,170,215,0.055), rgba(0,0,0,0) 42% 62%, rgba(224,176,120,0.045))",
+      "linear-gradient(178deg, rgba(120,170,215,0.11), rgba(128,128,128,0) 42% 62%, rgba(224,176,120,0.09))",
     ].join(", "),
-    mixBlendMode: "normal",
+    // soft-light tints without lifting black (normal blend added a ~0.03 floor).
+    mixBlendMode: "soft-light",
   });
   canvas.insertAdjacentElement("afterend", gradeOverlay);
   if (rendererBackend === "webgpu") console.info("Gameplay renderer: WebGPU active; cinematic toggle uses WebGPU-safe canvas grading and overlay effects.");
@@ -2320,10 +2350,13 @@ declare module "three" {
       // edges and crawled.
       fxaaPass = new ShaderPass(FXAAShader);
       const outputPass = new OutputPass();
+      // Grade AFTER OutputPass: a colour grade is display-referred (black point,
+      // white point, S-curve about mid-grey). On linear HDR its clamp cut every
+      // highlight at 1.0 before tone mapping. FXAA stays last.
       composer.addPass(renderPass);
       composer.addPass(bloomPass);
-      composer.addPass(cinematicPass);
       composer.addPass(outputPass);
+      composer.addPass(cinematicPass);
       composer.addPass(fxaaPass);
       composer.setPixelRatio(basePixelRatio * quality.scale);
       composer.setSize(window.innerWidth, window.innerHeight);
@@ -2370,6 +2403,8 @@ declare module "three" {
       u.uContrast.value   = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.contrast   : cinematicCfg.gradeContrast;
       u.uDarken.value     = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.darken     : cinematicCfg.gradeDarken;
       u.uBlackCrush.value = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.blackCrush : cinematicCfg.gradeBlackCrush;
+      u.uWhitePoint.value = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.whitePoint : cinematicCfg.gradeWhitePoint;
+      u.uGamma.value      = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.gamma      : cinematicCfg.gradeGamma;
       const tintMul = darkWaveActive ? CINEMATIC_BLACKOUT_GRADE.shadowTintMul : 1;
       const [sr, sg, sb] = cinematicCfg.shadowTint;
       u.uShadowTint.value.set(sr * tintMul, sg * tintMul, sb * tintMul);
@@ -2398,7 +2433,7 @@ declare module "three" {
     if (userContrast !== 1 || userSaturation !== 1) {
       canvas.style.filter += " contrast(" + userContrast + ") saturate(" + userSaturation + ")";
     }
-    cinematicOverlay.style.opacity = cinematicState.enabled ? "1" : "0";
+    cinematicOverlay.style.opacity = cinematicState.enabled && !cinematicPass ? "1" : "0";
     for (const toggle of cinematicControls.toggles) toggle.checked = cinematicState.enabled;
     for (const value of cinematicControls.values) value.textContent = cinematicState.enabled ? "ON" : "OFF";
   }
@@ -2417,22 +2452,24 @@ declare module "three" {
     cinematicCfg.motionBlurMax  = cv("motionBlurMax", 0.6);
     cinematicCfg.motionBlurTurn = cv("motionBlurTurn", 1.1);
     cinematicCfg.motionBlurMove = cv("motionBlurMove", 1);
-    cinematicCfg.cssContrast    = cv("cssContrast", 1.04);
+    cinematicCfg.cssContrast    = cv("cssContrast", 1.0);
     cinematicCfg.cssSaturate    = cv("cssSaturate", 1.0);
-    cinematicCfg.cssBrightness  = cv("cssBrightness", 0.9);
+    cinematicCfg.cssBrightness  = cv("cssBrightness", 1.0);
     // Contrast / darken / black crush reach the shader via applyCinematicSettings,
     // which swaps in the blackout grade while a blackout wave is running.
-    cinematicCfg.gradeContrast   = cv("contrast", 1.05);
-    cinematicCfg.gradeDarken     = cv("darken", 0.94);
-    cinematicCfg.gradeBlackCrush = cv("blackCrush", 0.015);
+    cinematicCfg.gradeContrast   = cv("contrast", 1.5);
+    cinematicCfg.gradeDarken     = cv("darken", 1.0);
+    cinematicCfg.gradeBlackCrush = cv("blackCrush", 0.06);
+    cinematicCfg.gradeWhitePoint = cv("whitePoint", 0.95);
+    cinematicCfg.gradeGamma      = cv("gamma", 1.12);
     if (cinematicPass) {
       const u = cinematicPass.uniforms;
-      u.uDesat.value      = cv("desaturate", 0.08);
-      u.uGloss.value      = cv("gloss", 0.4);
-      u.uVignette.value   = 0;
-      u.uGrain.value      = cv("grain", 0.01);
-      cinematicCfg.shadowTint = [cv("shadowR", -0.015), cv("shadowG", 0.0), cv("shadowB", 0.015)];
-      u.uHighTint.value.set(cv("highR", 0.012), cv("highG", 0.006), cv("highB", 0.0));
+      u.uDesat.value      = cv("desaturate", -0.06);
+      u.uGloss.value      = cv("gloss", 0.22);
+      u.uVignette.value   = cv("vignette", 0.3);
+      u.uGrain.value      = cv("grain", 0.016);
+      cinematicCfg.shadowTint = [cv("shadowR", -0.022), cv("shadowG", 0.006), cv("shadowB", 0.026)];
+      u.uHighTint.value.set(cv("highR", 0.026), cv("highG", 0.01), cv("highB", -0.016));
     }
     applyCinematicSettings(); // pushes chroma/bloom/css/exposure through
   }

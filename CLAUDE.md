@@ -652,7 +652,8 @@ Backend is chosen in the renderer-selection block (~line 280) and is **device-aw
 - Low tier: FXAA, and it must stay the **last** pass (after `OutputPass`). FXAA
   needs tone-mapped sRGB luma; before OutputPass it ran on linear HDR and missed
   dark edges / smeared bright ones / crawled on the film grain.
-- Pass order: Render(MSAA) → Bloom → Grade → Output → FXAA.
+- Pass order: Render(MSAA) → Bloom → Output → Grade → FXAA. The grade is display-referred
+  (after tone mapping); before OutputPass its clamp cut every highlight at 1.0 pre-tonemap.
 - Film grain is keyed to `gl_FragCoord` (real target pixels), not `uv * resolution`
   (CSS pixels, which stair-stepped at non-1 pixel ratios).
 - There is **no motion blur**. The afterimage pass was removed: its frame-feedback
@@ -668,8 +669,17 @@ URLs relative (`./environment.js`, not `/environment.js`) or the sub-path breaks
 
 ## Post-Processing / Cinematic Mode
 
-Custom `CinematicGradeShader` (GLSL in three_fps_game.js ~line 575):
-- Vignette, film grain, halation, tone mapping, teal shadow push
+Custom `CinematicGradeShader` (GLSL in three_fps_game.ts ~line 1706), running AFTER
+OutputPass on tone-mapped sRGB, so its numbers are grading-suite numbers:
+- Levels (black point `blackCrush` 0.06, `whitePoint` 0.95) → midtone `gamma` 1.12 →
+  filmic S-curve (`contrast` 1.5; 1 = none) on luminance, 30% per channel → saturation
+  (`desaturate` −0.06 = boost) → teal-shadow / warm-highlight split tone → lens vignette
+  0.3 → mid-weighted grain. Halation only above display luma 0.72.
+- Exposure ×0.85 and CSS filter neutral (1/1/1) on WebGL; the shader owns contrast.
+  `CINEMATIC_BLACKOUT_GRADE` uses a gentler curve (black 0.07, S 1.28, gamma 1.0).
+- `#cinematic-overlay` is a vignette shown only on WebGPU (no shader); it used to be a
+  cream wash that lifted every black by ~0.1. `#grade-overlay` blends soft-light so it
+  tints without lifting blacks.
 - Toggled by `cinematicState.enabled`
 - Cinematic FP FOV offset: `-4°` (slightly narrower feel)
 

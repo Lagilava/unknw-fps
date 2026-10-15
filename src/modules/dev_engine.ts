@@ -326,15 +326,17 @@ export const DEFAULTS = {
   // affects the CINEMATIC path; the always-on default grade is never touched.
   cinematic: {
     exposureMul: 0.85,      // scene exposure multiplier while cinematic is on
-    contrast: 1.05,         // S-curve strength (higher = punchier)
-    desaturate: 0.08,       // pull toward grey (bleach-bypass); 0 = full colour
-    darken: 0.94,           // overall multiply (lower = broodier)
-    blackCrush: 0.015,      // deepen shadows toward zero (no lift)
-    gloss: 0.4,               // in-shader highlight glow amount
-    vignette: 0.34,         // edge darkening strength
-    grain: 0.01,            // film grain amount
-    shadowR: -0.015, shadowG: 0.0, shadowB: 0.015,   // shadow tint
-    highR: 0.012,  highG: 0.006,  highB: 0.0,       // highlight tint
+    contrast: 1.5,          // filmic S-curve: 1 = none, 2 = full (display-referred)
+    desaturate: -0.06,      // pull toward grey; negative boosts saturation
+    darken: 1.0,            // overall multiply (lower = broodier)
+    blackCrush: 0.06,       // levels: input black point
+    whitePoint: 0.95,       // levels: input white point
+    gamma: 1.12,            // midtone density (>1 = richer mids)
+    gloss: 0.22,            // in-shader highlight halation amount
+    vignette: 0.3,          // lens falloff strength
+    grain: 0.016,           // film grain amount
+    shadowR: -0.022, shadowG: 0.006, shadowB: 0.026,   // shadow tint (teal)
+    highR: 0.026,  highG: 0.01,  highB: -0.016,      // highlight tint (warm)
     bloomStrength: 0.22,    // UnrealBloom strength
     bloomThreshold: 0.9,    // only pixels brighter than this bloom
     bloomRadius: 1,         // bloom spread
@@ -343,7 +345,7 @@ export const DEFAULTS = {
     motionBlurMax: 0.6,     // max motion-blur trail (afterimage damp cap)
     motionBlurTurn: 1.1,    // how much camera TURNING drives blur
     motionBlurMove: 1,      // how much camera MOVEMENT drives blur
-    cssContrast: 1.04, cssSaturate: 1.0, cssBrightness: 0.9, // WebGL CSS companion
+    cssContrast: 1.0, cssSaturate: 1.0, cssBrightness: 1.0, // WebGL CSS companion
   },
 };
 
@@ -552,9 +554,11 @@ export function sanitizeCategory(category, raw) {
       return {
         exposureMul: Math.max(0.3, Math.min(2.0, num(src.exposureMul, def.exposureMul))),
         contrast: Math.max(0.5, Math.min(2.5, num(src.contrast, def.contrast))),
-        desaturate: Math.max(0, Math.min(1, num(src.desaturate, def.desaturate))),
+        desaturate: Math.max(-0.5, Math.min(1, num(src.desaturate, def.desaturate))),
         darken: Math.max(0.3, Math.min(1.3, num(src.darken, def.darken))),
         blackCrush: Math.max(0, Math.min(0.15, num(src.blackCrush, def.blackCrush))),
+        whitePoint: Math.max(0.6, Math.min(1, num(src.whitePoint, def.whitePoint))),
+        gamma: Math.max(0.6, Math.min(1.8, num(src.gamma, def.gamma))),
         gloss: Math.max(0, Math.min(2, num(src.gloss, def.gloss))),
         vignette: Math.max(0, Math.min(1, num(src.vignette, def.vignette))),
         grain: Math.max(0, Math.min(0.12, num(src.grain, def.grain))),
