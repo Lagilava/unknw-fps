@@ -6,15 +6,15 @@ type AimProfile = {
   pose: { x: number; y: number; z: number; ry: number; rz: number };
 };
 export const AIM_PROFILES: Record<GunType, AimProfile> = {
-  pistol: { sight:'post', label:'IRON SIGHTS', shoulder:.86, pullIn:.24, vignette:.12, pose:{x:-.015,y:.058,z:.24,ry:-.015,rz:-.006} },
-  rifle: { sight:'dot', label:'REFLEX', shoulder:.74, pullIn:.52, vignette:.22, pose:{x:-.055,y:.045,z:.14,ry:-.055,rz:-.015} },
-  shotgun: { sight:'ring', label:'GHOST RING', shoulder:.9, pullIn:.3, vignette:.12, pose:{x:-.045,y:.04,z:.12,ry:-.045,rz:-.015} },
+  pistol: { sight:'post', label:'IRON SIGHTS', shoulder:1.15, pullIn:.24, vignette:.12, pose:{x:-.015,y:.058,z:.24,ry:-.015,rz:-.006} },
+  rifle: { sight:'dot', label:'REFLEX', shoulder:1.18, pullIn:.52, vignette:.22, pose:{x:-.055,y:.045,z:.14,ry:-.055,rz:-.015} },
+  shotgun: { sight:'ring', label:'GHOST RING', shoulder:1.12, pullIn:.3, vignette:.12, pose:{x:-.045,y:.04,z:.12,ry:-.045,rz:-.015} },
   sniper: { sight:'scope', label:'PRECISION OPTIC', shoulder:1, pullIn:.7, vignette:0, pose:{x:0,y:0,z:0,ry:0,rz:0} },
-  smg: { sight:'dot', label:'COMPACT REFLEX', shoulder:.82, pullIn:.36, vignette:.16, pose:{x:-.035,y:.052,z:.19,ry:-.028,rz:-.008} },
-  lmg: { sight:'bracket', label:'SUPPORT SIGHT', shoulder:.7, pullIn:.62, vignette:.3, pose:{x:-.065,y:.036,z:.1,ry:-.06,rz:-.02} },
-  dmr: { sight:'chevron', label:'MARKSMAN OPTIC', shoulder:.76, pullIn:.6, vignette:.35, pose:{x:-.05,y:.048,z:.17,ry:-.04,rz:-.01} },
-  akimbo: { sight:'bracket', label:'FOCUSED FIRE', shoulder:.94, pullIn:.18, vignette:.08, pose:{x:-.02,y:.03,z:.16,ry:-.02,rz:-.004} },
-  flak: { sight:'ring', label:'WIDE APERTURE', shoulder:.92, pullIn:.26, vignette:.14, pose:{x:-.04,y:.032,z:.11,ry:-.035,rz:-.018} },
+  smg: { sight:'dot', label:'COMPACT REFLEX', shoulder:1.15, pullIn:.36, vignette:.16, pose:{x:-.035,y:.052,z:.19,ry:-.028,rz:-.008} },
+  lmg: { sight:'bracket', label:'SUPPORT SIGHT', shoulder:1.2, pullIn:.62, vignette:.3, pose:{x:-.065,y:.036,z:.1,ry:-.06,rz:-.02} },
+  dmr: { sight:'chevron', label:'MARKSMAN OPTIC', shoulder:1.18, pullIn:.6, vignette:.35, pose:{x:-.05,y:.048,z:.17,ry:-.04,rz:-.01} },
+  akimbo: { sight:'bracket', label:'FOCUSED FIRE', shoulder:1.1, pullIn:.18, vignette:.08, pose:{x:-.02,y:.03,z:.16,ry:-.02,rz:-.004} },
+  flak: { sight:'ring', label:'WIDE APERTURE', shoulder:1.12, pullIn:.26, vignette:.14, pose:{x:-.04,y:.032,z:.11,ry:-.035,rz:-.018} },
 };
 
 // ADS specs were authored against the 90-degree FP camera. Preserve their

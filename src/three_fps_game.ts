@@ -5608,7 +5608,8 @@ function createLightningEffect() {
   function getWeaponAnimSpec(gunType) {
     const spec = GUN_SPECS[gunType];
     const state = allGuns?.[gunType] || null;
-    const reloadDuration = state?.reloadTime || spec.reloadTime;
+    const reloadDuration = state?.reloadTimer > 0
+      ? state.reloadDuration : state?.reloadTime || spec.reloadTime;
     return {
       recoil: spec.recoil,
       muzzleFlashDuration: Number.isFinite(spec.muzzleFlashTime)
@@ -7056,7 +7057,7 @@ function createLightningEffect() {
       thirdPerson.weapon.mag.position.copy(base.position);
       thirdPerson.weapon.mag.rotation.copy(base.rotation);
       if (base.scale) thirdPerson.weapon.mag.scale.copy(base.scale);
-      if (reloadActive) {
+      if (reloadActive && GUN_SPECS[currentGun].reloadStyle !== "shells") {
         thirdPerson.weapon.mag.position.y -= magDrop * 0.26 + magSeat * 0.035;
         thirdPerson.weapon.mag.position.x -= magDrop * 0.045;
         thirdPerson.weapon.mag.rotation.z -= magDrop * 0.42;
@@ -15122,6 +15123,10 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     player.xp -= cost;
     gunUpgradeLevels[currentGun] = level + 1;
+    cancelWeaponReload(gunState);
+    thirdPerson.reloadTimer = 0;
+    if (thirdPerson.reloadClip) thirdPerson.reloadClip.visible = false;
+    if (thirdPerson.weapon?.mag) thirdPerson.weapon.mag.visible = true;
     applyGunUpgradeStats(currentGun, true);
     gunState = allGuns[currentGun];
     weaponAnim.animSpec = getWeaponAnimSpec(currentGun);
@@ -20420,7 +20425,8 @@ async function spawnEnemies(wave, options: any = {}) {
       weapon.slide.position.y += (sniperBoltBack + sniperBoltForward) * 0.035;
     }
 
-    const activeMagSwap = currentGun === GUNS.SNIPER ? sniperMagSwap : magSwap;
+    const activeMagSwap = GUN_SPECS[currentGun].reloadStyle === "shells" ? 0
+      : currentGun === GUNS.SNIPER ? sniperMagSwap : magSwap;
     weapon.mag.position.x -= activeMagSwap * (currentGun === GUNS.RIFLE ? 0.1 : 0.08);
     weapon.mag.position.y -= activeMagSwap * (currentGun === GUNS.SHOTGUN ? 0.08 : 0.31);
     weapon.mag.position.z += activeMagSwap * (currentGun === GUNS.SNIPER ? 0.12 : 0.06);
@@ -23983,6 +23989,16 @@ async function spawnEnemies(wave, options: any = {}) {
         updateHUD(0);
         if (render) renderScene();
         return { view: window.__rbView(), reload: window.__rbReload(), fit: {...weaponHandFitter.diag} };
+      },
+      renderWeaponFitForTest: () => {
+        const review = new THREE.PerspectiveCamera(48, camera.aspect, .05, 1000);
+        const origin = thirdPerson.root.getWorldPosition(new THREE.Vector3());
+        const forward = new THREE.Vector3(-Math.sin(yaw.rotation.y),0,-Math.cos(yaw.rotation.y));
+        const right = new THREE.Vector3(Math.cos(yaw.rotation.y),0,-Math.sin(yaw.rotation.y));
+        review.position.copy(origin).addScaledVector(right,2.4).addScaledVector(forward,1.5);
+        review.position.y += 1.65;
+        review.lookAt(origin.clone().add(new THREE.Vector3(0,1.05,0)));
+        renderer.render(scene,review);
       },
       getWeaponHandFit: () => ({...weaponHandFitter.diag}),
       getPlayerAnimation: () => ({

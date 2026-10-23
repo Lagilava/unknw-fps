@@ -52,11 +52,18 @@ test('all nine weapons reload, cancel, aim, and fit the body', async ({page}) =>
     expect(aimed.view.ads).toBeGreaterThan(.95);
     expect(aimed.view.fov).toBeCloseTo(aimed.view.targetFov,3);
     expect(aimed.fit.valid).toBe(true);
-    expect(Number.isFinite(aimed.fit.rightError)).toBe(true);
+    expect(aimed.fit.rightError).toBeLessThan(.08);
+    expect(aimed.fit.leftError).toBeLessThan(.06);
     expect(aimed.fit.length).toBeLessThanOrEqual(1);
     await expect(page.locator('#weapon-aim-sight')).toBeVisible();
     await expect(page.locator('#weapon-aim-sight')).toHaveAttribute('data-weapon',gun);
     await page.screenshot({path:'test-artifacts/handling-' + gun + '.png'});
+    await page.evaluate(() => {
+      document.getElementById('hud').style.visibility = 'hidden';
+      window.__rbTest.renderWeaponFitForTest();
+    });
+    await page.screenshot({path:'test-artifacts/fit-' + gun + '.png'});
+    await page.evaluate(() => { document.getElementById('hud').style.visibility = ''; });
     await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup',{button:2})));
     const lowered = await page.evaluate(() => {
       let r; for(let i=0;i<120;i++) r = window.__rbTest.tickHandlingForTest(1/60);
