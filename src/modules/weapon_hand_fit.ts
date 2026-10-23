@@ -53,6 +53,25 @@ export function createWeaponHandFitter() {
     gun.userData.handFitRear = bounds.min.x;
     return gun.userData.handFitLength = Math.max(.1,bounds.max.x-bounds.min.x);
   }
+  const frameMatrix=new THREE.Matrix4(),localFrame=new THREE.Matrix4();
+  const frameX=new THREE.Vector3(),frameY=new THREE.Vector3(),frameZ=new THREE.Vector3();
+  const localX=new THREE.Vector3(),localY=new THREE.Vector3(),localZ=new THREE.Vector3();
+  const planeNormal=new THREE.Vector3(),frameQ=new THREE.Quaternion(),localQ=new THREE.Quaternion();
+  function orientSegment(bone,child,segment,normal,applyRotation) {
+    frameZ.copy(segment).normalize();
+    frameX.copy(normal).addScaledVector(frameZ,-normal.dot(frameZ)).normalize();
+    frameY.crossVectors(frameZ,frameX).normalize();
+    frameMatrix.makeBasis(frameX,frameY,frameZ);frameQ.setFromRotationMatrix(frameMatrix);
+    localZ.copy(child.position).normalize();
+    localX.set(Math.abs(localZ.x)<.8?1:0,Math.abs(localZ.x)<.8?0:1,0);
+    localX.addScaledVector(localZ,-localX.dot(localZ)).normalize();
+    localY.crossVectors(localZ,localX).normalize();
+    localFrame.makeBasis(localX,localY,localZ);localQ.setFromRotationMatrix(localFrame);
+    frameQ.multiply(localQ.invert());
+    bone.getWorldQuaternion(currentQ);
+    deltaQ.copy(frameQ).multiply(currentQ.invert());
+    applyRotation(bone,deltaQ);bone.updateMatrixWorld(true);
+  }
   // Solve in world space with a BODY-relative elbow pole. It never reads the
   // previously solved elbow to choose the bend side, so steep aim cannot flip it.
   function solve(side, bones, hand, gripWorld, wristQ, applyRotation, rig) {
@@ -71,19 +90,20 @@ export function createWeaponHandFitter() {
     const distance=THREE.MathUtils.clamp(rawDistance,Math.abs(l1-l2)+.015,(l1+l2)*.985);
     diag[side+'Clamped']=Math.abs(rawDistance-distance)>.002;
     direction.multiplyScalar(1/rawDistance);
-    pole.copy(right).multiplyScalar(side==='right'?.65:-.65).addScaledVector(forward,-.12);
-    pole.y-=.9;
+    pole.copy(right).multiplyScalar(side==='right'?1:-1).addScaledVector(forward,-.1);
+    pole.y-=.15;
     pole.addScaledVector(direction,-pole.dot(direction));
     if(pole.lengthSq()<1e-5) pole.copy(forward).addScaledVector(direction,-forward.dot(direction));
     pole.normalize();
     const along=(l1*l1+distance*distance-l2*l2)/(2*distance);
     const height=Math.sqrt(Math.max(0,l1*l1-along*along));
     elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,height);
-    from.subVectors(b,a).normalize(); to.subVectors(elbow,a).normalize();
-    deltaQ.setFromUnitVectors(from,to); applyRotation(upper,deltaQ); upper.updateMatrixWorld(true);
-    fore.getWorldPosition(b); hand.getWorldPosition(c);
-    to.copy(a).addScaledVector(direction,distance).sub(b).normalize(); from.subVectors(c,b).normalize();
-    deltaQ.setFromUnitVectors(from,to); applyRotation(fore,deltaQ); fore.updateMatrixWorld(true);
+    planeNormal.crossVectors(direction,pole).normalize();
+    to.subVectors(elbow,a);
+    orientSegment(upper,fore,to,planeNormal,applyRotation);
+    fore.getWorldPosition(b);
+    to.copy(a).addScaledVector(direction,distance).sub(b);
+    orientSegment(fore,hand,to,planeNormal,applyRotation);
     hand.getWorldQuaternion(currentQ);deltaQ.copy(wristQ).multiply(currentQ.invert());
     applyRotation(hand,deltaQ); hand.updateMatrixWorld(true);
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
