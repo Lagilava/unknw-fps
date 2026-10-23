@@ -73,3 +73,5 @@ The lab's skin-stretch measurement compares sampled arm-mesh triangle edges befo
 Animation review guidance: [CloudAI-X Three.js Animation skill](https://github.com/CloudAI-X/threejs-skills/blob/main/skills/threejs-animation/SKILL.md). API details are checked against this game's Three.js r166.
 
 Locomotion quaternion tracks close their end-to-start rotational seam over the last fifth of each loop. This avoids a repeat-boundary snap while retaining the first 80% of the source motion. The repeated-gait test includes the boundary and limits single-frame knee/ankle rotation changes.
+
+Armed jog now uses rifle-run hips/legs under the same aiming torso/arms as strafing. This avoids asking IK to convert the full run clip's different carry pose into a forward aiming grip. Composite carry layers include spine, chest, neck and head, with hips/legs owned only by the directional clip.

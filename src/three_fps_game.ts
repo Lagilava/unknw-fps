@@ -6120,7 +6120,7 @@ function createLightningEffect() {
       thirdPerson.armSwingActive = nextSwing;
     }
     if (!action || action === thirdPerson.activeAction) return;
-    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:StrafeLeft|StrafeRight|Back|Sprint(?:Left|Right)?))$/;
+    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:Jog|StrafeLeft|StrafeRight|Back|Sprint(?:Left|Right)?))$/;
     const previous=thirdPerson.activeAction;
     const phase=previous && locomotion.test(name) && locomotion.test(thirdPerson.activeActionName)
       ? (previous.time % Math.max(.001,previous.getClip().duration))/Math.max(.001,previous.getClip().duration) : null;
@@ -6248,6 +6248,7 @@ function createLightningEffect() {
     const rifleUpper=source.idle && makeInPlaceClipForModel(source.idle,model);
     const pistolUpper=source.pistolRun && makeInPlaceClipForModel(source.pistolRun,model);
     for(const [name,lower,upper] of [
+      ['armedJog',source.rifleRun||source.sprint,rifleUpper],
       ['armedStrafeLeft',source.strafeAlt||source.strafe,rifleUpper],
       ['armedSprint',source.sprint,rifleUpper],
       ['armedSprintLeft',source.sprintLeft||source.strafeAlt,rifleUpper],

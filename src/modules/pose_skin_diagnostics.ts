@@ -16,6 +16,7 @@ export function sampleAuthoredSkin(root) {
     const skinIndex=geometry.attributes.skinIndex,skinWeight=geometry.attributes.skinWeight;
     if(!position || !skinIndex || !skinWeight) return;
     mesh.skeleton.update();
+    const meshScale=mesh.getWorldScale(new THREE.Vector3()).length()/Math.sqrt(3);
     const count=Math.floor((index?index.count:position.count)/3),stride=Math.max(1,Math.floor(count/512));
     let collected=0;
     for(let triangle=0;triangle<count && collected<128;triangle+=stride) {
@@ -29,8 +30,8 @@ export function sampleAuthoredSkin(root) {
       const rest=ids.map(id=>new THREE.Vector3().fromBufferAttribute(position,id));
       for(let j=0;j<3;j++){
         const length=points[j].distanceTo(points[(j+1)%3]);
-        if(length>1e-5)edges.push({mesh,a:ids[j],b:ids[(j+1)%3],length,
-          restLength:rest[j].distanceTo(rest[(j+1)%3])});
+        if(length>1e-5 && rest[j].distanceTo(rest[(j+1)%3])*meshScale>=.004)edges.push({mesh,a:ids[j],b:ids[(j+1)%3],length,
+          restLength:rest[j].distanceTo(rest[(j+1)%3]),meshScale});
       }
       collected++;
     }
@@ -38,16 +39,21 @@ export function sampleAuthoredSkin(root) {
   return edges;
 }
 export function compareSolvedSkin(edges) {
+  let worstRest:any=null;
   const ratios:number[]=[],restRatios:number[]=[],authoredRestRatios:number[]=[],a=new THREE.Vector3(),b=new THREE.Vector3();
   for(const mesh of new Set<any>(edges.map(e=>e.mesh))){mesh.updateMatrixWorld(true);mesh.skeleton.update();}
   for(const edge of edges) {
     point(edge.mesh,edge.a,a);point(edge.mesh,edge.b,b);
     const length=a.distanceTo(b);
     ratios.push(length/edge.length);
-    if(edge.restLength>1e-5){restRatios.push(length/edge.restLength);authoredRestRatios.push(edge.length/edge.restLength);}
+    if(edge.restLength>1e-5){
+      const ratio=length/edge.restLength;restRatios.push(ratio);authoredRestRatios.push(edge.length/edge.restLength);
+      if(!worstRest||ratio>worstRest.ratio)worstRest={ratio,restMetres:edge.restLength*edge.meshScale,
+        solvedMetres:length*edge.meshScale,authoredMetres:edge.length*edge.meshScale,mesh:edge.mesh.name};
+    }
   }
   ratios.sort((a,b)=>a-b);restRatios.sort((a,b)=>a-b);authoredRestRatios.sort((a,b)=>a-b);
   return {samples:ratios.length,p95:ratios[Math.floor(ratios.length*.95)]||1,max:ratios.at(-1)||1,
     restP95:restRatios[Math.floor(restRatios.length*.95)]||1,restMax:restRatios.at(-1)||1,
-    authoredRestMax:authoredRestRatios.at(-1)||1,finite:ratios.every(Number.isFinite)};
+    authoredRestMax:authoredRestRatios.at(-1)||1,worstRest,finite:ratios.every(Number.isFinite)};
 }

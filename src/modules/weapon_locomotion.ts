@@ -3,8 +3,9 @@ import * as THREE from 'three';
 // Authored armed clips stay on the upper body; real directional clips own feet.
 export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.AnimationClip,
   upperBody: (track: THREE.KeyframeTrack) => boolean, name: string) {
-  const tracks = lower.tracks.filter(t=>!upperBody(t)).map(t=>t.clone());
-  for(const track of upper.tracks.filter(upperBody)) {
+  const carryTrack=(t:THREE.KeyframeTrack)=>upperBody(t)||/spine|chest|neck|head/i.test(t.name);
+  const tracks = lower.tracks.filter(t=>!carryTrack(t)).map(t=>t.clone());
+  for(const track of upper.tracks.filter(carryTrack)) {
     const copy=track.clone();
     copy.times=Float32Array.from(copy.times,t=>t*lower.duration/Math.max(.001,upper.duration));
     tracks.push(copy);
@@ -28,7 +29,7 @@ export function chooseArmedLocomotion(actions: Record<string,any>, oneHand: bool
     if(actions[preferred]) return preferred;
   }
   return oneHand && actions.pistolRun ? 'pistolRun'
-    : actions.rifleRun ? 'rifleRun' : sprint ? 'sprint' : 'walk';
+    : actions.armedJog ? 'armedJog' : actions.rifleRun ? 'rifleRun' : sprint ? 'sprint' : 'walk';
 }
 
 export function locomotionRate(action: string,speed: number,sprintSpeed=9.2) {
