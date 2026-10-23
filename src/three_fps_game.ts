@@ -6118,7 +6118,7 @@ function createLightningEffect() {
       thirdPerson.armSwingActive = nextSwing;
     }
     if (!action || action === thirdPerson.activeAction) return;
-    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:StrafeLeft|StrafeRight|Back))$/;
+    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:StrafeLeft|StrafeRight|Back|Sprint(?:Left|Right)?))$/;
     const previous=thirdPerson.activeAction;
     const phase=previous && locomotion.test(name) && locomotion.test(thirdPerson.activeActionName)
       ? (previous.time % Math.max(.001,previous.getClip().duration))/Math.max(.001,previous.getClip().duration) : null;
@@ -6246,11 +6246,17 @@ function createLightningEffect() {
     const pistolUpper=source.pistolRun && makeInPlaceClipForModel(source.pistolRun,model);
     for(const [name,lower,upper] of [
       ['armedStrafeLeft',source.strafeAlt||source.strafe,rifleUpper],
+      ['armedSprint',source.sprint,source.rifleRun?makeInPlaceClipForModel(source.rifleRun,model):rifleUpper],
+      ['armedSprintLeft',source.sprintLeft||source.strafeAlt,rifleUpper],
+      ['armedSprintRight',source.sprintRight||source.strafe,rifleUpper],
       ['armedStrafeRight',source.strafe,rifleUpper],
       ['armedBack',source.runBack||source.walkBack,rifleUpper],
       ['pistolStrafeLeft',source.strafeAlt||source.strafe,pistolUpper],
       ['pistolStrafeRight',source.strafe,pistolUpper],
       ['pistolBack',source.runBack||source.walkBack,pistolUpper],
+      ['pistolSprint',source.sprint,pistolUpper],
+      ['pistolSprintLeft',source.sprintLeft||source.strafeAlt,pistolUpper],
+      ['pistolSprintRight',source.sprintRight||source.strafe,pistolUpper],
     ] as const) {
       if(!lower || !upper) continue;
       const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model),upper,isUpperBodyTrack,name);
@@ -7195,7 +7201,7 @@ function createLightningEffect() {
     // later, tipping the barrel upward and pulling it away from the support hand.
     // Keep two-handed weapons on the clone's hand-centre/root pose throughout.
     const oneHandWeapon = GUN_SPECS[currentGun]?.gripStyle === "oneHand";
-    const gunHandParented = oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
+    const gunHandParented = false && oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady
       && thirdPerson.rightHand && !!thirdPerson.weapon.handFit;
     // TWO-HANDED clone-faithful path: parented to the body ROOT and posed exactly
     // like updateClonedGhostWeaponPose (hand-centre in root-local space + fixed
@@ -7476,7 +7482,7 @@ function createLightningEffect() {
     // Sidearm calibration only: capture a settled aim pose after the equip dip
     // finishes, so transient equip/inspect rotations cannot become a permanent fit.
     // Two-handed guns must never leave the clone's root pose for a wrist-local fit.
-    const shouldCaptureHandFit = oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
+    const shouldCaptureHandFit = false && oneHandWeapon && GUN_IN_HAND && !unifiedFpActive && !reloadActive && rightReady && thirdPerson.rightHand
         && !thirdPerson.weapon.handFit && thirdPerson.aimBlend > 0.75 && Math.abs(pitch.rotation.x) < 0.3
         && thirdPerson.equip < 0.02 && !thirdPerson.inspecting;
     if (shouldCaptureHandFit) {

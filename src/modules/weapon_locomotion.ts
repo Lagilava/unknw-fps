@@ -16,13 +16,17 @@ export function chooseArmedLocomotion(actions: Record<string,any>, oneHand: bool
   f: number,s: number,sprint=false) {
   const lateral=Math.abs(s)>Math.abs(f)*1.2;
   if(lateral) {
-    const preferred=oneHand ? (s<0?'pistolStrafeLeft':'pistolStrafeRight')
-      : (s<0?'armedStrafeLeft':'armedStrafeRight');
+    const prefix=oneHand?'pistol':'armed';
+    const preferred=prefix+(sprint?'Sprint':'Strafe')+(s<0?'Left':'Right');
     if(actions[preferred]) return preferred;
     return s<0 && actions.strafeAlt ? 'strafeAlt' : 'strafe';
   }
   if(f<-.1) return oneHand && actions.pistolBack ? 'pistolBack'
     : actions.armedBack ? 'armedBack' : actions.runBack ? 'runBack' : 'walkBack';
+  if(sprint) {
+    const preferred=oneHand?'pistolSprint':'armedSprint';
+    if(actions[preferred]) return preferred;
+  }
   return oneHand && actions.pistolRun ? 'pistolRun'
     : actions.rifleRun ? 'rifleRun' : sprint ? 'sprint' : 'walk';
 }

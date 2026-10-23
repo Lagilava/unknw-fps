@@ -33,10 +33,10 @@ The solver's offsets are removed before the next mixer sample. Reload and melee 
 
 | Weapons | Forward | Left/right | Backward |
 |---|---|---|---|
-| Service Pistol, Gemini Machine Pistol | Authored Pistol Run | Directional strafe legs + pistol carry | Actual backward legs + pistol carry |
-| Rifle, shotgun, precision rifle, SMG, LMG, DMR, auto-shotgun | Authored Rifle Run | Directional strafe legs + rifle carry | Actual backward legs + rifle carry |
+| Service Pistol, Gemini Machine Pistol | Pistol Run jog / sprint legs + pistol carry | Directional strafe legs + pistol carry | Actual backward legs + pistol carry |
+| Rifle, shotgun, precision rifle, SMG, LMG, DMR, auto-shotgun | Rifle Run jog / sprint legs + armed carry | Directional strafe legs + rifle carry | Actual backward legs + rifle carry |
 
-The SMG uses a supported rifle-style carry rather than the one-handed pistol movement family. Left/right strafes are distinct clips. Backpedalling does not reverse the entire pistol-run animation. Clip cadence responds to ground speed.
+The SMG uses a supported rifle-style carry rather than the one-handed pistol movement family. Left/right strafes are distinct clips. Backpedalling does not reverse the entire pistol-run animation. Clip cadence responds to ground speed and directional changes retain the stride phase. Sprint uses the existing sprint-leg clips with an armed upper body.
 
 Existing licensed assets are reused; no external motion pack is required. Clip comparison exposes the alternatives for review rather than assuming an animation filename proves that it looks good.
 
