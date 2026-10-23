@@ -86,6 +86,7 @@ export interface GunState {
   fireCooldown: number;
   reloadTime: number;
   reloadTimer: number;
+  reloadDuration: number;
   muzzleTimer: number;
   damage: number;
   pellets: number;
@@ -340,6 +341,7 @@ export function createGunState(gunType: GunType = GUNS.RIFLE): GunState {
     fireCooldown: 0,
     reloadTime: spec.reloadTime,
     reloadTimer: 0,
+    reloadDuration: spec.reloadTime,
     muzzleTimer: 0,
     damage: spec.damage,
     pellets: spec.pellets,

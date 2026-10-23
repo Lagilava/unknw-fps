@@ -7,6 +7,7 @@ import { createFlameJet, FLAMETHROWER_CONFIG } from "./modules/flame_jet";
 ﻿import { createBoltCore, createAbilityImpacts } from "./modules/ability_fx";
 import { createGameHud } from "./modules/game_hud";
 import { createWeaponHud } from "./modules/weapon_hud";
+import { beginWeaponReload, cancelWeaponReload, advanceWeaponReload, weaponReloadProgress, aimCursorTangents, adsLookScale, dampAds } from "./modules/weapon_handling";
 import { AIM_PROFILES, getWeaponAdsFov, createAimSight } from "./modules/weapon_ads";
 ﻿﻿import {
   ANGEL_DRONE_TEXTURE_PATHS,
@@ -4382,10 +4383,9 @@ function createLightningEffect() {
   }
 
   function getAimCursorOffset(target = fireAnglesTmp) {
-    return target.set(
-      crosshair.recoilX / Math.max(1, window.innerWidth * 0.5),
-      -crosshair.recoilY / Math.max(1, window.innerHeight * 0.5)
-    );
+    const offset = aimCursorTangents(crosshair.recoilX, crosshair.recoilY,
+      window.innerWidth, window.innerHeight, camera.fov, camera.aspect);
+    return target.set(offset.x, offset.y);
   }
 
   function getPelletSpreadOffset(gunType, pelletIndex, pelletCount, spread, target) {
@@ -6918,7 +6918,11 @@ function createLightningEffect() {
       thirdPerson.reloadClip.parent?.remove(thirdPerson.reloadClip);
       thirdPerson.reloadClip = null;
     }
-    const clip = magSrc.clone(true);
+    // A tube magazine is not a shell: show one brass round per insert.
+    const clip = GUN_SPECS[currentGun]?.reloadStyle === "shells"
+      ? new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, .28, 8),
+          new THREE.MeshStandardMaterial({ color: 0xcda44a, metalness: .7, roughness: .4 }))
+      : magSrc.clone(true);
     clip.name = "ReloadClip";
     clip.visible = false;
     clip.traverse(o => { o.frustumCulled = false; if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
@@ -7523,7 +7527,7 @@ function createLightningEffect() {
     }
     thirdPerson.lastMove = moveState || thirdPerson.lastMove;
     thirdPerson.fireTimer = Math.max(0, thirdPerson.fireTimer - dt);
-    thirdPerson.reloadTimer = Math.max(0, thirdPerson.reloadTimer - dt);
+    // Local reload time is advanced once by updateReload, never by the pose/menu loop.
 
     const f = thirdPerson.lastMove.f || 0;
     const s = thirdPerson.lastMove.s || 0;
@@ -12144,7 +12148,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // Real recorded reload, time-fit to this gun's reload duration so the sound
     // lands exactly as the mechanical reload completes (gunState.reloadTimer was
     // just set to reloadDuration by tryReload).
-    if (audioEngine.fitPlay('reload', gunState.reloadTimer || spec.reloadTime || 1, { volume: 0.9 })) return;
+    if (audioEngine.fitPlay(spec.reloadSound || 'reload', gunState.reloadTimer || spec.reloadTime || 1, { volume: 0.9 })) return;
     if (spec.reloadSound && playEventSound(spec.reloadSound, { volume: 0.8 })) return;
     if (playEventSound('reload', { volume: 0.8 })) return;
     if (style === "shells") { sfxReloadShells(); return; }
@@ -16325,13 +16329,20 @@ async function spawnEnemies(wave, options: any = {}) {
       if (pendingWeaponSwitch) pendingWeaponSwitch.gun = gunType;
       else pendingWeaponSwitch = { gun: gunType, elapsed: 0,
         duration: Math.max(0.16, GUN_SPECS[currentGun].equipTime * 0.65) };
-      gunState.reloadTimer = 0;
-      gunState.isAutoReloading = false;
+      cancelWeaponReload(gunState);
+      thirdPerson.reloadTimer = 0;
+      if (thirdPerson.reloadClip) thirdPerson.reloadClip.visible = false;
+      if (thirdPerson.weapon?.mag) thirdPerson.weapon.mag.visible = true;
       mouse.aiming = false;
       audioEngine.stopFireLoop(true);
       return;
     }
     pendingWeaponSwitch = null;
+    cancelWeaponReload(gunState);
+    thirdPerson.reloadTimer = 0;
+    if (thirdPerson.reloadClip) thirdPerson.reloadClip.visible = false;
+    if (thirdPerson.weapon?.mag) thirdPerson.weapon.mag.visible = true;
+    viewState.ads = 0;
     allGuns[currentGun] = gunState;
     audioEngine.stopFireLoop(true); // hard-cut any auto fire loop from the old weapon
     if (weapon?.gun) weapon.gun.visible = false;
@@ -16618,9 +16629,10 @@ async function spawnEnemies(wave, options: any = {}) {
     if (!player.unlimitedAmmo && gunState.mag <= 0) {
       if (!gunState.isAutoReloading) {
         sfxEmpty();
-        tryReload();
         gunState.isAutoReloading = true;
       }
+      // Retry while held if Null Field temporarily rejected the first request.
+      tryReload();
       return;
     }
 
@@ -17304,12 +17316,13 @@ async function spawnEnemies(wave, options: any = {}) {
     if (darkWaveActive) return; // the blackout incinerator has no magazine
     if (pendingWeaponSwitch) return;
     if ((player.nullLockTimer || 0) > 0) return; // Null Field: reload suppressed
-    if (gunState.reloadTimer > 0) return;
-    if (gunState.mag >= gunState.magSize) return;
-    if (gunState.ammo <= 0) return;
-    gunState.reloadTimer = weaponAnim.animSpec.reloadDuration;
+    if (game.state !== "playing" || player.pvpDead || cutscene.active) return;
+    if (!beginWeaponReload(gunState)) return;
+    // Snapshot upgraded duration once for sound, HUD, FP and body animation.
+    weaponAnim.animSpec = getWeaponAnimSpec(currentGun);
+    weaponAnim.animSpec.reloadDuration = gunState.reloadDuration;
     weaponAnim.reloadJolt = 1;
-    thirdPerson.reloadTimer = Math.max(thirdPerson.reloadTimer, gunState.reloadTimer);
+    thirdPerson.reloadTimer = gunState.reloadTimer;
     thirdPerson.inspecting = false;
     thirdPerson.inspectT = 0;
     audioEngine.stopFireLoop(); // trigger released into reload — kill the fire loop
@@ -17327,12 +17340,17 @@ async function spawnEnemies(wave, options: any = {}) {
     thirdPerson.inspectDuration = GUN_SPECS[currentGun]?.inspectTime || 1.4;
   }
 
+  function updateReload(dt) {
+    const completed = advanceWeaponReload(gunState, dt);
+    thirdPerson.reloadTimer = gunState.reloadTimer;
+    if (completed) finishReload();
+  }
+
   function finishReload() {
-    const need = gunState.magSize - gunState.mag;
-    const take = Math.min(need, gunState.ammo);
-    gunState.mag += take;
-    gunState.ammo -= take;
-    gunState.isAutoReloading = false;
+    // Ammo has already been committed by advanceWeaponReload.
+    thirdPerson.reloadTimer = 0;
+    if (thirdPerson.reloadClip) thirdPerson.reloadClip.visible = false;
+    if (thirdPerson.weapon?.mag) thirdPerson.weapon.mag.visible = true;
     weaponAnim.slideKick = Math.max(weaponAnim.slideKick, 0.8);
     weaponAnim.reloadJolt = 1;
   }
@@ -19073,7 +19091,7 @@ async function spawnEnemies(wave, options: any = {}) {
     // Null Field debuff: sprint (and reload, see startReload) suppressed while locked.
     player.nullLockTimer = Math.max(0, (player.nullLockTimer || 0) - dt);
     const wantsSprintInput =
-      ((keys.has("ShiftLeft") || keys.has("ShiftRight")) || touchInput.sprint) && (f || s) &&
+      !mouse.aiming && ((keys.has("ShiftLeft") || keys.has("ShiftRight")) || touchInput.sprint) && (f || s) &&
       player.nullLockTimer <= 0;
 
     if (player.unlimitedSprint) {
@@ -20483,15 +20501,17 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   function updateCameraFX(dt) {
-    const sprinting = game.state === "playing" && (keys.has("ShiftLeft") || keys.has("ShiftRight")) && player.stamina > 0;
+    const sprinting = game.state === "playing" && !!thirdPerson.lastMove?.sprinting && !mouse.aiming;
     const gunSpec = GUN_SPECS[currentGun] || GUN_SPECS[GUNS.RIFLE];
     const lookBackTarget = keys.has("KeyC") && game.state === "playing" && !mouse.aiming ? 1 : 0;
     viewState.lookBack += (lookBackTarget - viewState.lookBack) * Math.min(1, dt * 12);
 
-    const allowAds = !thirdPerson.enabled || mouse.aiming || currentGun === GUNS.SNIPER;
-    const adsTarget = mouse.aiming && !sprinting && gunState.reloadTimer <= 0 && game.state === "playing" && viewState.lookBack < 0.1 && allowAds ? 1 : 0;
+    const adsTarget = mouse.aiming && !sprinting && gunState.reloadTimer <= 0 &&
+      !pendingWeaponSwitch && weaponAnim.switchBlend <= .12 && !player.pvpDead &&
+      !cutscene.active && !darkWaveActive && game.state === "playing" &&
+      viewState.lookBack < .1 ? 1 : 0;
     const adsSpeed = adsTarget > viewState.ads ? gunSpec.adsInSpeed : gunSpec.adsOutSpeed;
-    viewState.ads += (adsTarget - viewState.ads) * Math.min(1, dt * adsSpeed);
+    viewState.ads = dampAds(viewState.ads, adsTarget, adsSpeed, dt);
 
     const inTP = thirdPerson.enabled && thirdPerson.ready;
     // TP uses cinematic over-shoulder FOV (unchanged); FP uses wide immersive FPS FOV
@@ -20505,7 +20525,8 @@ async function spawnEnemies(wave, options: any = {}) {
     const aimFov = Math.min(hipFov, getWeaponAdsFov(gunSpec.adsFov, inTP));
     cameraFX.targetFov = hipFov + (aimFov - hipFov) * viewState.ads;
     const prevFov = camera.fov;
-    camera.fov += (cameraFX.targetFov - camera.fov) * Math.min(1, dt * 6);
+    // A second slow FOV lerp made optics lag behind the sight/shoulder blend.
+    camera.fov = cameraFX.targetFov;
     if (Math.abs(camera.fov - prevFov) > 0.01) camera.updateProjectionMatrix();
 
     // Near clip: FP needs small near for weapon; TP needs larger to avoid wall clipping.
@@ -20871,9 +20892,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const reloading = gunState.reloadTimer > 0;
     hud.reloadWrap?.classList.toggle("active", reloading);
     if (reloading) {
-      if (hud.reloadBar) setStyleIfChanged(hud.reloadBar.style, "width", (1 - gunState.reloadTimer / gunState.reloadTime) * 100 + "%");
-      gunState.reloadTimer = Math.max(0, gunState.reloadTimer - dt);
-      if (gunState.reloadTimer <= 0) finishReload();
+      if (hud.reloadBar) setStyleIfChanged(hud.reloadBar.style, "width", weaponReloadProgress(gunState) * 100 + "%");
     }
 
     updateWeaponReadout(currentGun, gunState, player.unlimitedAmmo, gunUpgradeLevels[currentGun] || 0);
@@ -23743,6 +23762,7 @@ async function spawnEnemies(wave, options: any = {}) {
         if (game.state === "playing") {
           const _pf0 = performance.now();
           updateWeaponSwitch(dt);
+          updateReload(dt);
           if (mouse.down && gunState.fireCooldown <= 0 && !(cutscene.active && cutscene.phase < 2)) fireGun();
           const moveState = updateMovement(dt);
           updateThirdPersonCharacter(dt, moveState);
@@ -23947,9 +23967,20 @@ async function spawnEnemies(wave, options: any = {}) {
       pauseForAnimationReview: (paused = true) => { animationReviewPaused = paused; },
       startReloadForTest: () => { gunState.mag = Math.max(0, gunState.mag - 1); tryReload(); },
       tickReloadForTest: (dt = 1 / 120) => {
+        updateReload(dt);
         updateThirdPersonCharacter(dt, { f: 0, s: 0, sprinting: false, jumping: false });
         updateHUD(dt);
         return window.__rbReload();
+      },
+      tickHandlingForTest: (dt = 1 / 60, render = false) => {
+        updateWeaponSwitch(dt);
+        updateReload(dt);
+        updateThirdPersonCharacter(dt, thirdPerson.lastMove);
+        updateWeapon(dt);
+        updateCameraFX(dt);
+        updateHUD(0);
+        if (render) renderScene();
+        return { view: window.__rbView(), reload: window.__rbReload(), fit: {...weaponHandFitter.diag} };
       },
       getWeaponHandFit: () => ({...weaponHandFitter.diag}),
       getPlayerAnimation: () => ({
@@ -23986,6 +24017,8 @@ async function spawnEnemies(wave, options: any = {}) {
             : state === 'death' ? (thirdPerson.actions.death?.getClip().duration || 2) : state === 'melee' ? .34 : 1.2;
           return captureAnimationReview(thirdPerson.root, dt => {
             if (state.includes('turn')) yaw.rotation.y += dt * 2;
+            // Offline animation review owns its own clock; gameplay uses updateReload.
+            if (state.includes('reload')) thirdPerson.reloadTimer = Math.max(0, thirdPerson.reloadTimer - dt);
             updateThirdPersonCharacter(dt, move);
             updateKnifeVisual();
             player.meleeTimer = Math.max(0, player.meleeTimer - dt);
@@ -24799,10 +24832,18 @@ async function spawnEnemies(wave, options: any = {}) {
     syncClickToPlay();
   });
 
+  function getAdsLookScale() {
+    const hipFov = (thirdPerson.enabled && thirdPerson.ready
+      ? devVal("camera", "tpWalkFov", 63) : devVal("camera", "fpWalkFov", 90)) +
+      (cinematicState.enabled ? devVal("camera", "cinematicFovOffset", -4) : 0) + userFovOffset;
+    return adsLookScale(camera.fov, hipFov);
+  }
+
   window.addEventListener("mousemove", e => {
     if (!mouse.locked || game.state !== "playing") return;
-    yaw.rotation.y -= e.movementX * lookSens.x;
-    pitch.rotation.x -= e.movementY * lookSens.y;
+    const zoomScale = getAdsLookScale();
+    yaw.rotation.y -= e.movementX * lookSens.x * zoomScale;
+    pitch.rotation.x -= e.movementY * lookSens.y * zoomScale;
     pitch.rotation.x = Math.max(-1.2, Math.min(1.2, pitch.rotation.x));
   });
 
@@ -24876,8 +24917,9 @@ async function spawnEnemies(wave, options: any = {}) {
 
     function applyLook(dx, dy) {
       if (game.state !== "playing") return;
-      yaw.rotation.y   -= dx * LOOK_SENS * lookSensMul;
-      pitch.rotation.x -= dy * LOOK_SENS * lookSensMul;
+      const zoomScale = getAdsLookScale();
+      yaw.rotation.y   -= dx * LOOK_SENS * lookSensMul * zoomScale;
+      pitch.rotation.x -= dy * LOOK_SENS * lookSensMul * zoomScale;
       pitch.rotation.x = Math.max(-1.2, Math.min(1.2, pitch.rotation.x));
     }
 
