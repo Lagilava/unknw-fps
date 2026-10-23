@@ -24000,7 +24000,18 @@ async function spawnEnemies(wave, options: any = {}) {
         review.position.copy(origin).addScaledVector(right,2.4).addScaledVector(forward,1.5);
         review.position.y += 1.65;
         review.lookAt(origin.clone().add(new THREE.Vector3(0,1.05,0)));
-        renderer.render(scene,review);
+        // Scope view hides the local body. The external review camera must show
+        // it, then restore gameplay visibility without changing the aim state.
+        const bodyVisible = thirdPerson.root.visible;
+        const gunVisible = thirdPerson.weapon.gun.visible;
+        try {
+          thirdPerson.root.visible = true;
+          thirdPerson.weapon.gun.visible = true;
+          renderer.render(scene,review);
+        } finally {
+          thirdPerson.root.visible = bodyVisible;
+          thirdPerson.weapon.gun.visible = gunVisible;
+        }
       },
       probeAimProjectionForTest: (heading, elevation) => {
         const oldYaw = yaw.rotation.y, oldPitch = pitch.rotation.x;

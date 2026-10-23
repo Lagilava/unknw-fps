@@ -74,9 +74,9 @@ The Precision Rifle, LMG and DMR use shorter body-relative fits. Long-gun stocks
 |---|---|
 | ![Pistol aiming view](docs/screenshots/handling-pistol.png) | ![Precision rifle scope](docs/screenshots/handling-sniper.png) |
 | **Bastion LMG** | **Combat Shotgun** |
-| ![LMG aiming view](docs/screenshots/handling-lmg.png) | ![Shotgun aiming view](docs/screenshots/handling-shotgun.png) |
+| ![LMG body fit](docs/screenshots/fit-lmg.png) | ![Shotgun aiming view](docs/screenshots/handling-shotgun.png) |
 
-These views are captured by the browser regression test with shadows disabled. They show the running game, not concept art.
+These aiming and external body-fit views are captured by the browser regression test with shadows disabled. They show the running game, not concept art.
 
 ## Enemies and progression
 
