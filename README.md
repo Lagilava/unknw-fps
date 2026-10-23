@@ -116,6 +116,12 @@ Pushing to `main` builds and deploys through [deploy-pages.yml](.github/workflow
 
 For local internet multiplayer, `Start Internet Multiplayer.bat` starts the local server and a Cloudflare tunnel. Install `cloudflared` first. See `turn-config.example.txt` for relay configuration; keep credentials out of Git.
 
+## Animation lab
+
+**[Open the animation lab](https://lagilava.github.io/unknw-fps/play/?animationLab=1)** to test weapons and character motion without enemies or the city scene. It uses the production rig and pose code, with pitch/yaw controls, armed movement profiles, orbit cameras, slow motion, pause and frame stepping.
+
+See [the lab guide](docs/animation-lab.md) for controls, clip choices and repeatable checks.
+
 ## Tests and play-test feedback
 
 Run the fast weapon-handling checks:

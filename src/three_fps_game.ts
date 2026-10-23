@@ -6118,8 +6118,13 @@ function createLightningEffect() {
       thirdPerson.armSwingActive = nextSwing;
     }
     if (!action || action === thirdPerson.activeAction) return;
+    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:StrafeLeft|StrafeRight|Back))$/;
+    const previous=thirdPerson.activeAction;
+    const phase=previous && locomotion.test(name) && locomotion.test(thirdPerson.activeActionName)
+      ? (previous.time % Math.max(.001,previous.getClip().duration))/Math.max(.001,previous.getClip().duration) : null;
     action.enabled = true;
     action.reset();
+    if(phase!==null) action.time=phase*action.getClip().duration;
     action.fadeIn(fade);
     action.play();
     if (thirdPerson.activeAction) thirdPerson.activeAction.fadeOut(fade);

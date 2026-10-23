@@ -154,23 +154,46 @@ export function createWeaponHandFitter() {
         gun.position.add(offset); gun.updateMatrixWorld(true);
       }
       diag.torsoPush=push;
-      // Bring the trigger grip inside the arm's reachable sphere before solving.
-      // Gun and palms move together; unreachable targets never stretch the skeleton.
-      if(reload<.001 && bones?.rightUpperArm && bones?.rightForeArm) {
-        bones.rightUpperArm.getWorldPosition(a); bones.rightForeArm.getWorldPosition(b); rightHand.getWorldPosition(c);
-        target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
-        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right);
-        rightHand.getWorldScale(worldScale);
-        offset.copy(palmLocal(rightHand)).multiply(worldScale).applyQuaternion(desiredQ);
-        wristTarget.copy(target).sub(offset);
-        direction.subVectors(wristTarget,a);
-        const reach=(a.distanceTo(b)+b.distanceTo(c))*.975;
-        if(direction.length()>reach) {
-          offset.copy(direction).setLength(reach).sub(direction);
-          root.getWorldQuaternion(parentQ);
-          offset.applyQuaternion(parentQ.invert());
-          gun.position.add(offset); gun.updateMatrixWorld(true);
+      // Let the support grip slide along a long handguard before fitting both
+      // arms. Compact sidearms instead keep their authored grip spacing.
+      if(support && bones?.leftUpperArm && bones?.leftForeArm && fit.left[0]-fit.right[0]>.15) {
+        bones.leftUpperArm.getWorldPosition(a);bones.leftForeArm.getWorldPosition(b);leftHand.getWorldPosition(c);
+        target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
+        const reach=(a.distanceTo(b)+b.distanceTo(c))*.94;
+        direction.subVectors(target,a);axis.set(1,0,0).applyQuaternion(worldQ);
+        const along=direction.dot(axis),disc=along*along-(direction.lengthSq()-reach*reach);
+        if(direction.length()>reach && along>0 && disc>=0) {
+          const slide=Math.min((fit.left[0]-fit.right[0])*scale*.65,Math.max(0,along-Math.sqrt(disc)));
+          leftGrip.x-=slide/scale;
         }
+      }
+      // Project the WHOLE weapon into the intersection of both reachable wrist
+      // volumes before changing any bone. This prevents a compact pistol/SMG
+      // being perfectly attached to the right hand but unreachable by the left.
+      if(support) for(let iteration=0;iteration<5;iteration++) {
+        let changed=false;
+        for(const side of ['right','left']) {
+          if(side==='right' && reload>=.02) continue;
+          const hand=side==='right'?rightHand:leftHand;
+          const upper=side==='right'?bones?.rightUpperArm:bones?.leftUpperArm;
+          const fore=side==='right'?bones?.rightForeArm:bones?.leftForeArm;
+          if(!upper || !fore) continue;
+          upper.getWorldPosition(a);fore.getWorldPosition(b);hand.getWorldPosition(c);
+          const l1=a.distanceTo(b),l2=b.distanceTo(c),sum=l1+l2;
+          target.copy(side==='right'?rightGrip:leftGrip).applyMatrix4(gun.matrixWorld);
+          desiredQ.copy(worldQ).multiply(rig.gripWristOffsets[side]);
+          hand.getWorldScale(worldScale);
+          offset.copy(palmLocal(hand)).multiply(worldScale).applyQuaternion(desiredQ);
+          wristTarget.copy(target).sub(offset);direction.subVectors(wristTarget,a);
+          const distance=direction.length();
+          const desiredDistance=THREE.MathUtils.clamp(distance,Math.max(Math.abs(l1-l2)+.015,sum*.30),sum*.96);
+          if(Math.abs(distance-desiredDistance)<.0001) continue;
+          if(distance<1e-6) direction.copy(forward);
+          offset.copy(direction).setLength(desiredDistance).sub(direction);
+          root.getWorldQuaternion(parentQ);offset.applyQuaternion(parentQ.invert());
+          gun.position.add(offset);gun.updateMatrixWorld(true);changed=true;
+        }
+        if(!changed) break;
       }
       if(reload<.02 && support) {
         target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
@@ -180,18 +203,6 @@ export function createWeaponHandFitter() {
       if(support) {
         target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
         desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.left);
-        // Slide a long-gun foregrip back on its handguard if the support arm
-        // cannot reach it at extreme elevation.
-        if(bones?.leftUpperArm && bones?.leftForeArm && fit.left[0]-fit.right[0]>.15) {
-          bones.leftUpperArm.getWorldPosition(a); bones.leftForeArm.getWorldPosition(b); leftHand.getWorldPosition(c);
-          const reach=(a.distanceTo(b)+b.distanceTo(c))*.975;
-          direction.subVectors(target,a); axis.set(1,0,0).applyQuaternion(worldQ);
-          const along=direction.dot(axis),disc=along*along-(direction.lengthSq()-reach*reach);
-          if(direction.length()>reach && along>0 && disc>=0) {
-            const slide=Math.min((fit.left[0]-fit.right[0])*scale*.65,Math.max(0,along-Math.sqrt(disc)));
-            leftGrip.x-=slide/scale; target.addScaledVector(axis,-slide);
-          }
-        }
         solve('left',bones,leftHand,target,desiredQ,applyRotation);
       }
       palmPoint(rightHand,actual); rightGrip.applyMatrix4(gun.matrixWorld); diag.rightError=actual.distanceTo(rightGrip);

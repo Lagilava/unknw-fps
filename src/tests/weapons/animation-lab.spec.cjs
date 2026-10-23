@@ -28,7 +28,10 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
             const d=lab.step(1,false);
             row.right=Math.max(row.right,d.fit.rightError);row.left=Math.max(row.left,d.fit.leftError);
             row.finite &&= d.finite;
-            if(prev)for(const name of Object.keys(d.quaternions))row.jump=Math.max(row.jump,angle(prev[name],d.quaternions[name]));
+            if(prev)for(const name of Object.keys(d.quaternions)){
+              const jump=angle(prev[name],d.quaternions[name]);
+              if(jump>row.jump){row.jump=jump;row.worst={motion,yaw,pitch:-1.15+i*2.3/48,bone:name};}
+            }
             prev=d.quaternions;row.actions[motion]=d.action;
           }
         }
