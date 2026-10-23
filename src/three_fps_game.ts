@@ -4362,8 +4362,10 @@ function createLightningEffect() {
 
   function getAimCursorDirectionWorld(target, offsetX = 0, offsetY = 0) {
     camera.getWorldDirection(target);
-    shotMuzzleRightTmp.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-    shotMuzzleUpTmp.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+    // Camera is parented under yaw/pitch: local quaternion alone loses their
+    // rotation and sends off-centre shots sideways when the operator turns.
+    shotMuzzleRightTmp.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    shotMuzzleUpTmp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
     return target
       .addScaledVector(shotMuzzleRightTmp, offsetX)
       .addScaledVector(shotMuzzleUpTmp, offsetY)
@@ -23999,6 +24001,20 @@ async function spawnEnemies(wave, options: any = {}) {
         review.position.y += 1.65;
         review.lookAt(origin.clone().add(new THREE.Vector3(0,1.05,0)));
         renderer.render(scene,review);
+      },
+      probeAimProjectionForTest: (heading, elevation) => {
+        const oldYaw = yaw.rotation.y, oldPitch = pitch.rotation.x;
+        try {
+          yaw.rotation.y = heading; pitch.rotation.x = elevation;
+          camera.updateWorldMatrix(true,false);
+          const offsets = aimCursorTangents(17,-11,window.innerWidth,window.innerHeight,camera.fov,camera.aspect);
+          const direction = getAimCursorDirectionWorld(new THREE.Vector3(),offsets.x,offsets.y);
+          const point = camera.getWorldPosition(new THREE.Vector3()).addScaledVector(direction,10).project(camera);
+          return {x:point.x*window.innerWidth*.5,y:-point.y*window.innerHeight*.5};
+        } finally {
+          yaw.rotation.y = oldYaw; pitch.rotation.x = oldPitch;
+          camera.updateWorldMatrix(true,false);
+        }
       },
       getWeaponHandFit: () => ({...weaponHandFitter.diag}),
       getPlayerAnimation: () => ({

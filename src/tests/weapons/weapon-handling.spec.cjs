@@ -49,6 +49,16 @@ test('all nine weapons reload, cancel, aim, and fit the body', async ({page}) =>
       window.__rbTest.tickHandlingForTest(0,true);
       return r;
     });
+    const projection = await page.evaluate(() => {
+      const points = [];
+      for(const yaw of [0,Math.PI/2,Math.PI,-Math.PI/2])
+        for(const pitch of [-.8,0,.8])
+          points.push(window.__rbTest.probeAimProjectionForTest(yaw,pitch));
+      return points;
+    });
+    for(const point of projection) {
+      expect(point.x).toBeCloseTo(17,3); expect(point.y).toBeCloseTo(-11,3);
+    }
     expect(aimed.view.ads).toBeGreaterThan(.95);
     expect(aimed.view.fov).toBeCloseTo(aimed.view.targetFov,3);
     expect(aimed.fit.valid).toBe(true);
