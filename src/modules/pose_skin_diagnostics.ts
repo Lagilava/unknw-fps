@@ -39,12 +39,14 @@ export function sampleAuthoredSkin(root) {
   return edges;
 }
 export function compareSolvedSkin(edges) {
-  let worstRest:any=null;
+  let worstRest:any=null,maxAddedMetres=0,maxAddedRatio=0;
   const ratios:number[]=[],restRatios:number[]=[],authoredRestRatios:number[]=[],a=new THREE.Vector3(),b=new THREE.Vector3();
   for(const mesh of new Set<any>(edges.map(e=>e.mesh))){mesh.updateMatrixWorld(true);mesh.skeleton.update();}
   for(const edge of edges) {
     point(edge.mesh,edge.a,a);point(edge.mesh,edge.b,b);
     const length=a.distanceTo(b);
+    maxAddedMetres=Math.max(maxAddedMetres,(length-edge.length)*edge.meshScale);
+    maxAddedRatio=Math.max(maxAddedRatio,(length-edge.length)/edge.restLength);
     ratios.push(length/edge.length);
     if(edge.restLength>1e-5){
       const ratio=length/edge.restLength;restRatios.push(ratio);authoredRestRatios.push(edge.length/edge.restLength);
@@ -55,5 +57,5 @@ export function compareSolvedSkin(edges) {
   ratios.sort((a,b)=>a-b);restRatios.sort((a,b)=>a-b);authoredRestRatios.sort((a,b)=>a-b);
   return {samples:ratios.length,p95:ratios[Math.floor(ratios.length*.95)]||1,max:ratios.at(-1)||1,
     restP95:restRatios[Math.floor(restRatios.length*.95)]||1,restMax:restRatios.at(-1)||1,
-    authoredRestMax:authoredRestRatios.at(-1)||1,worstRest,finite:ratios.every(Number.isFinite)};
+    authoredRestMax:authoredRestRatios.at(-1)||1,worstRest,maxAddedMetres,maxAddedRatio,finite:ratios.every(Number.isFinite)};
 }

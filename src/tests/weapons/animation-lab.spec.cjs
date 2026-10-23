@@ -68,7 +68,9 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
     expect(row.samples,row.weapon+' skin samples').toBeGreaterThan(30);
     expect(row.finite,row.weapon+' skin finite').toBe(true);
     expect(row.p95,row.weapon+' '+row.motion+' skin distortion').toBeLessThan(1.25);
-    expect(row.restMax,row.weapon+' '+row.motion+' mesh stretch vs bind shape').toBeLessThan(1.75);
+    // This imported mesh already stretches in its source clips. Bound the
+    // extra deformation added by IK at the SAME mixer time, not the asset baseline.
+    expect(row.maxAddedMetres,row.weapon+' '+row.motion+' IK-added mesh stretch').toBeLessThan(.01);
   }
   const gait=await page.evaluate(()=>{
     const lab=window.__animationLab,rows=[];
