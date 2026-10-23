@@ -6483,10 +6483,11 @@ function createLightningEffect() {
     if (!bone || !bone.parent || Math.abs(angle) < 0.0001) return;
     angle = clamp(angle, -1.05, 1.05);
     _aimWorldRight.set(Math.cos(yaw.rotation.y), 0, -Math.sin(yaw.rotation.y));
-    bone.parent.getWorldQuaternion(_aimParentQuat);
+    bone.parent.getWorldQuaternion(_aimParentQuat).normalize();
     _aimLocalAxis.copy(_aimWorldRight).applyQuaternion(_aimParentQuat.invert()).normalize();
     _aimOffsetQuat.setFromAxisAngle(_aimLocalAxis, angle);
-    bone.quaternion.premultiply(_aimOffsetQuat);
+    _aimOffsetQuat.normalize();
+    bone.quaternion.premultiply(_aimOffsetQuat).normalize();
     recordAimOffset(bone, _aimOffsetQuat);
   }
 
@@ -6514,7 +6515,7 @@ function createLightningEffect() {
   // Rotate `bone` by a WORLD-space quaternion delta (about its own origin).
   function applyWorldQuatToBone(bone, worldDelta) {
     if (!bone || !bone.parent) return;
-    bone.parent.getWorldQuaternion(_aimParentQuat);
+    bone.parent.getWorldQuaternion(_aimParentQuat).normalize();
     _aimParentInvQuat.copy(_aimParentQuat).invert();
     _aimOffsetQuat.copy(_aimParentInvQuat).multiply(worldDelta).multiply(_aimParentQuat);
     bone.quaternion.premultiply(_aimOffsetQuat);
@@ -6823,7 +6824,7 @@ function createLightningEffect() {
     // Nothing to do if fully lowered and no punch residue or sway
     if (blend < 0.005 && Math.abs(punch) < 0.001 && meleeSwing < 0.001 && Math.abs(swayUpper) < 0.0005 && Math.abs(swaySpine) < 0.0005) return;
 
-    const camPitch = clamp(pitch.rotation.x, -0.92, 0.92); // mouse-look: negative = looking DOWN, positive = looking UP
+    const camPitch = limitWeaponElevation(pitch.rotation.x); // mouse-look: negative = looking DOWN, positive = looking UP
 
     // ARM_RAISE_BIAS: static offset that lifts arms from the animation's hip-carry position
     // to a gun-ready shoulder height when blend = 1 and camPitch = 0 (looking straight ahead).
@@ -9509,7 +9510,7 @@ function createLightningEffect() {
       if (track.name.endsWith(".scale")) return false;
       if (!track.name.endsWith(".position")) return true;
       return preserveBonePositions && nodeName && nodeName !== model.name;
-    });
+    }).map(track=>track.clone());
 
     // Death needs vertical hip travel or the collapsed pose floats at standing
     // height. Retarget centimetre FBX translation into the target skeleton units,

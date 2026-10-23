@@ -173,7 +173,7 @@ export function createWeaponHandFitter() {
         // Smooth vertical weighting avoids a .22 m jump at the chest boundary.
         const vertical=1-THREE.MathUtils.smoothstep(Math.abs(offset.y),.25,.65);
         const lateral=1-THREE.MathUtils.smoothstep(Math.abs(offset.dot(right)),.18,.32);
-        push=Math.min(.18,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
+        push=Math.min(.06,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
         root.getWorldQuaternion(parentQ);
         offset.copy(forward).multiplyScalar(push).applyQuaternion(parentQ.invert());
         gun.position.add(offset); gun.updateMatrixWorld(true);
