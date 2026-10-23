@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { MAX_WEAPON_ELEVATION, limitWeaponElevation } from './weapon_pose_limits';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-type LabState={weapon:string;motion:string;pitch:number;yaw:number;ads:boolean;clip:string;sweep:boolean};
+type LabState={weapon:string;motion:string;pitch:number;yaw:number;ads:boolean;clip:string;sweep:boolean;measureSkin?:boolean};
 export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon,onReload,onReset,onStep,getSubject}) {
   document.body.classList.add('animation-lab');
   const css=document.createElement('style');
@@ -31,7 +32,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
       <option value="idle">Idle / ready</option><option value="jog">Armed jog</option><option value="sprint">Armed sprint</option>
       <option value="left">Strafe left</option><option value="right">Strafe right</option>
       <option value="back">Backpedal</option><option value="diagonal">Forward + right</option></select>
-    <label for="lab-pitch">Aim elevation <output id="lab-pitch-value">0°</output></label><input id="lab-pitch" type="range" min="-68" max="68" step="1" value="0">
+    <label for="lab-pitch">Aim elevation <output id="lab-pitch-value">0°</output></label><input id="lab-pitch" type="range" min="-7" max="7" step="1" value="0">
     <label for="lab-yaw">Body heading <output id="lab-yaw-value">0°</output></label><input id="lab-yaw" type="range" min="-180" max="180" step="1" value="0">
     <label><input id="lab-ads" type="checkbox"> Aim / ADS</label>
     <label><input id="lab-sweep" type="checkbox"> Sweep aim up and down</label>
@@ -41,7 +42,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     <div class="lab-row"><button id="lab-reload">Reload</button><button id="lab-reset">Reset</button></div>
     <label>Camera</label><div class="lab-row"><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="rear">Rear</button></div>
     <label><input id="lab-skeleton" type="checkbox"> Show bone chains</label>
-    <label>Live measurements</label><pre id="lab-diagnostics">Preparing rig…</pre>
+    <label><input id="lab-skin-check" type="checkbox"> Measure skin stretch vs authored pose</label>\n    <label>Live measurements</label><pre id="lab-diagnostics">Preparing rig…</pre>
     <p>Drag to orbit · wheel to zoom. Movement follows the real animation and arm-pose pipeline. Clip comparison overrides automatic selection without changing game defaults.</p>
     <a href="./" style="color:#6fe7d0">Return to game</a>`;
   document.body.append(panel);
@@ -86,7 +87,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
   function step(frames=1,draw=true) {
     for(let i=0;i<frames;i++) {
       elapsed+=1/60;
-      if(state.sweep) state.pitch=Math.sin(elapsed*.7)*1.18;
+      if(state.sweep) state.pitch=Math.sin(elapsed*.7)*MAX_WEAPON_ELEVATION;
       diagnostics=onStep(state,1/60);
     }
     if(draw)render();return diagnostics;
@@ -101,15 +102,18 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     get('lab-diagnostics').textContent=[
       'ACTION  '+(diagnostics.action||'—'),'PHASE   '+Number(diagnostics.phase||0).toFixed(2),
       'RIGHT   '+(100*(d.rightError||0)).toFixed(2)+' cm','LEFT    '+(100*(d.leftError||0)).toFixed(2)+' cm',
+      'WRIST   '+(Math.max(d.leftWristDelta||0,d.rightWristDelta||0)*180/Math.PI).toFixed(1)+'° correction',
+      'SKIN95  '+(diagnostics.skin?diagnostics.skin.p95.toFixed(2)+'×':'measurement off'),
+      'LEGS    authored clip / foot locks off',
       'LENGTH  '+Number(d.length||0).toFixed(2)+' m','FRAME   '+frameMs.toFixed(1)+' ms',
-      'PITCH   '+(state.pitch*180/Math.PI).toFixed(1)+'°','YAW     '+(state.yaw*180/Math.PI).toFixed(1)+'°',
+      'PITCH   '+(state.pitch*180/Math.PI).toFixed(1)+'° / ±7°','YAW     '+(state.yaw*180/Math.PI).toFixed(1)+'°',
       diagnostics.reloading?'RELOAD  active':'RELOAD  ready'
     ].join('\n');
     refresh();
   }
   function set(values:Partial<LabState>,draw=true) {
     if(values.weapon && values.weapon!==state.weapon) onWeapon(values.weapon);
-    Object.assign(state,values);diagnostics=onStep(state,0);if(draw){refresh();render();}
+    Object.assign(state,values);state.pitch=limitWeaponElevation(state.pitch);diagnostics=onStep(state,0);if(draw){refresh();render();}
   }
   onWeapon(state.weapon);
   weaponSelect.addEventListener('change',()=>set({weapon:weaponSelect.value}));
@@ -128,6 +132,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     set({motion:'idle',pitch:0,yaw:0,clip:'',sweep:false});
     step(12,false);view('front');render();
   });
+  get('lab-skin-check').addEventListener('change',()=>set({measureSkin:get('lab-skin-check').checked}));
   get('lab-skeleton').addEventListener('change',()=>{skeleton.visible=get('lab-skeleton').checked;render();});
   panel.querySelectorAll('[data-view]').forEach(el=>el.addEventListener('click',()=>view(el.getAttribute('data-view'))));
   addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();render();});

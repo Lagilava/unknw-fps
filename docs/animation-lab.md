@@ -10,7 +10,7 @@ This is a separate boot path inside the game. It loads Pete, the weapon models a
 
 - Select any of the nine weapons.
 - Choose idle, armed jog, sprint, left/right strafe, backpedal or diagonal movement.
-- Set elevation from -68° to +68° and heading through a full turn.
+- Set elevation from -7° to +7° and heading through a full turn.
 - Enable the automatic aim sweep to watch the arms through a continuous arc.
 - Pause, advance exactly 1/60 second, or change playback speed.
 - Use Front, Side and Rear views; drag to orbit and use the wheel to zoom.
@@ -60,3 +60,15 @@ The existing reload/ADS browser test and 21 weapon-handling logic tests run alon
 The lab also exposes `window.__animationLab` for browser tests:
 `set`, `step`, `setPlaying`, `view`, `reload`, `getState`, `getClips` and `getDiagnostics`.
 `step(n)` advances exactly n production pose updates at 1/60 second.
+
+## Anatomical corrections
+
+Weapon aim elevation is clamped to ±7° for every weapon, including the lab sweep and API. Camera look and shot direction keep their normal range.
+
+Armed movement uses the authored leg animation without world-space foot locks. The previous stance detector repeatedly replanted moving feet and fought the knee animation. This override is disabled even when an older saved foot-IK preference enables it.
+
+Arm IK preserves the authored elbow plane and axial bone rotation. It applies bounded swing corrections rather than reconstructing skinned-bone axes from a generic frame. Wrist corrections are limited to 20°, shoulders to 37° and elbows to 54°; bone positions and scales are not changed.
+
+The lab's skin-stretch measurement compares sampled arm-mesh triangle edges before and after IK at the same mixer time. Tests also cover forward + right, repeat movement for several loops, and verify that leg transforms exactly match the mixer pose. These measurements supplement visual review, not replace it.
+
+Animation review guidance: [CloudAI-X Three.js Animation skill](https://github.com/CloudAI-X/threejs-skills/blob/main/skills/threejs-animation/SKILL.md). API details are checked against this game's Three.js r166.

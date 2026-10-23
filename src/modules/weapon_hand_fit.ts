@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { limitWeaponElevation } from './weapon_pose_limits';
 
 // Metres and model-local contact points (+X is the barrel). Geometry and hand
 // contacts are separate: scaling a long gun never changes the operator's size.
@@ -28,7 +29,8 @@ export function createWeaponHandFitter() {
   const bounds = new THREE.Box3(), localBox = new THREE.Box3(), inverse = new THREE.Matrix4(), matrix = new THREE.Matrix4();
   const worldScale = new THREE.Vector3();
   const diag = { rightError:0,leftError:0,length:0,scale:0,torsoPush:0,valid:false,
-    rightBend:0,leftBend:0,rightClamped:false,leftClamped:false };
+    rightBend:0,leftBend:0,rightClamped:false,leftClamped:false,
+    elevation:0,rightShoulderDelta:0,leftShoulderDelta:0,rightElbowDelta:0,leftElbowDelta:0,rightWristDelta:0,leftWristDelta:0 };
   const palmLocals = new WeakMap<any, THREE.Vector3>();
   function palmLocal(hand) {
     let p = palmLocals.get(hand);
@@ -53,25 +55,15 @@ export function createWeaponHandFitter() {
     gun.userData.handFitRear = bounds.min.x;
     return gun.userData.handFitLength = Math.max(.1,bounds.max.x-bounds.min.x);
   }
-  const frameMatrix=new THREE.Matrix4(),localFrame=new THREE.Matrix4();
-  const frameX=new THREE.Vector3(),frameY=new THREE.Vector3(),frameZ=new THREE.Vector3();
-  const localX=new THREE.Vector3(),localY=new THREE.Vector3(),localZ=new THREE.Vector3();
-  const poleQ=new THREE.Quaternion();
-  const planeNormal=new THREE.Vector3(),frameQ=new THREE.Quaternion(),localQ=new THREE.Quaternion();
-  function orientSegment(bone,child,segment,normal,applyRotation) {
-    frameZ.copy(segment).normalize();
-    frameX.copy(normal).addScaledVector(frameZ,-normal.dot(frameZ)).normalize();
-    frameY.crossVectors(frameZ,frameX).normalize();
-    frameMatrix.makeBasis(frameX,frameY,frameZ);frameQ.setFromRotationMatrix(frameMatrix);
-    localZ.copy(child.position).normalize();
-    localX.set(Math.abs(localZ.x)<.8?1:0,Math.abs(localZ.x)<.8?0:1,0);
-    localX.addScaledVector(localZ,-localX.dot(localZ)).normalize();
-    localY.crossVectors(localZ,localX).normalize();
-    localFrame.makeBasis(localX,localY,localZ);localQ.setFromRotationMatrix(localFrame);
-    frameQ.multiply(localQ.invert());
-    bone.getWorldQuaternion(currentQ).normalize();
-    deltaQ.copy(frameQ).multiply(currentQ.invert());
-    applyRotation(bone,deltaQ);bone.updateMatrixWorld(true);
+  const poleQ=new THREE.Quaternion(),authoredRay=new THREE.Vector3();
+  const authoredRightQ=new THREE.Quaternion(),authoredLeftQ=new THREE.Quaternion();
+  const rightWristQ=new THREE.Quaternion(),leftWristQ=new THREE.Quaternion();
+  function rotateWithin(bone,delta,limit,key,applyRotation) {
+    delta.normalize();
+    const angle=2*Math.acos(Math.min(1,Math.abs(delta.w)));
+    diag[key]=Math.min(angle,limit);
+    if(angle>limit) delta.slerp(identityQ,1-limit/angle);
+    applyRotation(bone,delta);bone.updateMatrixWorld(true);
   }
   // Solve in world space with a BODY-relative elbow pole. It never reads the
   // previously solved elbow to choose the bend side, so steep aim cannot flip it.
@@ -91,23 +83,27 @@ export function createWeaponHandFitter() {
     const distance=THREE.MathUtils.clamp(rawDistance,Math.abs(l1-l2)+.015,(l1+l2)*.985);
     diag[side+'Clamped']=Math.abs(rawDistance-distance)>.002;
     direction.multiplyScalar(1/rawDistance);
-    // Transport the neutral elbow pole with the shoulder-to-wrist ray.
-    // Projecting a fixed sideways pole flips when a compact grip crosses it.
-    poleQ.setFromUnitVectors(forward,direction);
-    pole.copy(right).multiplyScalar(side==='right'?1:-1);
-    pole.y-=.65;
-    pole.normalize().applyQuaternion(poleQ);
+    // Preserve the authored elbow plane and its axial roll. Transport that
+    // plane only by the small aim correction; never rebuild a skinned bone's
+    // orientation from an arbitrary local X/Y basis.
+    authoredRay.subVectors(c,a).normalize();
+    pole.subVectors(b,a).addScaledVector(authoredRay,-pole.dot(authoredRay));
+    if(pole.lengthSq()<1e-8) pole.copy(right).multiplyScalar(side==='right'?1:-1).addScaledVector(authoredRay,-pole.dot(authoredRay));
+    pole.normalize();
+    poleQ.setFromUnitVectors(authoredRay,direction);
+    pole.applyQuaternion(poleQ);
     const along=(l1*l1+distance*distance-l2*l2)/(2*distance);
     const height=Math.sqrt(Math.max(0,l1*l1-along*along));
     elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,height);
-    planeNormal.crossVectors(direction,pole).normalize();
-    to.subVectors(elbow,a);
-    orientSegment(upper,fore,to,planeNormal,applyRotation);
-    fore.getWorldPosition(b);
-    to.copy(a).addScaledVector(direction,distance).sub(b);
-    orientSegment(fore,hand,to,planeNormal,applyRotation);
+    from.subVectors(b,a).normalize();to.subVectors(elbow,a).normalize();
+    deltaQ.setFromUnitVectors(from,to);
+    rotateWithin(upper,deltaQ,.65,side+'ShoulderDelta',applyRotation);
+    fore.getWorldPosition(b);hand.getWorldPosition(c);
+    from.subVectors(c,b).normalize();to.copy(a).addScaledVector(direction,distance).sub(b).normalize();
+    deltaQ.setFromUnitVectors(from,to);
+    rotateWithin(fore,deltaQ,.95,side+'ElbowDelta',applyRotation);
     hand.getWorldQuaternion(currentQ).normalize();deltaQ.copy(wristQ).multiply(currentQ.invert());
-    applyRotation(hand,deltaQ); hand.updateMatrixWorld(true);
+    rotateWithin(hand,deltaQ,.35,side+'WristDelta',applyRotation);
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
   }
   return {
@@ -131,10 +127,16 @@ export function createWeaponHandFitter() {
       if(gun.parent!==root) root.add(gun);
       root.updateMatrixWorld(true);
       forward.set(-Math.sin(yaw),0,-Math.cos(yaw)); right.set(Math.cos(yaw),0,-Math.sin(yaw));
-      const elevation=THREE.MathUtils.clamp(pitch,-1.2,1.2);
+      const elevation=limitWeaponElevation(pitch);
+      const aimedElevation=limitWeaponElevation(elevation+pitchOffset);
+      diag.elevation=aimedElevation;
+      rightHand.getWorldQuaternion(authoredRightQ).normalize();leftHand.getWorldQuaternion(authoredLeftQ).normalize();
+      pitchQ.setFromAxisAngle(right,elevation*.82);
+      rightWristQ.copy(pitchQ).multiply(authoredRightQ).normalize();
+      leftWristQ.copy(pitchQ).multiply(authoredLeftQ).normalize();
       // One target orientation; no additional hand/forearm pitch is layered on it.
       worldQ.setFromAxisAngle(axis.set(0,1,0),yaw+yawOffset+Math.PI/2);
-      pitchQ.setFromAxisAngle(right,elevation+pitchOffset); worldQ.premultiply(pitchQ);
+      pitchQ.setFromAxisAngle(right,aimedElevation); worldQ.premultiply(pitchQ);
       worldQ.multiply(pitchQ.setFromAxisAngle(axis.set(1,0,0),reload*.3+bank));
       root.getWorldQuaternion(parentQ);
       gun.quaternion.copy(parentQ.invert()).multiply(worldQ); gun.scale.setScalar(scale);
@@ -205,7 +207,7 @@ export function createWeaponHandFitter() {
           upper.getWorldPosition(a);fore.getWorldPosition(b);hand.getWorldPosition(c);
           const l1=a.distanceTo(b),l2=b.distanceTo(c),sum=l1+l2;
           target.copy(side==='right'?rightGrip:leftGrip).applyMatrix4(gun.matrixWorld);
-          desiredQ.copy(worldQ).multiply(rig.gripWristOffsets[side]).normalize();
+          desiredQ.copy(side==='right'?rightWristQ:leftWristQ);
           hand.getWorldScale(worldScale);
           offset.copy(palmLocal(hand)).multiply(worldScale).applyQuaternion(desiredQ);
           wristTarget.copy(target).sub(offset);direction.subVectors(wristTarget,a);
@@ -221,12 +223,12 @@ export function createWeaponHandFitter() {
       }
       if(reload<.02 && support) {
         target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
-        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right).normalize();
+        desiredQ.copy(rightWristQ);
         solve('right',bones,rightHand,target,desiredQ,applyRotation,rig);
       }
       if(support) {
         target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
-        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.left).normalize();
+        desiredQ.copy(leftWristQ);
         solve('left',bones,leftHand,target,desiredQ,applyRotation,rig);
       }
       palmPoint(rightHand,actual); rightGrip.applyMatrix4(gun.matrixWorld); diag.rightError=actual.distanceTo(rightGrip);

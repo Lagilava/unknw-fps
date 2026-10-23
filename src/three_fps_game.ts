@@ -42,6 +42,8 @@ import { LANDMARKS } from "./modules/landmarks.js";
 import { RELAY_UPLOAD_SECONDS, simulationFrame } from "./modules/gameplay_pacing.js";
 import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
+import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
+import { limitWeaponElevation } from "./modules/weapon_pose_limits";
 import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
@@ -6676,6 +6678,15 @@ function createLightningEffect() {
   }
 
   function applyThirdPersonFootIK(dt) {
+    // Armed clips own the legs. World-space foot pinning repeatedly replanted
+    // during jog/strafe and fought the authored knees, producing the wiggle.
+    // Release immediately, including saved rb_foot_ik=1 preferences.
+    if (GUN_SPECS[currentGun] && !thirdPerson.cutsceneAction) {
+      for (const foot of [thirdPerson.footIK.left,thirdPerson.footIK.right]) {
+        foot.locked=false;foot.weight=0;
+      }
+      return;
+    }
     const turn = Math.abs(Math.atan2(Math.sin(yaw.rotation.y - footLockYaw), Math.cos(yaw.rotation.y - footLockYaw)));
     footLockYaw = yaw.rotation.y;
     // Mouse events arrive between rendered frames, not between physics substeps.
@@ -6777,7 +6788,7 @@ function createLightningEffect() {
     const meleeT = player.meleeTimer > 0 ? 1 - player.meleeTimer / 0.34 : 0;
     const meleeSwing = meleeT > 0 ? Math.sin(meleeT * Math.PI) : 0;
     if (!unifiedFp) {
-      if (!aimSuppressed) applyWorldPitchToBone(b.spine, clamp(pitch.rotation.x * .18, -.22, .22));
+      if (!aimSuppressed) applyWorldPitchToBone(b.spine, limitWeaponElevation(pitch.rotation.x) * .18);
       // Arms and wrists have exactly one owner: weaponHandFitter.
       if (meleeSwing > .001) {
         const windup=Math.sin(Math.min(1,meleeT/.45)*Math.PI*.5);
@@ -7757,6 +7768,11 @@ function createLightningEffect() {
     }
     if (thirdPerson.mixer) thirdPerson.mixer.update(dt);
 
+    const authoredSkin=animationLabMode && labMeasureSkin ? sampleAuthoredSkin(thirdPerson.model) : null;
+    if(animationLabMode) thirdPerson.authoredLegQuats=Object.fromEntries(
+      ['leftUpLeg','leftLeg','leftFoot','rightUpLeg','rightLeg','rightFoot'].map(name=>
+        [name,thirdPerson.aimBones[name]?.quaternion.toArray()]));
+
     // Apply procedural arm raise/lower on top of whatever the clip set.
     // Must run after mixer.update so we layer on top of the animation frame,
     // and before updateThirdPersonWeaponPose so hand bone world-positions are correct.
@@ -7781,6 +7797,7 @@ function createLightningEffect() {
     applyThirdPersonFootIK(dt);
 
     updateThirdPersonWeaponPose();
+    if(authoredSkin) thirdPerson.skinDiagnostic=compareSolvedSkin(authoredSkin);
   }
 
   // Pathfinding scratch buffers — pre-allocated, reused each call, no GC.
@@ -23766,6 +23783,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   let labClipOverride = "";
+  let labMeasureSkin=false;
   let animationReviewPaused = false;
   function animate(now) {
     if (animationReviewPaused) { game.lastTime = now; requestAnimationFrame(animate); return; }
@@ -25642,7 +25660,7 @@ async function spawnEnemies(wave, options: any = {}) {
             yaw.position.set(0,PLAYER_H,0);player.velX=0;player.velZ=0;
           },
           onStep:(state,dt)=>{
-            labClipOverride=state.clip;
+            labClipOverride=state.clip;labMeasureSkin=!!state.measureSkin;
             pitch.rotation.x=state.pitch;yaw.rotation.y=state.yaw;
             const inputs={idle:[0,0],jog:[1,0],sprint:[1,0],left:[0,-1],right:[0,1],back:[-1,0],diagonal:[1,1]};
             const [f,s]=inputs[state.motion]||[0,0];
@@ -25664,6 +25682,9 @@ async function spawnEnemies(wave, options: any = {}) {
             return {fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,
               phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),
               reloading:gunState.reloadTimer>0,quaternions,
+              skin:thirdPerson.skinDiagnostic,authoredLegQuats:thirdPerson.authoredLegQuats,
+              legs:Object.fromEntries(['leftUpLeg','leftLeg','leftFoot','rightUpLeg','rightLeg','rightFoot'].map(name=>[name,thirdPerson.aimBones[name]?.quaternion.toArray()])),
+              footLocks:{left:{...thirdPerson.footIK.left},right:{...thirdPerson.footIK.right}},
               finite:Object.values(quaternions).every((q:any)=>q.every(Number.isFinite)),
               feet:{left:thirdPerson.aimBones.leftFoot?.getWorldPosition(new THREE.Vector3()).toArray(),
                 right:thirdPerson.aimBones.rightFoot?.getWorldPosition(new THREE.Vector3()).toArray()}};
