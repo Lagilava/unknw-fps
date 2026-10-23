@@ -66,8 +66,10 @@ Weapon aim elevation is clamped to ±7° for every weapon, including the lab swe
 
 Armed movement uses the authored leg animation without world-space foot locks. The previous stance detector repeatedly replanted moving feet and fought the knee animation. This override is disabled even when an older saved foot-IK preference enables it.
 
-Arm IK preserves the authored elbow plane and axial bone rotation. It applies bounded swing corrections rather than reconstructing skinned-bone axes from a generic frame. Wrist corrections are limited to 20°, shoulders to 37° and elbows to 54°; bone positions and scales are not changed.
+Arm IK preserves the authored elbow plane and axial bone rotation. It applies bounded swing corrections rather than reconstructing skinned-bone axes from a generic frame. Wrist local rotations remain exactly as authored. Shoulder swing corrections are limited to 55° and elbow corrections to 77°; the visible palm is the endpoint, and bone positions and scales are not changed. These are correction limits relative to the sampled clip, not absolute anatomical joint angles.
 
 The lab's skin-stretch measurement compares sampled arm-mesh triangle edges before and after IK at the same mixer time. Tests also cover forward + right, repeat movement for several loops, and verify that leg transforms exactly match the mixer pose. These measurements supplement visual review, not replace it.
 
 Animation review guidance: [CloudAI-X Three.js Animation skill](https://github.com/CloudAI-X/threejs-skills/blob/main/skills/threejs-animation/SKILL.md). API details are checked against this game's Three.js r166.
+
+Locomotion quaternion tracks close their end-to-start rotational seam over the last fifth of each loop. This avoids a repeat-boundary snap while retaining the first 80% of the source motion. The repeated-gait test includes the boundary and limits single-frame knee/ankle rotation changes.

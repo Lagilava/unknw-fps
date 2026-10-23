@@ -44,7 +44,7 @@ import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
 import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
 import { limitWeaponElevation } from "./modules/weapon_pose_limits";
-import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate } from "./modules/weapon_locomotion";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, closeLocomotionLoop } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
@@ -6204,6 +6204,7 @@ function createLightningEffect() {
       if (!rawClip) continue;
       let clip = makeInPlaceClipForModel(rawClip, model, { preserveHipsHeight: name === 'death' });
       if (!clip.tracks.length) continue;
+      if (/^(walk|walkBack|strafe|strafeAlt|sprint|sprintLeft|sprintRight|rifleRun|runBack|pistolRun|pistolStrafe)$/.test(name)) clip=closeLocomotionLoop(clip);
       if (name === "reload") {
         clip = new THREE.AnimationClip("reloadUpper", clip.duration, clip.tracks.filter(t => !isLegTrack(t)));
       } else if (["idle", "rifleRun", "pistolRun", "strafe", "walkBack"].includes(name)) {

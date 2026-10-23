@@ -19,7 +19,7 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
     const angle=(a,b)=>2*Math.acos(Math.min(1,Math.abs(a.reduce((v,x,i)=>v+x*b[i],0))));
     for(const weapon of ['pistol','rifle','shotgun','sniper','smg','lmg','dmr','akimbo','flak']){
       set({weapon,pitch:0,yaw:0,motion:'idle',clip:''});lab.step(60,false);
-      const row={weapon,right:0,left:0,jump:0,finite:true,actions:{},maxElevation:0,maxLegOverride:0,maxWrist:0};
+      const row={weapon,right:0,left:0,jump:0,finite:true,actions:{},maxElevation:0,maxLegOverride:0,maxWrist:0,maxShoulder:0,maxElbow:0};
       for(const motion of ['idle','jog','diagonal','left','right','back','sprint']){
         for(const yaw of [0,Math.PI/2,Math.PI,-Math.PI/2]){
           set({motion,yaw,pitch:-1.15});lab.step(60,false);
@@ -31,6 +31,8 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
             row.finite &&= d.finite;
             row.maxElevation=Math.max(row.maxElevation,Math.abs(d.fit.elevation));
             row.maxWrist=Math.max(row.maxWrist,d.fit.leftWristDelta,d.fit.rightWristDelta);
+            row.maxShoulder=Math.max(row.maxShoulder,d.fit.leftShoulderDeltaRequested||0,d.fit.rightShoulderDeltaRequested||0);
+            row.maxElbow=Math.max(row.maxElbow,d.fit.leftElbowDeltaRequested||0,d.fit.rightElbowDeltaRequested||0);
             for(const name of Object.keys(d.legs)) for(let k=0;k<4;k++)
               row.maxLegOverride=Math.max(row.maxLegOverride,Math.abs(d.legs[name][k]-d.authoredLegQuats[name][k]));
             if(d.footLocks.left.weight || d.footLocks.right.weight)throw Error('Foot IK fought armed legs');
@@ -73,18 +75,21 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
       (Math.hypot(...a)*Math.hypot(...b))));
     for(const motion of ['jog','diagonal','left','right']){
       lab.set({weapon:'rifle',motion,pitch:0,yaw:0},false);lab.step(60,false);
-      let prev=null,maxJump=0;
+      let prev=null,maxJump=0,worst=null;
       for(let frame=0;frame<360;frame++){
         const d=lab.step(1,false);
-        if(prev)for(const name of Object.keys(d.legs))maxJump=Math.max(maxJump,angle(prev[name],d.legs[name]));
+        if(prev)for(const name of Object.keys(d.legs)){
+          const jump=angle(prev[name],d.legs[name]);
+          if(jump>maxJump){maxJump=jump;worst={frame,phase:d.phase,bone:name};}
+        }
         prev=d.legs;
       }
-      rows.push({motion,maxJump});
+      rows.push({motion,maxJump,worst});
     }
     return rows;
   });
   console.log('GAIT CONTINUITY '+JSON.stringify(gait));
-  for(const row of gait)expect(row.maxJump,row.motion+' knee/ankle discontinuity').toBeLessThan(.45);
+  for(const row of gait)expect(row.maxJump,row.motion+' knee/ankle discontinuity').toBeLessThan(.30);
   const feet=await page.evaluate(()=>{
     const lab=window.__animationLab;lab.set({weapon:'rifle',motion:'idle',yaw:0,pitch:0});lab.step(60,false);
     const base=lab.getDiagnostics().feet,measurements=[];

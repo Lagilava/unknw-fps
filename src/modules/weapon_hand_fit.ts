@@ -61,6 +61,7 @@ export function createWeaponHandFitter() {
   function rotateWithin(bone,delta,limit,key,applyRotation) {
     delta.normalize();
     const angle=2*Math.acos(Math.min(1,Math.abs(delta.w)));
+    diag[key+'Requested']=angle;
     diag[key]=Math.min(angle,limit);
     if(angle>limit) delta.slerp(identityQ,1-limit/angle);
     applyRotation(bone,delta);bone.updateMatrixWorld(true);
@@ -98,11 +99,11 @@ export function createWeaponHandFitter() {
     elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,height);
     from.subVectors(b,a).normalize();to.subVectors(elbow,a).normalize();
     deltaQ.setFromUnitVectors(from,to);
-    rotateWithin(upper,deltaQ,.65,side+'ShoulderDelta',applyRotation);
+    rotateWithin(upper,deltaQ,.95,side+'ShoulderDelta',applyRotation);
     fore.getWorldPosition(b);palmPoint(hand,c);
     from.subVectors(c,b).normalize();to.copy(a).addScaledVector(direction,distance).sub(b).normalize();
     deltaQ.setFromUnitVectors(from,to);
-    rotateWithin(fore,deltaQ,.95,side+'ElbowDelta',applyRotation);
+    rotateWithin(fore,deltaQ,1.35,side+'ElbowDelta',applyRotation);
     diag[side+'WristDelta']=0;
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
   }
@@ -173,7 +174,7 @@ export function createWeaponHandFitter() {
         // Smooth vertical weighting avoids a .22 m jump at the chest boundary.
         const vertical=1-THREE.MathUtils.smoothstep(Math.abs(offset.y),.25,.65);
         const lateral=1-THREE.MathUtils.smoothstep(Math.abs(offset.dot(right)),.18,.32);
-        push=Math.min(.06,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
+        push=Math.min(.18,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
         root.getWorldQuaternion(parentQ);
         offset.copy(forward).multiplyScalar(push).applyQuaternion(parentQ.invert());
         gun.position.add(offset); gun.updateMatrixWorld(true);
