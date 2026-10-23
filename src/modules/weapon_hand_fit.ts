@@ -68,7 +68,7 @@ export function createWeaponHandFitter() {
     localY.crossVectors(localZ,localX).normalize();
     localFrame.makeBasis(localX,localY,localZ);localQ.setFromRotationMatrix(localFrame);
     frameQ.multiply(localQ.invert());
-    bone.getWorldQuaternion(currentQ);
+    bone.getWorldQuaternion(currentQ).normalize();
     deltaQ.copy(frameQ).multiply(currentQ.invert());
     applyRotation(bone,deltaQ);bone.updateMatrixWorld(true);
   }
@@ -104,7 +104,7 @@ export function createWeaponHandFitter() {
     fore.getWorldPosition(b);
     to.copy(a).addScaledVector(direction,distance).sub(b);
     orientSegment(fore,hand,to,planeNormal,applyRotation);
-    hand.getWorldQuaternion(currentQ);deltaQ.copy(wristQ).multiply(currentQ.invert());
+    hand.getWorldQuaternion(currentQ).normalize();deltaQ.copy(wristQ).multiply(currentQ.invert());
     applyRotation(hand,deltaQ); hand.updateMatrixWorld(true);
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
   }
@@ -203,7 +203,7 @@ export function createWeaponHandFitter() {
           upper.getWorldPosition(a);fore.getWorldPosition(b);hand.getWorldPosition(c);
           const l1=a.distanceTo(b),l2=b.distanceTo(c),sum=l1+l2;
           target.copy(side==='right'?rightGrip:leftGrip).applyMatrix4(gun.matrixWorld);
-          desiredQ.copy(worldQ).multiply(rig.gripWristOffsets[side]);
+          desiredQ.copy(worldQ).multiply(rig.gripWristOffsets[side]).normalize();
           hand.getWorldScale(worldScale);
           offset.copy(palmLocal(hand)).multiply(worldScale).applyQuaternion(desiredQ);
           wristTarget.copy(target).sub(offset);direction.subVectors(wristTarget,a);
@@ -219,12 +219,12 @@ export function createWeaponHandFitter() {
       }
       if(reload<.02 && support) {
         target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
-        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right);
+        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right).normalize();
         solve('right',bones,rightHand,target,desiredQ,applyRotation,rig);
       }
       if(support) {
         target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
-        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.left);
+        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.left).normalize();
         solve('left',bones,leftHand,target,desiredQ,applyRotation,rig);
       }
       palmPoint(rightHand,actual); rightGrip.applyMatrix4(gun.matrixWorld); diag.rightError=actual.distanceTo(rightGrip);
