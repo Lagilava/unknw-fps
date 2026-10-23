@@ -56,6 +56,7 @@ export function createWeaponHandFitter() {
   const frameMatrix=new THREE.Matrix4(),localFrame=new THREE.Matrix4();
   const frameX=new THREE.Vector3(),frameY=new THREE.Vector3(),frameZ=new THREE.Vector3();
   const localX=new THREE.Vector3(),localY=new THREE.Vector3(),localZ=new THREE.Vector3();
+  const poleQ=new THREE.Quaternion();
   const planeNormal=new THREE.Vector3(),frameQ=new THREE.Quaternion(),localQ=new THREE.Quaternion();
   function orientSegment(bone,child,segment,normal,applyRotation) {
     frameZ.copy(segment).normalize();
@@ -90,11 +91,12 @@ export function createWeaponHandFitter() {
     const distance=THREE.MathUtils.clamp(rawDistance,Math.abs(l1-l2)+.015,(l1+l2)*.985);
     diag[side+'Clamped']=Math.abs(rawDistance-distance)>.002;
     direction.multiplyScalar(1/rawDistance);
-    pole.copy(right).multiplyScalar(side==='right'?1:-1).addScaledVector(forward,-.1);
-    pole.y-=.15;
-    pole.addScaledVector(direction,-pole.dot(direction));
-    if(pole.lengthSq()<1e-5) pole.copy(forward).addScaledVector(direction,-forward.dot(direction));
-    pole.normalize();
+    // Transport the neutral elbow pole with the shoulder-to-wrist ray.
+    // Projecting a fixed sideways pole flips when a compact grip crosses it.
+    poleQ.setFromUnitVectors(forward,direction);
+    pole.copy(right).multiplyScalar(side==='right'?1:-1);
+    pole.y-=.65;
+    pole.normalize().applyQuaternion(poleQ);
     const along=(l1*l1+distance*distance-l2*l2)/(2*distance);
     const height=Math.sqrt(Math.max(0,l1*l1-along*along));
     elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,height);
