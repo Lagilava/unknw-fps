@@ -20537,7 +20537,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const prevFov = camera.fov;
     // A second slow FOV lerp made optics lag behind the sight/shoulder blend.
     camera.fov = cameraFX.targetFov;
-    if (Math.abs(camera.fov - prevFov) > 0.01) camera.updateProjectionMatrix();
+    if (camera.fov !== prevFov) camera.updateProjectionMatrix();
 
     // Near clip: FP needs small near for weapon; TP needs larger to avoid wall clipping.
     // For sniper ADS, blend the near plane forward past the gun so it gets cleanly clipped.
