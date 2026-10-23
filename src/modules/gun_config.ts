@@ -222,10 +222,8 @@ export const GUN_SPECS: Record<GunType, GunSpec> = {
     tracerLife: 0.03,
     moveSpeedMul: 1.05, swayMul: 0.85, shakeMul: 0.8, driftMul: 1.3,
     bloomGrow: 0.006, bloomMax: 0.045, bloomDecay: 0.16,
-    // One-handed grip: the SMG joins the pistol/akimbo group and is held/aimed
-    // with the compact one-handed Pistol clip set (pistolRun/strafe/jump), NOT
-    // the two-handed rifle-carry layer.
-    gripStyle: "oneHand",
+    // The SMG has a support foregrip: use the armed rifle locomotion family.
+    // Pistol and machine pistol retain their compact sidearm clips.
     fireCycle: "rattle", reloadStyle: "mag", equipTime: 0.24, inspectTime: 1.2,
     // The SMG's procedural model is genuinely stubbier than the rifle (short
     // receiver, short mag), so at the shared 0.6 base scale it reads as lost

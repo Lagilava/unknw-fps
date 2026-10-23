@@ -16,161 +16,187 @@ export const WEAPON_HAND_FITS = {
 
 export function createWeaponHandFitter() {
   const worldQ = new THREE.Quaternion(), parentQ = new THREE.Quaternion(), pitchQ = new THREE.Quaternion();
+  const deltaQ = new THREE.Quaternion(), desiredQ = new THREE.Quaternion(), currentQ = new THREE.Quaternion();
   const axis = new THREE.Vector3(), palm = new THREE.Vector3(), offset = new THREE.Vector3();
-  const rightGrip = new THREE.Vector3(), leftGrip = new THREE.Vector3(), wrist = new THREE.Vector3();
-  const target = new THREE.Vector3(), palmOffset = new THREE.Vector3(), actual = new THREE.Vector3();
+  const rightGrip = new THREE.Vector3(), leftGrip = new THREE.Vector3(), shoulder = new THREE.Vector3();
+  const target = new THREE.Vector3(), wristTarget = new THREE.Vector3(), actual = new THREE.Vector3();
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
   const direction = new THREE.Vector3(), pole = new THREE.Vector3(), elbow = new THREE.Vector3();
-  const from = new THREE.Vector3(), to = new THREE.Vector3(), leftPosition = new THREE.Vector3();
-  const rotation = new THREE.Quaternion(), handQ = new THREE.Quaternion(), currentQ = new THREE.Quaternion();
+  const from = new THREE.Vector3(), to = new THREE.Vector3(), anchor = new THREE.Vector3();
+  const forward = new THREE.Vector3(), right = new THREE.Vector3(), torso = new THREE.Vector3(), stock = new THREE.Vector3();
   const bounds = new THREE.Box3(), localBox = new THREE.Box3(), inverse = new THREE.Matrix4(), matrix = new THREE.Matrix4();
-  const torso = new THREE.Vector3(), stock = new THREE.Vector3(), bodyForward = new THREE.Vector3(), bodyRight = new THREE.Vector3();
-  const diag = { rightError: 0, leftError: 0, length: 0, scale: 0, torsoPush: 0, valid: false };
-  const middleBones = new WeakMap<any, any>();
-  function palmPoint(hand, out) {
-    hand.getWorldPosition(out);
-    if (!middleBones.has(hand)) middleBones.set(hand,
-      hand.children.find(b => /Middle1$/.test(b.name)) || null);
-    const middle = middleBones.get(hand);
-    if (middle) { middle.getWorldPosition(offset); out.lerp(offset, .45); }
-    return out;
+  const worldScale = new THREE.Vector3();
+  const diag = { rightError:0,leftError:0,length:0,scale:0,torsoPush:0,valid:false,
+    rightBend:0,leftBend:0,rightClamped:false,leftClamped:false };
+  const palmLocals = new WeakMap<any, THREE.Vector3>();
+  function palmLocal(hand) {
+    let p = palmLocals.get(hand);
+    if (!p) {
+      const middle = hand.children.find(b => /Middle1$/.test(b.name));
+      p = middle ? middle.position.clone().multiplyScalar(.45) : new THREE.Vector3();
+      palmLocals.set(hand,p);
+    }
+    return p;
   }
-  function modelLength(gun) {
+  function palmPoint(hand,out) { return out.copy(palmLocal(hand)).applyMatrix4(hand.matrixWorld); }
+  function measure(gun) {
     if (gun.userData.handFitLength) return gun.userData.handFitLength;
     gun.updateMatrixWorld(true); inverse.copy(gun.matrixWorld).invert(); bounds.makeEmpty();
     gun.traverse(o => {
       if (!o.isMesh || !o.geometry) return;
-      for (let parent = o; parent && parent !== gun; parent = parent.parent) {
-        if (!parent.visible || parent === gun.userData.fpHands?.left || parent === gun.userData.fpHands?.right) return;
-      }
-      o.geometry.computeBoundingBox();
-      matrix.multiplyMatrices(inverse, o.matrixWorld);
+      for(let p=o;p && p!==gun;p=p.parent)
+        if(!p.visible || p===gun.userData.fpHands?.left || p===gun.userData.fpHands?.right) return;
+      o.geometry.computeBoundingBox(); matrix.multiplyMatrices(inverse,o.matrixWorld);
       localBox.copy(o.geometry.boundingBox).applyMatrix4(matrix); bounds.union(localBox);
     });
     gun.userData.handFitRear = bounds.min.x;
-    return gun.userData.handFitLength = Math.max(.1, bounds.max.x - bounds.min.x);
+    return gun.userData.handFitLength = Math.max(.1,bounds.max.x-bounds.min.x);
+  }
+  // Solve in world space with a BODY-relative elbow pole. It never reads the
+  // previously solved elbow to choose the bend side, so steep aim cannot flip it.
+  function solve(side, bones, hand, gripWorld, wristQ, applyRotation) {
+    const upper = side==='right' ? bones?.rightUpperArm : bones?.leftUpperArm;
+    const fore = side==='right' ? bones?.rightForeArm : bones?.leftForeArm;
+    if(!upper || !fore || !hand) return;
+    hand.getWorldScale(worldScale);
+    offset.copy(palmLocal(hand)).multiply(worldScale).applyQuaternion(wristQ);
+    wristTarget.copy(gripWorld).sub(offset);
+    upper.getWorldPosition(a); fore.getWorldPosition(b); hand.getWorldPosition(c);
+    const l1=a.distanceTo(b), l2=b.distanceTo(c);
+    if(l1<1e-5 || l2<1e-5) return;
+    direction.subVectors(wristTarget,a);
+    const rawDistance=direction.length();
+    if(rawDistance<1e-6) return;
+    const distance=THREE.MathUtils.clamp(rawDistance,Math.abs(l1-l2)+.015,(l1+l2)*.985);
+    diag[side+'Clamped']=Math.abs(rawDistance-distance)>.002;
+    direction.multiplyScalar(1/rawDistance);
+    pole.copy(right).multiplyScalar(side==='right'?.65:-.65).addScaledVector(forward,-.12);
+    pole.y-=.9;
+    pole.addScaledVector(direction,-pole.dot(direction));
+    if(pole.lengthSq()<1e-5) pole.copy(forward).addScaledVector(direction,-forward.dot(direction));
+    pole.normalize();
+    const along=(l1*l1+distance*distance-l2*l2)/(2*distance);
+    const height=Math.sqrt(Math.max(0,l1*l1-along*along));
+    elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,height);
+    from.subVectors(b,a).normalize(); to.subVectors(elbow,a).normalize();
+    deltaQ.setFromUnitVectors(from,to); applyRotation(upper,deltaQ); upper.updateMatrixWorld(true);
+    fore.getWorldPosition(b); hand.getWorldPosition(c);
+    to.copy(a).addScaledVector(direction,distance).sub(b).normalize(); from.subVectors(c,b).normalize();
+    deltaQ.setFromUnitVectors(from,to); applyRotation(fore,deltaQ); fore.updateMatrixWorld(true);
+    hand.getWorldQuaternion(currentQ); deltaQ.copy(wristQ).multiply(currentQ.invert());
+    applyRotation(hand,deltaQ); hand.updateMatrixWorld(true);
+    diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
   }
   return {
     diag,
-    update({rig, root, bones, rightHand, leftHand, gunType, yaw, pitch, reload, dead, applyRotation,
-      bank = 0, yawOffset = 0, pitchOffset = 0, support = true}) {
-      diag.valid = false;
-      const gun = rig?.gun, fit = WEAPON_HAND_FITS[gunType];
-      if (!gun || !fit || !rightHand || !leftHand) return;
-      if (dead) {
-        if (!rig.deathHandFit) {
+    update({rig,root,bones,rightHand,leftHand,gunType,yaw,pitch,reload,dead,applyRotation,
+      bank=0,yawOffset=0,pitchOffset=0,support=true}) {
+      diag.valid=false;
+      const gun=rig?.gun,fit=WEAPON_HAND_FITS[gunType];
+      if(!gun || !fit || !rightHand || !leftHand) return;
+      if(dead) {
+        if(!rig.deathHandFit) {
           root.updateMatrixWorld(true); rightHand.attach(gun);
-          rig.deathHandFit = { p: gun.position.clone(), q: gun.quaternion.clone(), s: gun.scale.clone() };
+          rig.deathHandFit={p:gun.position.clone(),q:gun.quaternion.clone(),s:gun.scale.clone()};
         }
-        if (gun.parent !== rightHand) rightHand.add(gun);
+        if(gun.parent!==rightHand) rightHand.add(gun);
         gun.position.copy(rig.deathHandFit.p); gun.quaternion.copy(rig.deathHandFit.q); gun.scale.copy(rig.deathHandFit.s);
         return;
       }
-      rig.deathHandFit = null;
-      const scale = fit.length / modelLength(gun);
-      if (gun.parent !== root) root.add(gun);
+      rig.deathHandFit=null;
+      const scale=fit.length/measure(gun);
+      if(gun.parent!==root) root.add(gun);
       root.updateMatrixWorld(true);
-      // The torso already supplies 18% of aim pitch. Share the remaining
-      // elevation across the shoulder and elbow instead of bending the wrist.
-      if (bones?.rightUpperArm && bones?.rightForeArm && Math.abs(pitch) > .0001) {
-        axis.set(Math.cos(yaw),0,-Math.sin(yaw));
-        rotation.setFromAxisAngle(axis,pitch * .25 * (1-reload));
-        applyRotation(bones.rightUpperArm,rotation); bones.rightUpperArm.updateMatrixWorld(true);
-        rotation.setFromAxisAngle(axis,pitch * .15 * (1-reload));
-        applyRotation(bones.rightForeArm,rotation); bones.rightForeArm.updateMatrixWorld(true);
-        rotation.setFromAxisAngle(axis,pitch * .42 * (1-reload));
-        applyRotation(rightHand,rotation); rightHand.updateMatrixWorld(true);
-        rotation.setFromAxisAngle(axis,pitch * .82 * (1-reload));
-        applyRotation(leftHand,rotation); leftHand.updateMatrixWorld(true);
-      }
-      worldQ.setFromAxisAngle(axis.set(0,1,0), yaw + yawOffset + Math.PI / 2);
-      pitchQ.setFromAxisAngle(axis.set(Math.cos(yaw),0,-Math.sin(yaw)), pitch + pitchOffset);
-      worldQ.premultiply(pitchQ);
-      worldQ.multiply(pitchQ.setFromAxisAngle(axis.set(1,0,0), reload * .3 + bank));
-      root.getWorldQuaternion(parentQ); gun.quaternion.copy(parentQ.invert()).multiply(worldQ);
-      gun.scale.setScalar(scale);
+      forward.set(-Math.sin(yaw),0,-Math.cos(yaw)); right.set(Math.cos(yaw),0,-Math.sin(yaw));
+      const elevation=THREE.MathUtils.clamp(pitch,-1.2,1.2);
+      // One target orientation; no additional hand/forearm pitch is layered on it.
+      worldQ.setFromAxisAngle(axis.set(0,1,0),yaw+yawOffset+Math.PI/2);
+      pitchQ.setFromAxisAngle(right,elevation+pitchOffset); worldQ.premultiply(pitchQ);
+      worldQ.multiply(pitchQ.setFromAxisAngle(axis.set(1,0,0),reload*.3+bank));
+      root.getWorldQuaternion(parentQ);
+      gun.quaternion.copy(parentQ.invert()).multiply(worldQ); gun.scale.setScalar(scale);
       rightGrip.fromArray(fit.right); leftGrip.fromArray(fit.left);
-      // The authored right hand owns the normal hold; the left cradles a reload.
-      palmPoint(rightHand, palm); root.worldToLocal(palm);
-      offset.copy(rightGrip).multiplyScalar(scale).applyQuaternion(gun.quaternion);
-      gun.position.copy(palm).sub(offset);
-      palmPoint(leftHand, palm); root.worldToLocal(palm);
-      offset.copy(leftGrip).multiplyScalar(scale).applyQuaternion(gun.quaternion);
-      leftPosition.copy(palm).sub(offset);
-      gun.position.lerp(leftPosition, reload); gun.updateMatrixWorld(true);
-      // Keep the rear of the receiver/stock in front of the chest. Grip-only
-      // fitting can put a long stock behind the trigger hand and inside the body.
-      let torsoPush = 0;
-      if (fit.length > .6 && bones?.spine) {
+      // Calibrate each wrist against its authored neutral hold, never against a
+      // previously solved high/low pose. A shoulder-centred swing supplies pitch.
+      if(!rig.gripWristOffsets) {
+        const neutral=new THREE.Quaternion().setFromAxisAngle(axis.set(0,1,0),yaw+Math.PI/2);
+        neutral.premultiply(new THREE.Quaternion().setFromAxisAngle(right,elevation*.18));
+        rig.gripWristOffsets={
+          right:rightHand.getWorldQuaternion(new THREE.Quaternion()).premultiply(neutral.clone().invert()),
+          left:leftHand.getWorldQuaternion(new THREE.Quaternion()).premultiply(neutral.clone().invert())
+        };
+      }
+      palmPoint(rightHand,anchor);
+      if(bones?.rightUpperArm && reload<.001) {
+        bones.rightUpperArm.getWorldPosition(shoulder);
+        anchor.sub(shoulder);
+        // Model lean already contributes .18; rotate the reach, not the wrist.
+        pitchQ.setFromAxisAngle(right,elevation*.82);
+        anchor.applyQuaternion(pitchQ).add(shoulder);
+      }
+      if(reload>0) { palmPoint(leftHand,palm); anchor.lerp(palm,reload); }
+      root.worldToLocal(anchor);
+      offset.copy(reload>.5?leftGrip:rightGrip).multiplyScalar(scale).applyQuaternion(gun.quaternion);
+      // Blend the attachment itself as well as the anchor during reload.
+      offset.copy(rightGrip).lerp(leftGrip,reload).multiplyScalar(scale).applyQuaternion(gun.quaternion);
+      gun.position.copy(anchor).sub(offset); gun.updateMatrixWorld(true);
+      let push=0;
+      if(fit.length>.6 && bones?.spine) {
         bones.spine.getWorldPosition(torso);
-        bodyForward.set(-Math.sin(yaw),0,-Math.cos(yaw));
-        bodyRight.set(Math.cos(yaw),0,-Math.sin(yaw));
-        stock.set(gun.userData.handFitRear ?? fit.right[0], fit.right[1], 0).applyMatrix4(gun.matrixWorld);
+        stock.set(gun.userData.handFitRear ?? fit.right[0],fit.right[1],0).applyMatrix4(gun.matrixWorld);
         offset.subVectors(stock,torso);
-        if (Math.abs(offset.dot(bodyRight)) < .25 && offset.y > -.3 && offset.y < .6) {
-          torsoPush = Math.min(.22, Math.max(0,.18-offset.dot(bodyForward)));
+        // Smooth vertical weighting avoids a .22 m jump at the chest boundary.
+        const vertical=1-THREE.MathUtils.smoothstep(Math.abs(offset.y),.25,.65);
+        const lateral=1-THREE.MathUtils.smoothstep(Math.abs(offset.dot(right)),.18,.32);
+        push=Math.min(.18,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
+        root.getWorldQuaternion(parentQ);
+        offset.copy(forward).multiplyScalar(push).applyQuaternion(parentQ.invert());
+        gun.position.add(offset); gun.updateMatrixWorld(true);
+      }
+      diag.torsoPush=push;
+      // Bring the trigger grip inside the arm's reachable sphere before solving.
+      // Gun and palms move together; unreachable targets never stretch the skeleton.
+      if(reload<.001 && bones?.rightUpperArm && bones?.rightForeArm) {
+        bones.rightUpperArm.getWorldPosition(a); bones.rightForeArm.getWorldPosition(b); rightHand.getWorldPosition(c);
+        target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
+        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right);
+        rightHand.getWorldScale(worldScale);
+        offset.copy(palmLocal(rightHand)).multiply(worldScale).applyQuaternion(desiredQ);
+        wristTarget.copy(target).sub(offset);
+        direction.subVectors(wristTarget,a);
+        const reach=(a.distanceTo(b)+b.distanceTo(c))*.975;
+        if(direction.length()>reach) {
+          offset.copy(direction).setLength(reach).sub(direction);
           root.getWorldQuaternion(parentQ);
-          offset.copy(bodyForward).multiplyScalar(torsoPush).applyQuaternion(parentQ.invert());
+          offset.applyQuaternion(parentQ.invert());
           gun.position.add(offset); gun.updateMatrixWorld(true);
         }
       }
-      diag.torsoPush = torsoPush;
-      // Refit the trigger hand as well when chest clearance moved the gun.
-      // During reload the right hand remains free to perform the insert.
-      for (const side of ['right','left']) {
-      const supportHand = side === 'left' ? leftHand : rightHand;
-      const upper = side === 'left' ? bones?.leftUpperArm : bones?.rightUpperArm;
-      const fore = side === 'left' ? bones?.leftForeArm : bones?.rightForeArm;
-      const grip = side === 'left' ? leftGrip : rightGrip;
-      if (support && upper && fore && (side === 'left' || (torsoPush > .0001 && reload < .05))) {
-        target.copy(grip).applyMatrix4(gun.matrixWorld);
-        // Solve to the palm rather than confusing the wrist joint with the grip.
-        palmPoint(supportHand,palm); supportHand.getWorldPosition(wrist); palmOffset.subVectors(palm,wrist);
-        target.sub(palmOffset);
-        // Preserve the authored wrist orientation and elbow's bend side. Solving
-        // the shoulder and elbow in their updated world planes avoids twisted
-        // joints when a compact pistol brings the hands close together.
-        upper.getWorldPosition(a); fore.getWorldPosition(b); supportHand.getWorldPosition(c);
-        supportHand.getWorldQuaternion(handQ);
-        const upperLength = a.distanceTo(b), foreLength = b.distanceTo(c);
-        direction.subVectors(target,a);
-        // A support grip can slide along a long gun's handguard as the muzzle
-        // elevates. Keep the palm on the mesh instead of stretching the arm or
-        // leaving a gap when the nominal foregrip exceeds the rig's reach.
-        const reach = upperLength + foreLength - .006;
-        if (side === 'left' && direction.lengthSq() > reach * reach && fit.left[0] - fit.right[0] > .15) {
-          axis.set(1,0,0).applyQuaternion(worldQ);
-          const alongBarrel = direction.dot(axis);
-          const discriminant = alongBarrel * alongBarrel - (direction.lengthSq() - reach * reach);
-          if (alongBarrel > 0 && discriminant >= 0) {
-            const slide = Math.min((fit.left[0]-fit.right[0]) * scale * .45,
-              Math.max(0,alongBarrel-Math.sqrt(discriminant)));
-            leftGrip.x -= slide / scale;
-            target.addScaledVector(axis,-slide);
-            direction.subVectors(target,a);
+      if(reload<.02 && support) {
+        target.copy(rightGrip).applyMatrix4(gun.matrixWorld);
+        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.right);
+        solve('right',bones,rightHand,target,desiredQ,applyRotation);
+      }
+      if(support) {
+        target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
+        desiredQ.copy(worldQ).multiply(rig.gripWristOffsets.left);
+        // Slide a long-gun foregrip back on its handguard if the support arm
+        // cannot reach it at extreme elevation.
+        if(bones?.leftUpperArm && bones?.leftForeArm && fit.left[0]-fit.right[0]>.15) {
+          bones.leftUpperArm.getWorldPosition(a); bones.leftForeArm.getWorldPosition(b); leftHand.getWorldPosition(c);
+          const reach=(a.distanceTo(b)+b.distanceTo(c))*.975;
+          direction.subVectors(target,a); axis.set(1,0,0).applyQuaternion(worldQ);
+          const along=direction.dot(axis),disc=along*along-(direction.lengthSq()-reach*reach);
+          if(direction.length()>reach && along>0 && disc>=0) {
+            const slide=Math.min((fit.left[0]-fit.right[0])*scale*.65,Math.max(0,along-Math.sqrt(disc)));
+            leftGrip.x-=slide/scale; target.addScaledVector(axis,-slide);
           }
         }
-        const distance = THREE.MathUtils.clamp(direction.length(), Math.abs(upperLength-foreLength)+.001, upperLength+foreLength-.001);
-        direction.normalize();
-        const along = (upperLength*upperLength + distance*distance - foreLength*foreLength)/(2*distance);
-        pole.subVectors(b,a).addScaledVector(direction,-pole.dot(direction));
-        if (pole.lengthSq() < 1e-8) pole.set(0,-1,0).addScaledVector(direction,direction.y);
-        pole.normalize();
-        elbow.copy(a).addScaledVector(direction,along).addScaledVector(pole,Math.sqrt(Math.max(0,upperLength*upperLength-along*along)));
-        from.subVectors(b,a).normalize(); to.subVectors(elbow,a).normalize();
-        rotation.setFromUnitVectors(from,to); applyRotation(upper,rotation); upper.updateMatrixWorld(true);
-        fore.getWorldPosition(b); supportHand.getWorldPosition(c);
-        from.subVectors(c,b).normalize(); to.copy(a).addScaledVector(direction,distance).sub(b).normalize();
-        rotation.setFromUnitVectors(from,to); applyRotation(fore,rotation); fore.updateMatrixWorld(true);
-        supportHand.getWorldQuaternion(currentQ);
-        rotation.copy(handQ).multiply(currentQ.invert()); applyRotation(supportHand,rotation); supportHand.updateMatrixWorld(true);
+        solve('left',bones,leftHand,target,desiredQ,applyRotation);
       }
-      }
-      palmPoint(rightHand,actual); rightGrip.applyMatrix4(gun.matrixWorld);
-      diag.rightError = actual.distanceTo(rightGrip);
-      palmPoint(leftHand,actual); leftGrip.applyMatrix4(gun.matrixWorld);
-      diag.leftError = actual.distanceTo(leftGrip);
-      diag.length = fit.length; diag.scale = scale; diag.valid = true;
-    },
+      palmPoint(rightHand,actual); rightGrip.applyMatrix4(gun.matrixWorld); diag.rightError=actual.distanceTo(rightGrip);
+      palmPoint(leftHand,actual); leftGrip.applyMatrix4(gun.matrixWorld); diag.leftError=actual.distanceTo(leftGrip);
+      diag.length=fit.length;diag.scale=scale;diag.valid=true;
+    }
   };
 }

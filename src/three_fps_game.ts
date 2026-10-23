@@ -42,6 +42,8 @@ import { LANDMARKS } from "./modules/landmarks.js";
 import { RELAY_UPLOAD_SECONDS, simulationFrame } from "./modules/gameplay_pacing.js";
 import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate } from "./modules/weapon_locomotion";
+import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
 import { loadSettings, saveSettings } from "./modules/settings.js";
@@ -99,6 +101,7 @@ declare module "three" {
 
 (async () => {
   "use strict";
+  const animationLabMode = new URLSearchParams(window.location.search).has("animationLab");
 
   // Bare specifiers: bundled + tree-shaken by Vite for production, and resolved
   // by the importmap (three + "three/" prefix) when the standalone HTML is opened
@@ -6044,6 +6047,8 @@ function createLightningEffect() {
     }
 
     thirdPerson.weapon = nextWeapon;
+    thirdPerson.weapon.gripWristOffsets=thirdPerson.gripWristCalibration?.[
+      GUN_SPECS[gunType]?.gripStyle==="oneHand"?"pistol":"rifle"] || null;
     thirdPerson.weapon.gun.visible = thirdPerson.enabled;
     // Show this weapon's pack-a-punch tier on the third-person model too.
     applyGunPackVisual(thirdPerson.weapon, gunUpgradeLevels[gunType] || 0);
@@ -6168,6 +6173,26 @@ function createLightningEffect() {
       fallenIdle:   PLAYER_CHARACTER_ANIMS.fallenIdle,
     };
 
+    // Capture canonical palm orientation from authored neutral clips once.
+    // Never calibrate a new weapon against a running/crossfading/steep-aim frame.
+    thirdPerson.gripWristCalibration={};
+    for(const [family,raw] of [['rifle',source.idle],['pistol',source.pistolRun||source.idle]] as const) {
+      if(!raw) continue;
+      const sample=skeletonClone(model);
+      const sampleMixer=new THREE.AnimationMixer(sample);
+      sampleMixer.clipAction(makeInPlaceClipForModel(raw,sample)).play();sampleMixer.update(.001);
+      sample.updateMatrixWorld(true);
+      const r=findRightHandBone(sample),l=findLeftHandBone(sample);
+      if(r&&l) {
+        const inv=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),Math.PI/2).invert();
+        thirdPerson.gripWristCalibration[family]={
+          right:r.getWorldQuaternion(new THREE.Quaternion()).premultiply(inv),
+          left:l.getWorldQuaternion(new THREE.Quaternion()).premultiply(inv)
+        };
+      }
+      sampleMixer.stopAllAction();sampleMixer.uncacheRoot(sample);
+    }
+
     for (const [name, rawClip] of Object.entries(source)) {
       if (!rawClip) continue;
       let clip = makeInPlaceClipForModel(rawClip, model, { preserveHipsHeight: name === 'death' });
@@ -6210,13 +6235,37 @@ function createLightningEffect() {
       thirdPerson.actions[name] = action;
     }
 
+    // Keep each directional lower-body clip and layer an armed carry above it.
+    // Backpedal is a real backward step, not the entire pistol run played in reverse.
+    const rifleUpper=source.idle && makeInPlaceClipForModel(source.idle,model);
+    const pistolUpper=source.pistolRun && makeInPlaceClipForModel(source.pistolRun,model);
+    for(const [name,lower,upper] of [
+      ['armedStrafeLeft',source.strafeAlt||source.strafe,rifleUpper],
+      ['armedStrafeRight',source.strafe,rifleUpper],
+      ['armedBack',source.runBack||source.walkBack,rifleUpper],
+      ['pistolStrafeLeft',source.strafeAlt||source.strafe,pistolUpper],
+      ['pistolStrafeRight',source.strafe,pistolUpper],
+      ['pistolBack',source.runBack||source.walkBack,pistolUpper],
+    ] as const) {
+      if(!lower || !upper) continue;
+      const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model),upper,isUpperBodyTrack,name);
+      const action=thirdPerson.mixer.clipAction(clip); action.loop=THREE.LoopRepeat;
+      action.enabled=true; thirdPerson.actions[name]=action;
+    }
+
     // A frozen run frame leaves one foot lifted at rest. Combine the actual idle
     // hips/legs with the original animated aiming-idle arms for each grip style.
     const standingLegs = source.idle && makeInPlaceClipForModel(source.idle, model).tracks.filter(isLegTrack);
-    if (standingLegs?.length) for (const [name, raw] of [['idlePistol', source.idle], ['idleRifle', source.idle]] as const) {
+    if (standingLegs?.length) for (const [name, raw] of [['idlePistol', source.pistolRun || source.idle], ['idleRifle', source.idle]] as const) {
       if (!raw) continue;
       const duration = source.idle.duration;
-      const upper = makeInPlaceClipForModel(raw, model).tracks.filter(t => !isLegTrack(t));
+      let upper = makeInPlaceClipForModel(raw, model).tracks.filter(t => !isLegTrack(t));
+      if(name==="idlePistol" && source.pistolRun) upper=upper.map(track=>{
+        const copy=track.clone(),size=copy.getValueSize();
+        copy.times=new Float32Array([0,duration]);
+        copy.values=new Float32Array([...copy.values.slice(0,size),...copy.values.slice(0,size)]);
+        return copy;
+      });
       const clip = new THREE.AnimationClip(name, duration, [...standingLegs.map(t => t.clone()), ...upper]);
       thirdPerson.actions[name] = thirdPerson.mixer.clipAction(clip);
     }
@@ -6716,6 +6765,18 @@ function createLightningEffect() {
     // bone rotation on top of the mixer, removed next frame via aimOffsets).
     const meleeT = player.meleeTimer > 0 ? 1 - player.meleeTimer / 0.34 : 0;
     const meleeSwing = meleeT > 0 ? Math.sin(meleeT * Math.PI) : 0;
+    if (!unifiedFp) {
+      if (!aimSuppressed) applyWorldPitchToBone(b.spine, clamp(pitch.rotation.x * .18, -.22, .22));
+      // Arms and wrists have exactly one owner: weaponHandFitter.
+      if (meleeSwing > .001) {
+        const windup=Math.sin(Math.min(1,meleeT/.45)*Math.PI*.5);
+        const chop=meleeT>.45?Math.sin((meleeT-.45)/.55*Math.PI):0;
+        applyWorldPitchToBone(b.rightUpperArm,-.85*windup+1.15*chop);
+        applyWorldPitchToBone(b.rightForeArm,-.42*windup+.55*chop);
+      }
+      return;
+    }
+
 
     // Gait-synced carry sway: while the rifle-carry layer holds the arms during
     // locomotion, pump the gun gently with each step (phase from the active
@@ -7502,7 +7563,7 @@ function createLightningEffect() {
     // rotational spring, weighted by spec.swayMul (pistol snappy, LMG floaty).
     const yawNow = yaw.rotation.y;
     if (thirdPerson.prevYawAngle === null) thirdPerson.prevYawAngle = yawNow;
-    const yawTurnVel = (yawNow - thirdPerson.prevYawAngle) / Math.max(dt, 1e-4);
+    const yawTurnVel = angleDelta(thirdPerson.prevYawAngle,yawNow) / Math.max(dt, 1e-4);
     thirdPerson.prevYawAngle = yawNow;
     const lagWeight = Math.max(0, (Number.isFinite(GUN_SPECS[currentGun]?.swayMul) ? GUN_SPECS[currentGun].swayMul : 1) - 0.55) * 0.04;
     const lagTarget = clamp(-yawTurnVel * lagWeight, -0.22, 0.22);
@@ -7527,7 +7588,8 @@ function createLightningEffect() {
       // Whole-model pitch bend — the clone's technique (ghost.model.rotation.x =
       // -aimPitch*0.18): with the procedural spine-pitch removed for two-handed guns,
       // this is what leans the operator's torso into the aim. Matches the clone's 0.18.
-      thirdPerson.model.rotation.x = -pitch.rotation.x * 0.18 - bodyRecoilPitch;
+      // Aim bends the upper spine after the mixer, never the hips/legs/root.
+      thirdPerson.model.rotation.x = -bodyRecoilPitch;
       thirdPerson.model.rotation.z = bodyRecoilRoll;
     }
     thirdPerson.lastMove = moveState || thirdPerson.lastMove;
@@ -7559,46 +7621,8 @@ function createLightningEffect() {
       else if (mouse.aiming && thirdPerson.actions.jumpRifle) targetAction = "jumpRifle";
       else if (thirdPerson.actions.jumpForward) targetAction = "jumpForward";
       else targetAction = "jump";
-    } else if (movingNow && thirdPerson.lastMove.sprinting) {
-      if (pistolMoveSet) {
-        // Sprint-strafe: use the one-handed Pistol Strafe clip when lateral input
-        // dominates (mirrors the two-handed sprintLeft/sprintRight lateral clips);
-        // otherwise the forward pistol run. Without this the sidearm always ran
-        // FORWARD while circle-strafing, so the strafe clip was effectively unused.
-        targetAction = (Math.abs(s) > Math.abs(f) * 1.2 && thirdPerson.actions.pistolStrafe)
-          ? "pistolStrafe" : "pistolRun";
-      } else {
-        targetAction = pickSprintLocomotionAction(thirdPerson.actions, f, s);
-      }
     } else if (movingNow) {
-      // While moving, KEEP the locomotion clip even when firing — the arms are
-      // raised/punched procedurally by applyThirdPersonArmPose (which is grip-style
-      // aware, so the pistol stays one-handed). Switching to the full-body two-handed
-      // `fire` clip mid-stride is what made both arms flail on the one-handed pistol.
-      // (This mirrors the sprint branch above, which already reads correctly.)
-      if (Math.abs(s) > Math.abs(f) * 1.2) {
-        targetAction = pistolMoveSet && thirdPerson.actions.pistolStrafe
-          ? "pistolStrafe"
-          : (s < -0.1 && thirdPerson.actions.strafeAlt ? "strafeAlt" : "strafe");
-      } else if (f < -0.1) {
-        // One-handed sidearm: pistol run played in REVERSE covers backpedal
-        // (incl. while shooting — the locomotion clip is kept during fire).
-        if (pistolMoveSet) targetAction = "pistolRun";
-        else if (!wasMoving && thirdPerson.actions.startWalkBack) targetAction = "startWalkBack";
-        else targetAction = thirdPerson.actions.walkBack ? "walkBack" : "walk";
-      } else if (pistolMoveSet) {
-        targetAction = "pistolRun"; // walk pace via timeScale below
-      } else if (thirdPerson.actions.rifleRun) {
-        // Two-handed forward movement: use the "running and shooting" rifle-run
-        // clip (gun stays aimed forward, both hands on it) instead of the neutral
-        // Walking clip — matches the always-aiming read. Walk pace is applied via
-        // timeScale below (sprint uses full pace through pickSprintLocomotionAction).
-        targetAction = "rifleRun";
-      } else if (!wasMoving && thirdPerson.actions.startWalk) {
-        targetAction = "startWalk";
-      } else {
-        targetAction = "walk";
-      }
+      targetAction=chooseArmedLocomotion(thirdPerson.actions,!!pistolMoveSet,f,s,!!thirdPerson.lastMove.sprinting);
     } else if (thirdPerson.fireTimer > 0) {
       // Standing fire: the two-handed rifle fire clip reads wrong on a pistol —
       // stay on idle and let the one-hand-aware procedural punch carry the shot.
@@ -7654,7 +7678,7 @@ function createLightningEffect() {
     // everything BETWEEN and during ramps is what stops sliding.)
     const groundSpeed = Math.hypot(player.velX || 0, player.velZ || 0);
     const cadenceRef = Math.max(0.1, player.sprintSpeed || 9.2);
-    const locoCadence = clamp(groundSpeed / cadenceRef, 0.35, 1.25);
+    const locoCadence = locomotionRate(targetAction,groundSpeed,cadenceRef);
     // Pistol run doubles as the walk clip and, in REVERSE, as the backpedal (sign
     // flips with movement direction). Held as the standing idle (pistolHold) it is
     // frozen (timeScale 0) on a neutral frame.
@@ -7663,8 +7687,7 @@ function createLightningEffect() {
         thirdPerson.actions.pistolRun.timeScale = 0;
         thirdPerson.actions.pistolRun.time = 0;
       } else {
-        const back = (thirdPerson.lastMove.f || 0) < -0.1 ? -1 : 1;
-        thirdPerson.actions.pistolRun.timeScale = locoCadence * back;
+        thirdPerson.actions.pistolRun.timeScale = locoCadence;
       }
     }
     if (thirdPerson.actions.pistolStrafe && targetAction === "pistolStrafe") {
@@ -7681,6 +7704,11 @@ function createLightningEffect() {
       }
     }
 
+    if (animationLabMode && labClipOverride && thirdPerson.actions[labClipOverride]) {
+      targetAction=labClipOverride; pistolHold=false; rifleHold=false;
+      thirdPerson.actions[targetAction].timeScale=1;
+    }
+    if(movingNow && thirdPerson.actions[targetAction]) thirdPerson.actions[targetAction].timeScale=locoCadence;
     clearThirdPersonAimOffsets();
     setThirdPersonAction(targetAction);
     // Reload owns torso/arms while a disjoint layer owns hips and legs. Keep its
@@ -23726,6 +23754,7 @@ async function spawnEnemies(wave, options: any = {}) {
     grenadeMesh.instanceMatrix.needsUpdate = true;
   }
 
+  let labClipOverride = "";
   let animationReviewPaused = false;
   function animate(now) {
     if (animationReviewPaused) { game.lastTime = now; requestAnimationFrame(animate); return; }
@@ -23971,7 +24000,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   // Read-only test harness hook. Inert unless the page is loaded with ?test=1,
   // so it can never affect normal gameplay.
-  if (typeof window !== "undefined" && window.location?.search?.includes("test=1")) {
+  if (typeof window !== "undefined" && (window.location?.search?.includes("test=1") || animationLabMode)) {
     window.__rbTest = {
       getScene: () => scene,
       pauseForAnimationReview: (paused = true) => { animationReviewPaused = paused; },
@@ -24709,6 +24738,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   window.addEventListener("keydown", e => {
+    if (animationLabMode) return;
     if (commandPrompt.open) {
       if (e.code === "Backquote") {
         e.preventDefault();
@@ -24901,6 +24931,7 @@ async function spawnEnemies(wave, options: any = {}) {
   }
 
   canvas.addEventListener("mousedown", e => {
+    if (animationLabMode) return;
     if (!document.pointerLockElement) requestCanvasPointerLock();
     if (e.button === 2) {
       mouse.aiming = game.state === "playing";
@@ -25567,6 +25598,60 @@ async function spawnEnemies(wave, options: any = {}) {
 
   async function bootGame() {
     try {
+      if (animationLabMode) {
+        setLoadingProgress("Loading animation laboratory", .04);
+        await initPhysics();
+        await loadPlayerCharacterAssets();
+        if (!PLAYER_CHARACTER_FBX) throw new Error("Animation lab requires the real player rig.");
+        createThirdPersonCharacter();
+        game.state="playing";game.transitioning=false;
+        player.hp=player.maxHp;player.unlimitedHealth=true;player.jumpOffset=0;player.grounded=true;
+        yaw.position.set(0,PLAYER_H,0);pitch.rotation.x=0;yaw.rotation.y=0;
+        cutscene.active=false;cutscene.introPlayerHidden=false;
+        for(const gun of Object.values(GUNS)) grantWeapon(gun);
+        createAnimationLab({
+          scene,renderer,canvas,weapons:GUN_SPECS,clips:Object.keys(thirdPerson.actions),
+          getSubject:()=>thirdPerson.root,
+          onWeapon:(gun)=>{
+            clearThirdPersonAimOffsets();
+            switchGun(gun,{fromBox:true});
+            thirdPerson.equip=0;weaponAnim.switchBlend=0;
+            thirdPerson.inspecting=false;thirdPerson.gunLag=0;thirdPerson.gunLagVel=0;
+            // createThirdPersonWeapon supplies canonical neutral wrist offsets.
+          },
+          onReload:()=>{gunState.mag=Math.max(0,gunState.mag-1);tryReload();},
+          onStep:(state,dt)=>{
+            labClipOverride=state.clip;
+            pitch.rotation.x=state.pitch;yaw.rotation.y=state.yaw;
+            const inputs={idle:[0,0],jog:[1,0],sprint:[1,0],left:[0,-1],right:[0,1],back:[-1,0],diagonal:[1,1]};
+            const [f,s]=inputs[state.motion]||[0,0];
+            const speed=state.motion==="sprint"?player.sprintSpeed:player.speed;
+            const len=Math.hypot(f,s)||1;
+            player.velX=(Math.cos(state.yaw)*s-Math.sin(state.yaw)*f)*speed/len;
+            player.velZ=(-Math.sin(state.yaw)*s-Math.cos(state.yaw)*f)*speed/len;
+            yaw.position.x+=player.velX*dt;yaw.position.z+=player.velZ*dt;
+            mouse.aiming=state.ads;viewState.ads=state.ads?1:0;
+            updateReload(dt);
+            updateThirdPersonCharacter(dt,{f,s,sprinting:state.motion==="sprint",jumping:false});
+            updateWeapon(dt);
+            thirdPerson.root.visible=true;if(thirdPerson.weapon?.gun)thirdPerson.weapon.gun.visible=true;
+            const armBones={rightUpper:thirdPerson.aimBones.rightUpperArm,rightFore:thirdPerson.aimBones.rightForeArm,
+              rightHand:thirdPerson.rightHand,leftUpper:thirdPerson.aimBones.leftUpperArm,
+              leftFore:thirdPerson.aimBones.leftForeArm,leftHand:thirdPerson.leftHand};
+            const quaternions=Object.fromEntries(Object.entries(armBones).map(([name,bone]:[string,any])=>
+              [name,bone.getWorldQuaternion(new THREE.Quaternion()).toArray()]));
+            return {fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,
+              phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),
+              reloading:gunState.reloadTimer>0,quaternions,
+              finite:Object.values(quaternions).every((q:any)=>q.every(Number.isFinite)),
+              feet:{left:thirdPerson.aimBones.leftFoot?.getWorldPosition(new THREE.Vector3()).toArray(),
+                right:thirdPerson.aimBones.rightFoot?.getWorldPosition(new THREE.Vector3()).toArray()}};
+          }
+        });
+        bootComplete=true;document.body.dataset.rbReady="1";
+        hideLoadingScreen();
+        return;
+      }
       setLoadingProgress("Initializing renderer", 0.04);
       // Phase 3: bring up the Rapier physics runtime (WASM). Foundation only —
       // the world exists but does not drive gameplay yet (collision still runs

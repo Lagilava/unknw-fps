@@ -1,7 +1,7 @@
 name: Weapon handling checks
 on:
   push:
-    branches: [fix/weapon-handling, main]
+    branches: [fix/weapon-handling, fix/animation-lab, main]
     paths:
       - 'src/**'
       - 'tests/weapon-handling.test.mjs'
@@ -33,14 +33,15 @@ jobs:
             test-artifacts/
             test-results/
       - name: Save verified weapon captures for the README
-        if: success() && github.ref_name == 'fix/weapon-handling'
+        if: success() && (github.ref_name == 'fix/weapon-handling' || github.ref_name == 'fix/animation-lab')
         run: |
           mkdir -p docs/screenshots
           cp test-artifacts/handling-*.png test-artifacts/fit-*.png docs/screenshots/
+          if ls test-artifacts/animation-lab-*.png >/dev/null 2>&1; then cp test-artifacts/animation-lab-*.png docs/screenshots/; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots/handling-*.png docs/screenshots/fit-*.png
+          git add docs/screenshots/
           if ! git diff --cached --quiet; then
             git commit -m "Refresh README images from verified weapon handling run"
-            git push origin HEAD:fix/weapon-handling
+            git push origin HEAD:${{ github.ref_name }}
           fi

@@ -1,6 +1,6 @@
 module.exports = {
   testDir: '../src/tests/weapons',
-  testMatch: 'weapon-handling.spec.cjs',
+  testMatch: ['weapon-handling.spec.cjs','animation-lab.spec.cjs'],
   timeout:600000, workers:1,
   use:{headless:true, channel:process.env.CI ? 'chrome' : undefined, viewport:{width:1600,height:900},
     launchOptions:{args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']}},
