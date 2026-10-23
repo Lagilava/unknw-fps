@@ -23,7 +23,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: node --experimental-strip-types --test tests/weapon-handling.test.mjs
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
+      - run: google-chrome --version
       - run: npx playwright test --config .github/weapon-handling.config.cjs
       - uses: actions/upload-artifact@v4
         if: always()
