@@ -4,7 +4,7 @@ test('all nine weapons reload, cancel, aim, and fit the body', async ({page}) =>
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => localStorage.setItem('rb-dev-active-v1', JSON.stringify({
-    version:5,_categories:['quality'],quality:{renderer:'webgl',shadows:'off',renderScaleCap:.5,maxActiveLights:2,autoFallback:false}
+    version:5,_categories:['quality'],quality:{renderer:'webgl',shadows:'off',renderScaleCap:.75,maxActiveLights:2,autoFallback:false}
   })));
   await page.goto('http://127.0.0.1:3000/?test=1');
   await page.waitForFunction(() => document.body.dataset.rbReady === '1',null,{timeout:240000});

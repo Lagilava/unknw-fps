@@ -6916,6 +6916,7 @@ function createLightningEffect() {
     if (thirdPerson.reloadClip && thirdPerson.reloadClipGun === currentGun) return thirdPerson.reloadClip;
     if (thirdPerson.reloadClip) {
       thirdPerson.reloadClip.parent?.remove(thirdPerson.reloadClip);
+      if (thirdPerson.reloadClip.userData.ownsReloadGeometry) disposeObject3D(thirdPerson.reloadClip);
       thirdPerson.reloadClip = null;
     }
     // A tube magazine is not a shell: show one brass round per insert.
@@ -6923,6 +6924,7 @@ function createLightningEffect() {
       ? new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, .28, 8),
           new THREE.MeshStandardMaterial({ color: 0xcda44a, metalness: .7, roughness: .4 }))
       : magSrc.clone(true);
+    clip.userData.ownsReloadGeometry = GUN_SPECS[currentGun]?.reloadStyle === "shells";
     clip.name = "ReloadClip";
     clip.visible = false;
     clip.traverse(o => { o.frustumCulled = false; if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
@@ -16333,7 +16335,7 @@ async function spawnEnemies(wave, options: any = {}) {
       thirdPerson.reloadTimer = 0;
       if (thirdPerson.reloadClip) thirdPerson.reloadClip.visible = false;
       if (thirdPerson.weapon?.mag) thirdPerson.weapon.mag.visible = true;
-      mouse.aiming = false;
+      // Preserve held aim input; the ADS gate lowers it during the switch.
       audioEngine.stopFireLoop(true);
       return;
     }

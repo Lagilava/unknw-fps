@@ -1,169 +1,171 @@
 # UNKNW — Containment Protocol
 
-A browser-based third-person wave-survival shooter built on **Three.js r166**, written in TypeScript with a Rapier physics backend. Push through an open-air urban district against escalating waves of drones, clones, zombies and storm-angels — each normal wave is a relay upload, not just a kill quota: reach the marked zone and hold it uncontested while living enemies nearby stall your progress. Start with nothing but a service pistol, gamble for better guns at the mystery box, stack perks at the plaza statue, and survive the wave-10 blackouts when the power dies and the sky catches fire.
+A third-person survival shooter you can play in a browser. Hold a relay in an abandoned city district, fight off drones and the returning dead, and spend your kill XP on weapons and upgrades. Every tenth wave cuts the power and changes the fight.
 
-![Hold the plaza against the Storm Wardens](docs/screenshots/hero_combat.png)
+**[Play UNKNW](https://lagilava.github.io/unknw-fps/)** · **[Report a bug](https://github.com/Lagilava/unknw-fps/issues)**
 
-## The fight
+![Assault rifle aiming view in the city district](docs/screenshots/handling-rifle.png)
 
-| | |
-|:---:|:---:|
-| ![Siege Drones flare their rod fans as the Judgment Lance telegraph paints the ground](docs/screenshots/warden_ability.png) | ![The Null Cherub opens up with its sustained blast](docs/screenshots/cherub_sanctuary.png) |
-| **Siege Drones** — walking artillery on the Storm Warden rig: telegraphed lightning lances, creeping barrages and a knockback bulwark | **Null Cherub** — zone control. Sanctuary Collapse shrinks a safe ring around you; the Null Field EMP kills your sprint and reload |
-| ![The zombie horde closes in across the arena](docs/screenshots/zombies.png) | ![Blackout wave — the power dies and the sky burns](docs/screenshots/blackout_firesky.png) |
-| **The horde** — screaming, weaving zombies that swing mid-sprint on a layered upper-body attack clip | **Blackout waves** — every 10th wave the lights die, an animated fire dome replaces the sky, and everything pays double XP |
+## Playing with friends
 
-Five hostile types, each with its own AI brain rather than a shared chase routine: the **Siege Drone** phase-machine artillery, the **Blink Seraph** that phases out and re-arrives on your flank, the zone-denying **Null Cherub**, kiting **Cloned Ghost** riflemen that mirror your own movement mechanics, and the **Zombie** horde. Every hostile is awake and tracking you from the moment a wave starts — nothing waits offscreen to be discovered.
+Open the play link on a desktop with a keyboard and mouse. Chrome or Edge is a good starting point. No installation is needed.
 
-Normal waves aren't a clear-the-room kill quota: reach the relay marker (shown on the HUD and radar) and hold it — 11 uncontested seconds within 3.5 m — to advance. A living enemy within 5 m stalls the upload, so killing everyone isn't required, but it isn't optional against pressure either. Each wave opens with a brief damage shield while the squad spawns in. Blackout waves keep their own distinct survive-and-fight rule instead.
+- **Solo:** choose **New Mission**, then click the screen to capture the mouse.
+- **Co-op:** choose **Multiplayer → Host Game**, send your room code to your friend, and wait for them to join before launching.
+- **Joining:** open the same play link, choose **Multiplayer → Join Game**, and enter the host's code.
+- **PvP:** change the multiplayer mode before hosting.
 
-## The economy
+Multiplayer uses PeerJS/WebRTC. The host must keep their tab open. Room creation alone does not guarantee that two different networks can connect: restrictive NATs may need a TURN relay.
 
-| | |
-|:---:|:---:|
-| ![Pack-a-Punch upgrade station](docs/screenshots/pack_a_punch.png) | ![The exterior mystery box](docs/screenshots/mystery_box.png) |
-| **Pack-a-Punch** — seven weapon tiers (MK1–MK7) bought with kill XP | **Mystery box** — the only source of new weapons. Roll the crate, take what it gives you |
-| ![The perk statue in the plaza](docs/screenshots/perk_machine.png) | ![The procedural city district](docs/screenshots/city_district.png) |
-| **Perk statue** — five stacking tiers: Overcharge, Vitality, Aegis, Adrenaline, Stim Module | **The district** — a procedural city grid beyond the arena, with parked cars whose alarms pull the horde off you |
+The first load downloads large model, texture and audio files and compiles shaders. Give the loading screen time to finish. If play feels slow, try **Settings → Performance Mode** or accept the session's **Disable shadows** prompt.
 
-## The shell
+## The objective
 
-| | |
-|:---:|:---:|
-| ![The main menu renders over the live game scene](docs/screenshots/menu.png) | ![Intel Records — eight recovered documents](docs/screenshots/intel_records.png) |
-| **Menu** — a Halo: CE homage. The overlay is transparent and a second camera orbits the plaza statue behind it, so the live scene *is* the background | **Intel Records** — eight recovered documents, each a different kind of artifact: incident log, works drawing, signal intercept, personnel roster |
+Start with a Service Pistol. Reach the marked relay and hold it for **7 uncontested seconds**. Nearby living enemies interrupt the upload; the HUD shows the objective distance, progress and contested state. Keep moving, clear space, and return to the relay.
 
-![The intro cutscene draws the city in as a wireframe grid before revealing it](docs/screenshots/intro_cutscene.png)
+Kills earn XP. Use it at the mystery box for new weapons, the Pack-a-Punch station for weapon upgrades, and the plaza statue for perks. Other weapons are locked until acquired; the loadout screen shows their profiles.
 
-Starting a mission plays a directed intro cutscene — the district draws itself in as a Tron wireframe, the choir arrives, and the operator materialises into the arena. Blackout waves get their own cut.
-
-## Play online
-
-**https://lagilava.github.io/unknw-fps/** — no install, works in any desktop Chromium/Firefox/Edge. Every push to `main` redeploys it (`.github/workflows/deploy-pages.yml`). For co-op, one player picks **Multiplayer → Host**, shares the room code, and the other joins it from the same link.
-
-## Quick start
-
-### Requirements
-
-- Node.js 20.19+ (or 22.12+) and npm
-- A Chromium-based browser with WebGL; WebGPU is used automatically where supported
-- About 150 MB of asset downloads on the first multiplayer load
-
-```bash
-npm install
-npm run dev        # Vite dev server → http://localhost:3000
-```
-
-Then open `http://localhost:3000/` and hit **New Mission**. First boot takes 15–60 s (world build, enemy pools, shader warm-up); the menu unlocks only when it's genuinely ready.
-
-The normal Vite entry point is `src/index.html` (Vite's `root` points at `src/`, so `/` is correct above). The file `src/first_person_shooter_room_game (1).html` is a legacy standalone entry point retained for Playwright coverage and offline testing; it's served by the test server rather than Vite, at `http://127.0.0.1:8000/src/first_person_shooter_room_game%20(1).html`.
-
-```bash
-npm run build      # self-contained static site in dist/
-npm run typecheck  # tsc --noEmit
-```
-
-For internet multiplayer on Windows, run `Start Internet Multiplayer.bat`. It starts the local server and a Cloudflare tunnel; install `cloudflared` first or place the executable beside the batch file. For peer-to-peer connections that fail behind strict NAT, copy `turn-config.example.txt` to the ignored `turn-config.txt`, fill in the relay values, and restart the multiplayer launcher. Never commit relay credentials.
+Blackout waves arrive every tenth wave. The normal HUD fails and the event replaces your gun with an incinerator. It has no magazine and does not reload.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| WASD / Shift / Space | Move / sprint / jump |
-| Mouse / LMB / RMB | Look / fire / aim |
-| R / V / G | Reload / melee / throw grenade |
-| E | Interact (Pack-a-Punch, mystery box, perk statue, car alarms) |
-| 1–9 | Switch weapon |
-| F / I / C | Flashlight / inspect weapon / look back |
-| Esc | Pause |
+| WASD | Move |
+| Mouse | Look |
+| Left mouse button | Fire |
+| Right mouse button (hold) | Aim |
+| Shift (hold) | Sprint; aiming takes priority |
+| Space | Jump |
+| R | Reload |
+| V | Melee |
+| G | Throw a grenade |
+| E | Use a nearby station or interactable |
+| Mouse wheel / 1–9 | Select an owned weapon |
+| F | Flashlight |
+| I | Inspect weapon |
+| C (hold) | Look back |
+| Esc | Pause / release the cursor |
+| F9 | Performance overlay |
 
-Nine weapons: Assault Rifle, Combat Shotgun, Precision Rifle, Service Pistol, Hornet SMG, Bastion LMG, Verdict DMR, Gemini Machine Pistol, Mauler Auto-Shotgun. You start with the pistol — the rest come out of the box.
+## Weapons and handling
 
-## Features
+| Key | Weapon | Reload | Sight |
+|---|---|---|---|
+| 1 | Assault Rifle | Magazine | Reflex |
+| 2 | Combat Shotgun | Shell inserts | Ghost ring |
+| 3 | Precision Rifle | Top load | Precision scope |
+| 4 | Service Pistol | Magazine | Iron sights |
+| 5 | Hornet SMG | Magazine | Compact reflex |
+| 6 | Bastion LMG | Drum | Support sight |
+| 7 | Verdict DMR | Magazine | Marksman optic |
+| 8 | Gemini Machine Pistol | Magazine | Focused-fire brackets |
+| 9 | Mauler Auto-Shotgun | Drum | Wide aperture |
 
-- **Per-enemy AI brains** — a dispatcher hands each type its own brain, writing advance/lateral/retreat weights and a phase the character rig poses to. Every ability is telegraphed and dodgeable.
-- **Rapier physics** — world collision runs as shape queries against a Rapier world mirrored from the map grid and the exterior footprints. Kills throw physics debris, firing ejects physics shell casings, and grenades are real rigid bodies. The movement *integrator* stays hand-written on purpose: query-based collision keeps the tuned FPS feel that a character controller would flatten.
-- **XP economy** — kills fund Pack-a-Punch tiers, mystery-box rolls and five stacking perks.
-- **Golden-hour HDR world** — a single HDRI drives both the visible sky and the image-based lighting, with a fixed signature colour grade over it.
-- **Directed cutscenes** — an intro sequence for New Mission and a separate blackout cut, both tunable live from the developer console.
-- **Pooled GPU particles** — every effect in the game (sparks, smoke, blood, debris, explosions) runs through two draw calls total, with a WebGPU fallback path.
-- **Layered audio** — a Howler sample layer over a Web Audio synth fallback, mixed through real weapons/voices/world sub-buses.
-- **Multiplayer** — peer-to-peer co-op and PvP FFA via PeerJS/WebRTC. Run **`Start Internet Multiplayer.bat`** (needs [cloudflared](https://github.com/cloudflare/cloudflared): `winget install Cloudflare.cloudflared`): it starts the game server plus a free Cloudflare tunnel, opens the game in Chrome, and prints one link to send your friends — no port forwarding. Heads-up: a friend's **first load pulls ~150 MB** through the tunnel, so the loading screen can take a few minutes once. For friends on mobile data or strict networks, add a free TURN relay: copy `turn-config.example.txt` → `turn-config.txt` and follow the instructions inside.
-- **WebGL + WebGPU aware** — device-appropriate backend selection (desktop → WebGL, mobile → WebGPU) with automatic fallback if a session runs slow.
+Aiming stays in the shoulder view; the Precision Rifle adds a scope overlay. Zoom adjusts mouse and touch sensitivity, and the shot direction follows the recoil reticle at the current field of view.
 
-## Developer console
+Reloads share one gameplay clock for ammo, HUD progress and the character animation. Ammo transfers at completion. Switching cancels an unfinished reload and clears its magazine/round props. Weapon upgrades shorten the next reload. The shotgun shows individual rounds rather than a detached tube magazine; weapons select their own reload sound.
 
-![The standalone developer console](docs/screenshots/dev_console.png)
+The Precision Rifle, LMG and DMR use shorter body-relative fits. Long-gun stocks receive a chest-clearance correction with the hands fitted back onto their grips.
 
-`/dev.html` is a standalone, versioned preset system — named presets per category, layered master presets, and a live preview dock. Categories cover player, camera, weapons, enemies, gameplay, spawn rules, lighting, map, cutscenes, cinematic grade, performance and debug. Changes hot-apply into a running game tab through a `storage` event; only a map rebuild or a renderer swap needs a reload. Full guide in [`DEV_MANUAL.md`](DEV_MANUAL.md).
+### Current weapon views
 
-## Architecture
+| Service Pistol | Precision Rifle |
+|---|---|
+| ![Pistol aiming view](docs/screenshots/handling-pistol.png) | ![Precision rifle scope](docs/screenshots/handling-sniper.png) |
+| **Bastion LMG** | **Combat Shotgun** |
+| ![LMG aiming view](docs/screenshots/handling-lmg.png) | ![Shotgun aiming view](docs/screenshots/handling-shotgun.png) |
 
-Game logic is TypeScript (`src/three_fps_game.ts` plus `src/modules/*.ts`), bundled by Vite. The world builders (`environment.js`, `exterior_map.js`) remain classic scripts by design: they attach to `window` and receive `THREE` as a parameter, which keeps them loadable from both entry points without a bundler. All of it lives under `src/`; `assets/` is a sibling directory, not part of the source tree.
+These views are captured by the browser regression test with shadows disabled. They show the running game, not concept art.
 
-```mermaid
-flowchart TB
-    HTML["src/index.html — Vite entry<br/>loading screen, menu, HUD"]
-    ENV["environment.js<br/>MAP grid, arena geometry, collision"]
-    EXT["exterior_map.js<br/>procedural city district, colliders"]
-    LOOP["three_fps_game.ts — game loop<br/>WebGL/WebGPU renderer, camera rig"]
-    AI["Enemy AI<br/>per-type brains, ability kits, telegraphs"]
-    WPN["Weapons and combat<br/>hitscan, recoil, Pack-a-Punch"]
-    ECON["Interactables<br/>mystery box, perks, car alarms, XP"]
-    PHYS["physics.ts — Rapier<br/>colliders, debris, casings, grenades"]
-    FX["particle_fx.ts<br/>pooled GPU particles, 2 draw calls"]
-    AUD["audio_engine.ts<br/>Howler samples + synth fallback"]
-    ECS["ecs.ts — miniplex<br/>enemy archetype queries"]
-    RIG["storm_warden.ts, zombie_character.ts<br/>procedural and Mixamo rigs"]
-    NET["netcode.ts<br/>PeerJS co-op and PvP"]
-    UI["dom_ui.ts, settings.ts, menu_halo.css"]
-    DEVE["dev_engine.ts<br/>preset system"]
-    DEVC["dev.html<br/>developer console"]
-    TESTS["src/tests/<br/>Playwright specs"]
+## Enemies and progression
 
-    HTML --> ENV
-    ENV --> EXT
-    EXT --> LOOP
-    LOOP --> AI
-    LOOP --> WPN
-    LOOP --> ECON
-    LOOP --> PHYS
-    LOOP --> FX
-    LOOP --> AUD
-    LOOP --> ECS
-    LOOP --> NET
-    LOOP --> UI
-    AI --> RIG
-    DEVC -.-> DEVE
-    DEVE -.-> LOOP
-    TESTS -.-> LOOP
+- **Siege Drones:** telegraphed artillery attacks and area pressure.
+- **Blink Seraphs:** reposition around your flank.
+- **Null Cherubs:** deny safe ground and suppress sprint/reload with their Null Field.
+- **Cloned Ghosts:** armed operators that strafe and return fire.
+- **Zombies:** close-range pressure from the horde.
+
+Pack-a-Punch has seven tiers. Perks improve damage, health, shields, movement and recovery. Parked-car alarms can distract enemies. A failed run can be restarted from the result screen.
+
+## Local development
+
+Use Node.js **22.19+** and npm.
+
+```sh
+npm ci
+npm run dev
 ```
 
-Two invariants are worth knowing before touching the renderer:
+Open **http://localhost:3000/**. Vite uses `src/index.html` as its entry point.
 
-- **Boot readiness gate.** The HTML shell reveals the menu only once `bootGame()` has finished building the world, priming enemy pools and warming every shader (`body[data-rb-ready]`). Tests wait on that flag, never on a timer.
-- **The visible-light count is a shader-cache invariant.** Three.js bakes the light count into every shader program, so a count that changes at runtime relinks every material in the scene at ~400 ms each. Lights are dimmed to zero intensity, never toggled, and pooled objects never carry their own lights.
-
-## Testing
-
-Playwright specs live in `src/tests/` — boot stability, shader-cache invariants, physics collision parity, particles, dev console, multiplayer and perf probes:
-
-```bash
-npx playwright test
+```sh
+npm run build       # static output in dist/
+npm run typecheck   # TypeScript checks
 ```
 
-Loading the game with `?test=1` exposes the read-only `window.__rbTest` harness the specs drive. The README gallery above is generated by one of them:
+The game loads runtime assets from `../assets/`. Production hosting must retain the directory layout used by the Pages workflow:
 
-```bash
-npx playwright test src/tests/ui/readme-shots.spec.cjs --headed
+```text
+index.html          redirects to play/
+play/               compiled game, bundle/, classic world scripts
+assets/             models, textures and audio
 ```
 
-Note that headless Chrome renders this scene at ~2.5 fps under SwiftShader, so specs poll for state rather than waiting a fixed interval — and screenshots are taken headed, on a real GPU.
+Pushing to `main` builds and deploys through [deploy-pages.yml](.github/workflows/deploy-pages.yml).
+
+For local internet multiplayer, `Start Internet Multiplayer.bat` starts the local server and a Cloudflare tunnel. Install `cloudflared` first. See `turn-config.example.txt` for relay configuration; keep credentials out of Git.
+
+## Tests and play-test feedback
+
+Run the fast weapon-handling checks:
+
+```sh
+node --experimental-strip-types --test tests/weapon-handling.test.mjs
+```
+
+Run the all-weapon browser check; its configuration starts Vite:
+
+```sh
+npx playwright install chromium
+npx playwright test --config .github/weapon-handling.config.cjs
+```
+
+The handling checks cover ammo conservation, partial reserves, cancellation, upgraded reload durations, reticle projection and frame-rate-independent aim blending. The browser check exercises reload completion, switching, aiming and body-fit diagnostics for every weapon, and captures the images above.
+
+The wider Playwright suite lives in `src/tests/`. Many existing specs use the legacy entry point and their own test-server configuration; they are separate from the Vite handling check.
+
+When reporting a play-test issue, include:
+
+- Browser, device/GPU and whether Performance Mode was enabled.
+- Weapon, wave and solo/co-op/PvP mode.
+- Steps to reproduce, plus a screenshot or short clip.
+- FPS from F9 if the issue involves stutter or slow rendering.
+
+Automated checks do not replace testing on real GPUs or between friends on different networks.
+
+## Source layout
+
+| Location | Responsibility |
+|---|---|
+| `src/three_fps_game.ts` | Game loop, combat, character posing and integration |
+| `src/modules/gun_config.ts` | Weapon roster and stats |
+| `src/modules/weapon_handling.ts` | Reload state and aiming math |
+| `src/modules/weapon_ads.ts` | Aim profiles and sight overlays |
+| `src/modules/weapon_hand_fit.ts` | Grip fitting, scale and torso clearance |
+| `src/modules/weapon_hud.ts` | Equipped weapon readout |
+| `src/environment.js`, `src/exterior_map.js` | World construction |
+| `src/modules/netcode.ts` | Peer-to-peer multiplayer |
+| `assets/` | Runtime models, textures and audio |
+
+Built with Three.js r166, TypeScript, Rapier physics, Howler and PeerJS. The world builders remain classic scripts so both entry points can load them.
+
+The renderer keeps pooled lights allocated and changes their intensity rather than their visibility. Changing the light count can invalidate the material shader cache. Boot readiness is exposed as `body[data-rb-ready="1"]`; tests wait for it rather than guessing a loading delay.
 
 ## Asset credits
 
-- HDRI skies — [Poly Haven](https://polyhaven.com) (CC0)
-- City kit buildings/props — [Kenney](https://kenney.nl) (CC0)
-- Landmark models — [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) (CC0)
-- Character models & animations — [Mixamo](https://www.mixamo.com) (Adobe Mixamo license)
-- SFX — [Kenney](https://kenney.nl) audio packs (CC0)
+- HDRI skies — [Poly Haven](https://polyhaven.com), CC0.
+- City kit buildings and props — [Kenney](https://kenney.nl), CC0.
+- Landmark models — [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets), CC0.
+- Character models and animations — [Mixamo](https://www.mixamo.com), Adobe Mixamo license.
+- SFX — [Kenney](https://kenney.nl) audio packs, CC0.
