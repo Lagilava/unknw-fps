@@ -26,9 +26,11 @@ export function sampleAuthoredSkin(root) {
       }));
       if(!arm)continue;
       const points=ids.map(id=>point(mesh,id,new THREE.Vector3()));
+      const rest=ids.map(id=>new THREE.Vector3().fromBufferAttribute(position,id));
       for(let j=0;j<3;j++){
         const length=points[j].distanceTo(points[(j+1)%3]);
-        if(length>1e-5)edges.push({mesh,a:ids[j],b:ids[(j+1)%3],length});
+        if(length>1e-5)edges.push({mesh,a:ids[j],b:ids[(j+1)%3],length,
+          restLength:rest[j].distanceTo(rest[(j+1)%3])});
       }
       collected++;
     }
@@ -36,13 +38,16 @@ export function sampleAuthoredSkin(root) {
   return edges;
 }
 export function compareSolvedSkin(edges) {
-  const ratios:number[]=[],a=new THREE.Vector3(),b=new THREE.Vector3();
+  const ratios:number[]=[],restRatios:number[]=[],authoredRestRatios:number[]=[],a=new THREE.Vector3(),b=new THREE.Vector3();
   for(const mesh of new Set<any>(edges.map(e=>e.mesh))){mesh.updateMatrixWorld(true);mesh.skeleton.update();}
   for(const edge of edges) {
     point(edge.mesh,edge.a,a);point(edge.mesh,edge.b,b);
-    ratios.push(a.distanceTo(b)/edge.length);
+    const length=a.distanceTo(b);
+    ratios.push(length/edge.length);
+    if(edge.restLength>1e-5){restRatios.push(length/edge.restLength);authoredRestRatios.push(edge.length/edge.restLength);}
   }
-  ratios.sort((a,b)=>a-b);
+  ratios.sort((a,b)=>a-b);restRatios.sort((a,b)=>a-b);authoredRestRatios.sort((a,b)=>a-b);
   return {samples:ratios.length,p95:ratios[Math.floor(ratios.length*.95)]||1,max:ratios.at(-1)||1,
-    finite:ratios.every(Number.isFinite)};
+    restP95:restRatios[Math.floor(restRatios.length*.95)]||1,restMax:restRatios.at(-1)||1,
+    authoredRestMax:authoredRestRatios.at(-1)||1,finite:ratios.every(Number.isFinite)};
 }
