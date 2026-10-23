@@ -50,10 +50,8 @@ export function createGameHud(doc = document) {
     #hud.combat-hud #center-hud::after { display:none; }
     #mission-header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; padding-bottom:0; border:0; }
     #hud.combat-hud #wave-badge,#hud.combat-hud #score-badge { clip-path:none; border:0; padding:0; background:none; box-shadow:none; backdrop-filter:none; letter-spacing:.06em; font:600 11px/1.4 'Segoe UI',sans-serif; }
-    #hud.combat-hud #wave-badge { font-size:0; color:#f0a33a; }
-    #hud.combat-hud #wave-badge::before { content:'WAVE '; font:600 11px/1.4 'Segoe UI',sans-serif; letter-spacing:.06em; }
-    #hud.combat-hud #score-badge { font-size:0; color:#c9c2b5; }
-    #hud.combat-hud #score-badge::before { content:'SCORE '; font:600 11px/1.4 'Segoe UI',sans-serif; letter-spacing:.06em; }
+    #hud.combat-hud #wave-badge { font-size:11px; color:#f0a33a; }
+    #hud.combat-hud #score-badge { font-size:11px; color:#c9c2b5; }
     #hud.combat-hud #wave-val,#hud.combat-hud #score-val { font:800 28px/1 'Segoe UI',sans-serif; color:#fff; font-variant-numeric:tabular-nums; }
     #hud.combat-hud .score-best { display:none; }
     #mission-caption { display:none; color:var(--site-orange); font:700 9px/1.4 'Segoe UI',sans-serif; letter-spacing:.18em; margin-bottom:5px; }
