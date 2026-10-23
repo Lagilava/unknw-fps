@@ -6246,7 +6246,7 @@ function createLightningEffect() {
     const pistolUpper=source.pistolRun && makeInPlaceClipForModel(source.pistolRun,model);
     for(const [name,lower,upper] of [
       ['armedStrafeLeft',source.strafeAlt||source.strafe,rifleUpper],
-      ['armedSprint',source.sprint,source.rifleRun?makeInPlaceClipForModel(source.rifleRun,model):rifleUpper],
+      ['armedSprint',source.sprint,rifleUpper],
       ['armedSprintLeft',source.sprintLeft||source.strafeAlt,rifleUpper],
       ['armedSprintRight',source.sprintRight||source.strafe,rifleUpper],
       ['armedStrafeRight',source.strafe,rifleUpper],
@@ -25631,6 +25631,16 @@ async function spawnEnemies(wave, options: any = {}) {
             // createThirdPersonWeapon supplies canonical neutral wrist offsets.
           },
           onReload:()=>{gunState.mag=Math.max(0,gunState.mag-1);tryReload();},
+          onReset:()=>{
+            clearThirdPersonAimOffsets();
+            for(const [type,state] of Object.entries(allGuns) as any) {
+              cancelWeaponReload(state);state.mag=state.magSize;state.ammo=GUN_SPECS[type].ammo;
+            }
+            thirdPerson.reloadTimer=0;thirdPerson.equip=0;weaponAnim.switchBlend=0;
+            if(thirdPerson.reloadClip)thirdPerson.reloadClip.visible=false;
+            for(const action of Object.values(thirdPerson.actions) as any)action.time=0;
+            yaw.position.set(0,PLAYER_H,0);player.velX=0;player.velZ=0;
+          },
           onStep:(state,dt)=>{
             labClipOverride=state.clip;
             pitch.rotation.x=state.pitch;yaw.rotation.y=state.yaw;

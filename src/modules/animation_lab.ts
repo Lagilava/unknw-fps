@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 type LabState={weapon:string;motion:string;pitch:number;yaw:number;ads:boolean;clip:string;sweep:boolean};
-export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon,onReload,onStep,getSubject}) {
+export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon,onReload,onReset,onStep,getSubject}) {
   document.body.classList.add('animation-lab');
   const css=document.createElement('style');
   css.textContent=`
@@ -123,7 +123,11 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
   get('lab-play').addEventListener('click',()=>{playing=!playing;refresh();});
   get('lab-step').addEventListener('click',()=>{playing=false;step();});
   get('lab-reload').addEventListener('click',()=>{onReload();if(!playing)step();});
-  get('lab-reset').addEventListener('click',()=>{set({motion:'idle',pitch:0,yaw:0,clip:'',sweep:false});view('front');});
+  get('lab-reset').addEventListener('click',()=>{
+    elapsed=0;accumulator=0;onReset?.();
+    set({motion:'idle',pitch:0,yaw:0,clip:'',sweep:false});
+    step(12,false);view('front');render();
+  });
   get('lab-skeleton').addEventListener('change',()=>{skeleton.visible=get('lab-skeleton').checked;render();});
   panel.querySelectorAll('[data-view]').forEach(el=>el.addEventListener('click',()=>view(el.getAttribute('data-view'))));
   addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();render();});

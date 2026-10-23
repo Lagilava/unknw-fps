@@ -84,19 +84,6 @@ export function createWeaponHandFitter() {
     fore.getWorldPosition(b); hand.getWorldPosition(c);
     to.copy(a).addScaledVector(direction,distance).sub(b).normalize(); from.subVectors(c,b).normalize();
     deltaQ.setFromUnitVectors(from,to); applyRotation(fore,deltaQ); fore.updateMatrixWorld(true);
-    // Forearm pronation carries axial palm rotation. Leaving all of this on
-    // the wrist makes a correctly placed hand look corkscrewed when aiming high.
-    hand.getWorldQuaternion(currentQ); deltaQ.copy(wristQ).multiply(currentQ.invert());
-    fore.getWorldPosition(b);hand.getWorldPosition(c);axis.subVectors(c,b).normalize();
-    const projection=deltaQ.x*axis.x+deltaQ.y*axis.y+deltaQ.z*axis.z;
-    const raw=2*Math.atan2(projection,deltaQ.w);
-    let angle=Math.atan2(Math.sin(raw),Math.cos(raw));
-    rig.wristTwistAngles ||= {};
-    const previous=rig.wristTwistAngles[side] ?? angle;
-    angle+=Math.round((previous-angle)/(2*Math.PI))*2*Math.PI;
-    rig.wristTwistAngles[side]=angle;
-    twistQ.setFromAxisAngle(axis,THREE.MathUtils.clamp(angle*.8,-1.1,1.1));
-    applyRotation(fore,twistQ);fore.updateMatrixWorld(true);
     hand.getWorldQuaternion(currentQ);deltaQ.copy(wristQ).multiply(currentQ.invert());
     applyRotation(hand,deltaQ); hand.updateMatrixWorld(true);
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
