@@ -23,9 +23,8 @@ The camera follows the operator during movement. The grid repeats beneath it; ch
 
 ## Aim correction
 
-The arm fitter now supplies one target orientation and one two-bone solve per gripping arm. Elbow poles point down and outward relative to the body instead of being inferred from an already modified elbow. The wrists follow their authored neutral grip orientation, calibrated once from the source clips. They do not receive a second layer of camera pitch.
-
-Aim lean is applied to the upper spine after animation playback. The entire model, hips and legs no longer tilt with camera pitch. Arm targets stay within reach; a long-gun support hand can slide along its handguard. No bones are scaled or stretched.
+The arm fitter preserves each sampled clip's elbow plane and bone roll. It adds small, bounded swing corrections after the mixer; it does not reconstruct the arm's orientation from generic axes or force a neutral wrist rotation onto a different animated carry pose.
+Aim lean is applied to the upper spine after animation playback. The entire model, hips and legs no longer tilt with camera pitch. Arm targets stay within reach; a long-gun support hand can slide along its handguard. Corrections are bounded so contact fitting cannot take priority over the character's anatomy. No bones are scaled or stretched.
 
 The solver's offsets are removed before the next mixer sample. Reload and melee keep their authored/free-hand behavior.
 

@@ -71,10 +71,11 @@ export function createWeaponHandFitter() {
     const upper = side==='right' ? bones?.rightUpperArm : bones?.leftUpperArm;
     const fore = side==='right' ? bones?.rightForeArm : bones?.leftForeArm;
     if(!upper || !fore || !hand) return;
-    hand.getWorldScale(worldScale);
-    offset.copy(palmLocal(hand)).multiply(worldScale).applyQuaternion(wristQ);
-    wristTarget.copy(gripWorld).sub(offset);
-    upper.getWorldPosition(a); fore.getWorldPosition(b); hand.getWorldPosition(c);
+    // The visible palm is the end effector, not the wrist joint. Keeping the
+    // authored wrist local rotation makes the forearm + palm a rigid second
+    // segment and avoids twisting the skin just to satisfy an orientation goal.
+    wristTarget.copy(gripWorld);
+    upper.getWorldPosition(a);fore.getWorldPosition(b);palmPoint(hand,c);
     const l1=a.distanceTo(b), l2=b.distanceTo(c);
     if(l1<1e-5 || l2<1e-5) return;
     direction.subVectors(wristTarget,a);
@@ -98,12 +99,11 @@ export function createWeaponHandFitter() {
     from.subVectors(b,a).normalize();to.subVectors(elbow,a).normalize();
     deltaQ.setFromUnitVectors(from,to);
     rotateWithin(upper,deltaQ,.65,side+'ShoulderDelta',applyRotation);
-    fore.getWorldPosition(b);hand.getWorldPosition(c);
+    fore.getWorldPosition(b);palmPoint(hand,c);
     from.subVectors(c,b).normalize();to.copy(a).addScaledVector(direction,distance).sub(b).normalize();
     deltaQ.setFromUnitVectors(from,to);
     rotateWithin(fore,deltaQ,.95,side+'ElbowDelta',applyRotation);
-    hand.getWorldQuaternion(currentQ).normalize();deltaQ.copy(wristQ).multiply(currentQ.invert());
-    rotateWithin(hand,deltaQ,.35,side+'WristDelta',applyRotation);
+    diag[side+'WristDelta']=0;
     diag[side+'Bend']=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-distance*distance)/(2*l1*l2),-1,1));
   }
   return {

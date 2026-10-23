@@ -107,8 +107,8 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
     expect(r.maxElevation,r.weapon+' 7-degree aim limit').toBeLessThanOrEqual(7*Math.PI/180+1e-7);
     expect(r.maxWrist,r.weapon+' authored wrist correction').toBeLessThanOrEqual(.350001);
     expect(r.maxLegOverride,r.weapon+' legs must equal authored mixer pose').toBeLessThan(1e-6);
-    expect(r.right,r.weapon+' trigger grip error').toBeLessThan(.065);
-    expect(r.left,r.weapon+' support grip error').toBeLessThan(.085);
+    expect(r.right,r.weapon+' trigger grip error').toBeLessThan(.02);
+    expect(r.left,r.weapon+' support grip error').toBeLessThan(.02);
     expect(r.jump,r.weapon+' joint discontinuity').toBeLessThan(.55);
     expect(r.actions.left).not.toBe(r.actions.right);
     expect(r.actions.back).not.toBe(r.actions.jog);
