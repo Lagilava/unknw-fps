@@ -174,25 +174,21 @@ export function createWeaponHandFitter() {
         // Smooth vertical weighting avoids a .22 m jump at the chest boundary.
         const vertical=1-THREE.MathUtils.smoothstep(Math.abs(offset.y),.25,.65);
         const lateral=1-THREE.MathUtils.smoothstep(Math.abs(offset.dot(right)),.18,.32);
-        push=Math.min(.18,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
+        push=Math.min(.06,Math.max(0,.12-offset.dot(forward)))*vertical*lateral;
         root.getWorldQuaternion(parentQ);
         offset.copy(forward).multiplyScalar(push).applyQuaternion(parentQ.invert());
         gun.position.add(offset); gun.updateMatrixWorld(true);
       }
       diag.torsoPush=push;
-      // Let the support grip slide along a long handguard before fitting both
-      // arms. Compact sidearms instead keep their authored grip spacing.
-      if(support && bones?.leftUpperArm && bones?.leftForeArm && fit.left[0]-fit.right[0]>.15) {
-        bones.leftUpperArm.getWorldPosition(a);bones.leftForeArm.getWorldPosition(b);leftHand.getWorldPosition(c);
-        target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
-        const reach=(a.distanceTo(b)+b.distanceTo(c))*.94;
-        direction.subVectors(target,a);axis.set(1,0,0).applyQuaternion(worldQ);
-        const distance=direction.length(),alignment=direction.dot(axis)/Math.max(.001,distance);
-        // A regularized slide starts at zero continuously. A quadratic
-        // intersection used to jump when its discriminant crossed zero.
-        const slide=Math.min((fit.left[0]-fit.right[0])*scale*.65,
-          Math.max(0,(distance-reach)*alignment/(alignment*alignment+.05)));
-        leftGrip.x-=slide/scale;
+      // Choose the closest contact on the handguard to the authored support
+      // palm before asking the arm to move. A single nominal foregrip point can
+      // unnecessarily pull an otherwise correct carry across the chest.
+      if(support && fit.left[0]-fit.right[0]>.15) {
+        palmPoint(leftHand,target);gun.worldToLocal(target);
+        leftGrip.x=THREE.MathUtils.clamp(target.x,fit.right[0]+.06/scale,fit.left[0]+.05/scale);
+        const dy=(target.y-leftGrip.y)*scale,dz=(target.z-leftGrip.z)*scale;
+        const radial=Math.hypot(dy,dz),weight=radial>0?Math.min(1,.025/radial):0;
+        leftGrip.y+=dy*weight/scale;leftGrip.z+=dz*weight/scale;
       }
       // Project the WHOLE weapon into the intersection of both reachable wrist
       // volumes before changing any bone. This prevents a compact pistol/SMG
