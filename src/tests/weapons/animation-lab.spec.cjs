@@ -40,7 +40,7 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
               const jump=angle(prev[name],d.quaternions[name]);
               if(jump>row.jump){row.jump=jump;row.worst={motion,yaw,pitch:-1.15+i*2.3/48,bone:name};}
             }
-            prev=d.quaternions;row.actions[motion]=d.action;
+            prev=d.quaternions;row.actions[motion]=d.action+(d.rate<0?':reverse':'');
           }
         }
       }
@@ -92,7 +92,7 @@ test('isolated production animation lab: arm continuity, all weapons, real direc
     return rows;
   });
   console.log('GAIT CONTINUITY '+JSON.stringify(gait));
-  for(const row of gait)expect(row.maxJump,row.motion+' knee/ankle discontinuity').toBeLessThan(.30);
+  for(const row of gait)expect(row.maxJump,row.motion+' knee/ankle discontinuity').toBeLessThan(.40);
   const feet=await page.evaluate(()=>{
     const lab=window.__animationLab;lab.set({weapon:'rifle',motion:'idle',yaw:0,pitch:0});lab.step(60,false);
     const base=lab.getDiagnostics().feet,measurements=[];

@@ -44,7 +44,7 @@ import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
 import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
 import { limitWeaponElevation } from "./modules/weapon_pose_limits";
-import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, closeLocomotionLoop } from "./modules/weapon_locomotion";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
@@ -6106,6 +6106,22 @@ function createLightningEffect() {
   // hands stay on the gun (walk-gun-pose spec: span > 0.2) but arms look alive.
   const TP_ARM_SWING_BLEND = 0.18;
 
+  // Orientation warp: turn the hips (and with them the legs) toward the real travel
+  // direction and untwist the spine so the chest, arms and gun keep facing the aim.
+  // Spread over the three spine bones so no single joint takes the whole twist.
+  const LOCOMOTION_ACTION = /^(rifleRun|pistolRun|(?:armed|pistol)(?:Jog|StrafeLeft|StrafeRight|Back|Sprint(?:Left|Right)?))$/;
+  const _warpQuat = new THREE.Quaternion(), _warpAxis = new THREE.Vector3(0, 1, 0);
+  function applyLocomotionWarp(dt, target) {
+    const warp = thirdPerson.warp = THREE.MathUtils.damp(thirdPerson.warp || 0, clamp(target, -0.9, 0.9), 12, dt);
+    const b = thirdPerson.aimBones;
+    if (!b?.hips || !b.spine || Math.abs(warp) < 0.01) return;
+    const chain = [];
+    for (let bone = b.spine; bone && bone !== b.hips; bone = bone.parent) chain.unshift(bone);
+    if (!chain.length) return;
+    applyWorldQuatToBone(b.hips, _warpQuat.setFromAxisAngle(_warpAxis, -warp));
+    for (const bone of chain) applyWorldQuatToBone(bone, _warpQuat.setFromAxisAngle(_warpAxis, warp / chain.length));
+  }
+
   function setThirdPersonAction(name, fade = 0.14) {
     const action = thirdPerson.actions[name] || thirdPerson.actions.idle;
     // Rifle-carry upper-body layer engages only while an arm-stripped clip drives
@@ -6120,7 +6136,7 @@ function createLightningEffect() {
       thirdPerson.armSwingActive = nextSwing;
     }
     if (!action || action === thirdPerson.activeAction) return;
-    const locomotion=/^(rifleRun|pistolRun|(?:armed|pistol)(?:Jog|StrafeLeft|StrafeRight|Back|Sprint(?:Left|Right)?))$/;
+    const locomotion=LOCOMOTION_ACTION;
     const previous=thirdPerson.activeAction;
     const phase=previous && locomotion.test(name) && locomotion.test(thirdPerson.activeActionName)
       ? (previous.time % Math.max(.001,previous.getClip().duration))/Math.max(.001,previous.getClip().duration) : null;
@@ -6207,7 +6223,7 @@ function createLightningEffect() {
       if (/^(walk|walkBack|strafe|strafeAlt|sprint|sprintLeft|sprintRight|rifleRun|runBack|pistolRun|pistolStrafe)$/.test(name)) clip=closeLocomotionLoop(clip);
       if (name === "reload") {
         clip = new THREE.AnimationClip("reloadUpper", clip.duration, clip.tracks.filter(t => !isLegTrack(t)));
-      } else if (["idle", "rifleRun", "pistolRun", "strafe", "walkBack"].includes(name)) {
+      } else if (["idle", "rifleRun", "pistolRun", "strafe", "strafeAlt", "runBack", "sprint", "sprintLeft", "sprintRight"].includes(name)) {
         const legs = new THREE.AnimationClip(`${name}_reloadLegs`, clip.duration, clip.tracks.filter(isLegTrack));
         if (legs.tracks.length) reloadLegActions[name] = thirdPerson.mixer.clipAction(legs);
       }
@@ -7647,7 +7663,8 @@ function createLightningEffect() {
       else if (thirdPerson.actions.jumpForward) targetAction = "jumpForward";
       else targetAction = "jump";
     } else if (movingNow) {
-      targetAction=chooseArmedLocomotion(thirdPerson.actions,!!pistolMoveSet,f,s,!!thirdPerson.lastMove.sprinting);
+      targetAction=chooseArmedLocomotion(thirdPerson.actions,!!pistolMoveSet,f,s,!!thirdPerson.lastMove.sprinting,
+        Math.hypot(player.velX||0,player.velZ||0),thirdPerson.activeActionName||'');
     } else if (thirdPerson.fireTimer > 0) {
       // Standing fire: the two-handed rifle fire clip reads wrong on a pistol —
       // stay on idle and let the one-hand-aware procedural punch carry the shot.
@@ -7693,17 +7710,16 @@ function createLightningEffect() {
     // whenever input pauses (and between simulation substeps), causing fidgeting.
     thirdPerson._lastWalkAction = targetAction;
     // ── Anti-skate: velocity-matched locomotion cadence ─────────────────────────
-    // Feet skate when the clip plays at a fixed rate while the body moves at a
-    // different speed. Instead of the old binary sprint→1.0 / walk→0.62, drive the
-    // clip's timeScale from the character's ACTUAL ground speed / the sprint
-    // reference speed. This tracks acceleration, deceleration, the ADS move
-    // penalty, carry-weight and perk speed multipliers continuously, so the stride
-    // matches the ground the whole time — not just at the two hardcoded speeds.
-    // (walkSpeed/sprintSpeed = 5.8/9.2 ≈ 0.63, so steady walk/sprint are unchanged;
-    // everything BETWEEN and during ramps is what stops sliding.)
+    // Feet skate when a loop's stance foot covers less ground than the body does.
+    // Each loop has a MEASURED native ground speed (LOCOMOTION_NATIVE_SPEED) and
+    // the clip timeScale is groundSpeed / that, so the stride tracks acceleration,
+    // the ADS move penalty and perk speed continuously. Fast movement plays the
+    // sprint-leg loops (the jog/strafe/back loops only cover 2-3 m/s) and diagonal
+    // travel turns the legs toward the real direction (applyLocomotionWarp).
     const groundSpeed = Math.hypot(player.velX || 0, player.velZ || 0);
-    const cadenceRef = Math.max(0.1, player.sprintSpeed || 9.2);
-    const locoCadence = locomotionRate(targetAction,groundSpeed,cadenceRef);
+    const sector = locomotionSector(f, s);
+    const backwardSprintLegs = sector.family === 'back' && /Sprint$/.test(targetAction);
+    const locoCadence = locomotionRate(targetAction,groundSpeed,backwardSprintLegs);
     // Pistol run doubles as the walk clip and, in REVERSE, as the backpedal (sign
     // flips with movement direction). Held as the standing idle (pistolHold) it is
     // frozen (timeScale 0) on a neutral frame.
@@ -7739,15 +7755,20 @@ function createLightningEffect() {
     // Reload owns torso/arms while a disjoint layer owns hips and legs. Keep its
     // phase through direction changes and drive both layers from gameplay clocks.
     const reloading = thirdPerson.reloadTimer > 0 && targetAction === "reload";
-    const reloadLegName = !movingNow ? "idle" : Math.abs(s) > Math.abs(f) * 1.2 ? "strafe"
-      : f < -0.1 ? "walkBack" : pistolMoveSet ? "pistolRun" : "rifleRun";
+    const fastLegs = groundSpeed > (/^sprint/.test(thirdPerson.reloadLegName || "") ? 3.0 : 3.6);
+    const reloadLegName = !movingNow ? "idle"
+      : sector.family === "left" ? (fastLegs ? "sprintLeft" : "strafeAlt")
+      : sector.family === "right" ? (fastLegs ? "sprintRight" : "strafe")
+      : sector.family === "back" ? (fastLegs ? "sprint" : "runBack")
+      : fastLegs ? "sprint" : pistolMoveSet ? "pistolRun" : "rifleRun";
+    if (reloading) thirdPerson.reloadLegName = reloadLegName;
     const nextReloadLegs = reloading ? (reloadLegActions[reloadLegName] || reloadLegActions.idle) : null;
     if (nextReloadLegs !== activeReloadLegs) {
       if (activeReloadLegs) activeReloadLegs.fadeOut(0.14);
       if (nextReloadLegs) nextReloadLegs.reset().setEffectiveWeight(1).fadeIn(0.14).play();
       activeReloadLegs = nextReloadLegs;
     }
-    if (activeReloadLegs) activeReloadLegs.timeScale = movingNow ? locoCadence * (reloadLegName === "strafe" && s < 0 ? -1 : 1) : 1;
+    if (activeReloadLegs) activeReloadLegs.timeScale = movingNow ? locomotionRate(reloadLegName, groundSpeed, sector.family === "back" && reloadLegName === "sprint") : 1;
     if (reloading && thirdPerson.actions.reload) {
       const duration = weaponAnim.animSpec.reloadDuration || 1;
       const action = thirdPerson.actions.reload;
@@ -7770,6 +7791,8 @@ function createLightningEffect() {
       }
     }
     if (thirdPerson.mixer) thirdPerson.mixer.update(dt);
+    applyLocomotionWarp(dt, movingNow && !!thirdPerson.actions[targetAction] && (reloading || LOCOMOTION_ACTION.test(targetAction))
+      && !thirdPerson.cutsceneAction ? sector.offset : 0);
 
     const authoredSkin=animationLabMode && labMeasureSkin ? sampleAuthoredSkin(thirdPerson.model) : null;
     if(animationLabMode) thirdPerson.authoredLegQuats=Object.fromEntries(
@@ -25682,7 +25705,7 @@ async function spawnEnemies(wave, options: any = {}) {
               leftFore:thirdPerson.aimBones.leftForeArm,leftHand:thirdPerson.leftHand};
             const quaternions=Object.fromEntries(Object.entries(armBones).map(([name,bone]:[string,any])=>
               [name,bone.getWorldQuaternion(new THREE.Quaternion()).toArray()]));
-            return {fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,
+            return {fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
               phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),
               reloading:gunState.reloadTimer>0,quaternions,
               skin:thirdPerson.skinDiagnostic,authoredLegQuats:thirdPerson.authoredLegQuats,
