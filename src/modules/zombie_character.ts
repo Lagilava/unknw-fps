@@ -16,6 +16,8 @@
 // frame, the mixer rewrites them first and we compose a small offset after — no
 // accumulation. This makes turns feel weighty and organic rather than a rigid pivot.
 
+const STRIDE_CACHE = new Map<string, number>();
+
 export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, skeletonClone: any, options: any = {}) {
   const targetHeight = options.targetHeight || 1.8;
   const onceStates = options.onceStates || new Set(["attack", "scream", "dying", "death"]);
@@ -129,6 +131,46 @@ export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, 
   // Restore mixer poses before composing offsets, even on unkeyed bones.
   const offsetBones = [...new Set([spine, spine2, neck, head, hips, lShldr, rShldr, lFore, rFore].filter(Boolean))];
   const mixerPose = offsetBones.map(b => b.quaternion.clone());
+  // ── Measured stride ─────────────────────────────────────────────────────────
+  // How fast (m/s, at this model's scale) each locomotion loop's planted foot travels
+  // back relative to the hips. Playing a loop at travelSpeed / this stops the feet
+  // sliding; guessing it (the old 3.5 / 1.2 / 1.0 constants) left walk and crawl
+  // skating at several times their real stride. Measured once per clip and shared.
+  const nativeSpeed: Record<string, number> = {};
+  {
+    const lFoot = bone("mixamorigLeftFoot"), rFoot = bone("mixamorigRightFoot");
+    if (hips && lFoot && rFoot) {
+      const bones: any[] = []; model.traverse((o) => { if (o.isBone) bones.push([o, o.position.clone(), o.quaternion.clone(), o.scale.clone()]); });
+      const h = new THREE.Vector3(), f = new THREE.Vector3();
+      for (const name of ["walk", "run", "crawl", "runCrawl"]) {
+        const a = actions[name]; if (!a) continue;
+        const key = a.getClip().uuid + ":" + scale.toFixed(4);
+        if (STRIDE_CACHE.has(key)) { const v = STRIDE_CACHE.get(key); if (v > 0) nativeSpeed[name] = v; continue; }
+        const dur = a.getClip().duration, N = Math.min(120, Math.max(24, Math.round(dur * 30))), dt = dur / N;
+        a.reset(); a.play(); a.setEffectiveWeight(1);
+        const rel: number[][][] = [[], []];
+        for (let i = 0; i <= N; i++) {
+          mixer.setTime(i * dt); model.updateMatrixWorld(true);
+          hips.getWorldPosition(h);
+          [lFoot, rFoot].forEach((foot, k) => { foot.getWorldPosition(f); rel[k].push([f.x - h.x, f.z - h.z, f.y]); });
+        }
+        mixer.stopAllAction();
+        const speeds: number[] = [];
+        for (const track of rel) {
+          const low = Math.min(...track.map(v => v[2])) + 0.04 * Math.max(0.2, h.y);
+          for (let i = 1; i < track.length; i++) if (track[i][2] < low && track[i - 1][2] < low)
+            speeds.push(Math.hypot(track[i][0] - track[i - 1][0], track[i][1] - track[i - 1][1]) / dt);
+        }
+        speeds.sort((x, y) => x - y);
+        const v = speeds.length ? speeds[speeds.length >> 1] : 0;
+        STRIDE_CACHE.set(key, v);
+        if (v > 0.05) nativeSpeed[name] = v;
+      }
+      for (const [b, p, q, sc] of bones) { b.position.copy(p); b.quaternion.copy(q); b.scale.copy(sc); }
+      model.updateMatrixWorld(true);
+    }
+  }
+
   // smoothed procedural drivers
   let leanTurn = 0;        // bank into the turn
   let leadTurn = 0;        // head leads the turn
@@ -294,18 +336,22 @@ export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, 
       else if (visualSpeed > 1.2 && actions.run) want = "run";
       else if (visualSpeed > 0.25 && actions.walk) want = "walk";
       else want = "idle";
+      // The shamble loop only covers ~0.5 m/s; a zombie prowling or staggering faster
+      // than it can step would skate, so it jogs (slowly) on the run loop instead.
+      if (want === "walk" && actions.run && nativeSpeed.walk && nativeSpeed.run
+        && visualSpeed > nativeSpeed.walk * (activeName === "run" ? 1.6 : 2.0)) want = "run";
       if (!actions[want]) want = "idle";
       fadeTo(want, 0.18);
     }
 
     // Scale animation playback speed to match actual movement speed.
     if (activeAction && LOCO_STATES.has(activeName)) {
-      const baseSpeed = activeName === "run" ? 3.5 : activeName === "walk" ? 1.2 : 1.0;
+      const baseSpeed = nativeSpeed[activeName] || (activeName === "run" ? 3.5 : activeName === "walk" ? 1.2 : 1.0);
       // Match stride to travel (no foot-sliding) then apply this zombie's personal
       // cadence jitter so identical-speed shamblers still differ. Idle keeps a tiny
       // breathing jitter rather than a dead-constant loop.
       activeAction.timeScale = activeName === "idle" ? speedJitter
-        : clamp(visualSpeed / Math.max(0.001, baseSpeed), 0, 3.5);
+        : clamp(visualSpeed / Math.max(0.001, baseSpeed), 0, 2.6); // past this the legs blur; accept some skate instead
     }
 
     mixer.update(dt);
@@ -368,6 +414,6 @@ export function createZombieCharacter(THREE: any, sourceScene: any, clips: any, 
     root, model, mixer, actions, update, playOnce, setDead, dispose,
     visualSize, scale,
     // diagnostics hook
-    _diag: () => ({ activeName, leanTurn, leadTurn, hunch, dead, elapsed, onceLockUntil }),
+    _diag: () => ({ nativeSpeed: { ...nativeSpeed }, activeName, leanTurn, leadTurn, hunch, dead, elapsed, onceLockUntil }),
   };
 }

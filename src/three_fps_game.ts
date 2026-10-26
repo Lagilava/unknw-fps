@@ -44,7 +44,7 @@ import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
 import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
 import { limitWeaponElevation } from "./modules/weapon_pose_limits";
-import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop } from "./modules/weapon_locomotion";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop, LOCOMOTION_NATIVE_SPEED } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
@@ -13751,19 +13751,25 @@ async function spawnEnemies(wave, options: any = {}) {
     }
     const jumping = ghost.jumpTimer > 0;
 
+    // Pick the loop whose stance foot really covers this ground speed (see
+    // LOCOMOTION_NATIVE_SPEED): jog/strafe/back loops are 2 m/s, the sprint loops 6 m/s.
+    const fastLegs = enemy.visualSpeed > (ghost.fastLegs ? 3.0 : 3.6);
+    ghost.fastLegs = fastLegs;
     let targetAction = "idle";
     if (jumping) {
       targetAction = forwardNorm > 0.1 && ghost.actions.jumpForward ? "jumpForward" : "jump";
     } else if (sprinting) {
-      targetAction = lateralNorm < -0.18 && ghost.actions.sprintLeft  ? "sprintLeft"
-                   : lateralNorm >  0.18 && ghost.actions.sprintRight ? "sprintRight"
+      targetAction = lateralNorm < -0.18 && ghost.actions.sprintLeft  ? (fastLegs ? "sprintLeft" : "strafeAlt")
+                   : lateralNorm >  0.18 && ghost.actions.sprintRight ? (fastLegs ? "sprintRight" : "strafe")
+                   : fastLegs && ghost.actions.sprint ? "sprint"
                    : ghost.actions.rifleRun ? "rifleRun" : "sprint";
     } else if ((ghost.muzzleTimer || 0) > 0.02) {
       targetAction = "fire";
     } else if (strafing) {
       targetAction = lateralNorm < -0.1 && ghost.actions.strafeAlt ? "strafeAlt" : "strafe";
     } else if (moving) {
-      targetAction = forwardNorm < -0.1 ? (ghost.actions.walkBack ? "walkBack" : "walk") : "walk";
+      targetAction = forwardNorm < -0.1 ? (ghost.actions.runBack ? "runBack" : ghost.actions.walkBack ? "walkBack" : "walk")
+        : enemy.visualSpeed > 1.6 && ghost.actions.rifleRun ? "rifleRun" : "walk";
     }
 
     // Feed SJM diagnostic state (read by the F8 overlay in modules/sjm.js)
@@ -13775,10 +13781,10 @@ async function spawnEnemies(wave, options: any = {}) {
       const aTop   = sjmCfg.animScaleSprint || 2.20;
       const actionSpeed = targetAction === "fire"
         ? 1.35
-        : sprinting
-          ? clamp(aFloor + speedT * (aTop - aFloor), aFloor, aTop)
-          : targetAction === "strafe" || targetAction === "strafeAlt" || targetAction === "walkBack"
-            ? clamp(0.9 + speedT * 0.65, aFloor, 1.8)
+        : LOCOMOTION_NATIVE_SPEED[targetAction]
+          ? clamp(locomotionRate(targetAction, enemy.visualSpeed), .3, aTop)
+          : sprinting
+            ? clamp(aFloor + speedT * (aTop - aFloor), aFloor, aTop)
             : clamp(0.82 + speedT * 0.7, aFloor, 1.5);
       ghost.activeAction.timeScale = actionSpeed;
       ghost._diagState.timeScale = actionSpeed;
@@ -24124,6 +24130,7 @@ async function spawnEnemies(wave, options: any = {}) {
       getDeathVisuals: () => enemyRemovalQueue.map(e => ({ type: e.typeName, alive: e.alive,
         visible: e.mesh.visible, remaining: e.deathVisualRemaining })),
       tickDeathVisualsForTest: (dt = 1 / 60) => processEnemyRemovals(12, dt),
+      getZombieAnimDiag: () => enemies.find(e => e.alive && e.typeName === 'Zombie')?.mesh.userData.zombieAnim?._diag(),
       reviewAnimation: async (subject: string, state: string) => {
         const { captureAnimationReview } = await import('./modules/animation_review');
         if (subject === 'player') {
@@ -24158,7 +24165,7 @@ async function spawnEnemies(wave, options: any = {}) {
         const zombie = enemy.mesh.userData.zombieAnim;
         const warden = enemy.mesh.userData.wardenAnim;
         zombie?.setDead(false); warden?.setDead(false);
-        Object.assign(enemy, { visualSpeed: state === 'run' || state === 'runCrawl' ? 3.5 : state === 'walk' || state === 'crawl' ? 1.2 : 0,
+        Object.assign(enemy, { visualSpeed: state === 'run' ? 3.5 : state === 'runCrawl' ? 2.1 : state === 'walk' ? .5 : state === 'crawl' ? .3 : 0,
           visualTurn: state === 'turn' ? 2 : 0, aggroed: state === 'alert',
           locoState: state === 'run' ? 'run' : state === 'walk' ? 'walk' : 'idle',
           crawling: /crawl/i.test(state), isAttacking: state.startsWith('attack'), meleeWindUp: -1,
