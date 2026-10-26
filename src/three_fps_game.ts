@@ -1,3 +1,4 @@
+import { createMovementCamera, updateMovementCamera, smoothCameraBoom, dampCamera } from "./modules/movement_camera";
 import { createDamageIndicators } from "./modules/damage_indicators";
 import { createWeaponMaterials } from "./modules/weapon_materials";
 import { showShadowPerformancePrompt } from "./modules/shadow_performance_prompt";
@@ -11511,15 +11512,10 @@ async function spawnEnemies(wave, options: any = {}) {
   captureWeaponAnimationBases(weaponAnim, weapon);
 
   const cameraFX: any = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74,
-    // ── Cinematic locomotion camera (Steadicam feel) ─────────────────────────
-    // Persistent state for the subtle "movie" motion added while moving/running:
-    // a speed-scaled figure-8 float, a lateral lag that trails strafes, a Dutch
-    // tilt into the strafe, and a gentle run cadence. All spring/smoothed so it
-    // eases in and out instead of snapping. Damped to ~0 during ADS.
-    cinePhase: 0,        // gait phase accumulator (advances faster with speed)
-    cineSpeed: 0,        // smoothed movement speed (0..1 of sprint speed)
-    cineLatLag: 0,       // smoothed lateral lag/whip (trails strafe input)
-    cineLean: 0,         // smoothed Dutch-tilt roll into the strafe
+    movement: createMovementCamera(),
+    boomRatio: 1,
+    hipFov: null,
+    inTP: null,
   };
   const viewState: any = { ads: 0, lookBack: 0 };
 
@@ -14108,6 +14104,10 @@ async function spawnEnemies(wave, options: any = {}) {
     cameraFX.recoilVel = 0;
     cameraFX.roll = 0;
     cameraFX.rollVel = 0;
+    cameraFX.movement = createMovementCamera();
+    cameraFX.boomRatio = 1;
+    cameraFX.hipFov = null;
+    cameraFX.inTP = null;
     if (hud.damageVig) hud.damageVig.style.setProperty("opacity", "0", "important");
     if (hud.damageVig) hud.damageVig.style.setProperty("visibility", "hidden", "important");
     if (hud.adsVig) hud.adsVig.style.opacity = "0";
@@ -17743,7 +17743,7 @@ async function spawnEnemies(wave, options: any = {}) {
     return Infinity;
   }
 
-  function resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ) {
+  function resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ, dt = 0) {
     const origin = yaw.position;
     const forward = thirdPersonForwardTmp.set(-Math.sin(yaw.rotation.y), 0, -Math.cos(yaw.rotation.y));
     const right = thirdPersonRightTmp.set(Math.cos(yaw.rotation.y), 0, -Math.sin(yaw.rotation.y));
@@ -17795,7 +17795,8 @@ async function spawnEnemies(wave, options: any = {}) {
 
       if (score > bestScore) {
         bestScore = score;
-        thirdPersonCameraSolvedTmp.copy(thirdPersonCameraLocalTmp).multiplyScalar(ratio);
+        if (dt > 0) cameraFX.boomRatio = smoothCameraBoom(cameraFX.boomRatio, ratio, dt);
+        thirdPersonCameraSolvedTmp.copy(thirdPersonCameraLocalTmp).multiplyScalar(dt > 0 ? cameraFX.boomRatio : ratio);
       }
     }
 
@@ -19370,19 +19371,9 @@ async function spawnEnemies(wave, options: any = {}) {
       if (_now - (player.lowHpVoAt || -999) > 12) { player.lowHpVoAt = _now; announce('vo_low_health'); }
     }
 
-    let bobOffset = 0;
-    let bobLateral = 0;
-    if (f || s) {
-      const bobT = performance.now() * (sprinting ? 0.0115 : 0.0056);
-      const bobAmp = (sprinting ? 0.048 : 0.026) * (player.grounded ? 1 : 0.35);
-      bobOffset = Math.sin(bobT * 2) * bobAmp;
-      bobLateral = Math.cos(bobT) * bobAmp * 0.55;
-      yaw.position.y = PLAYER_H + player.jumpOffset + bobOffset;
-    } else {
-      if (!player.grounded || player.jumpOffset > 0) yaw.position.y = PLAYER_H + player.jumpOffset;
-      else yaw.position.y += (PLAYER_H - yaw.position.y) * 0.15;
-    }
-    player.bobLateral = bobLateral;
+    // Keep the physical rig at the true eye height. Camera-only damping below
+    // absorbs steps/landings without injecting footfall bob into the player.
+    yaw.position.y = PLAYER_H + player.jumpOffset;
 
     return { f, s, sprinting, jumping: !player.grounded || player.jumpOffset > 0.02 };
   }
@@ -20694,7 +20685,12 @@ async function spawnEnemies(wave, options: any = {}) {
     const cinFovOffset = cinematicState.enabled ? devVal("camera", "cinematicFovOffset", -4) : 0;
     // The player's FOV offset moves the hip/sprint framing but is cancelled out
     // as ADS blends in — scope magnification is a weapon stat, not a preference.
-    const hipFov = baseFov + cinFovOffset + userFovOffset;
+    const targetHipFov = baseFov + cinFovOffset + userFovOffset;
+    // Ease sprint framing, while keeping ADS magnification in sync with the sight.
+    cameraFX.hipFov = cameraFX.hipFov === null || cameraFX.inTP !== inTP
+      ? targetHipFov : dampCamera(cameraFX.hipFov, targetHipFov, 8, dt);
+    cameraFX.inTP = inTP;
+    const hipFov = cameraFX.hipFov;
     const aimFov = Math.min(hipFov, getWeaponAdsFov(gunSpec.adsFov, inTP));
     cameraFX.targetFov = hipFov + (aimFov - hipFov) * viewState.ads;
     const prevFov = camera.fov;
@@ -20733,45 +20729,22 @@ async function spawnEnemies(wave, options: any = {}) {
     let shakeY = Math.cos(noiseT * 0.9) * shakeAmp * 0.8;
     let shakeZ = -Math.max(0, cameraFX.recoil) * 0.008 + Math.sin(noiseT * 1.8) * shakeAmp * 0.35;
 
-    // ── Cinematic locomotion camera (Steadicam feel) ─────────────────────────────
-    // Movie-like motion while moving/running: a speed-scaled figure-8 float (X at the
-    // gait frequency, Y at double → a lazy ∞), a lateral lag that trails hard strafes,
-    // a subtle pull-back at speed, and a run cadence bob. Everything springs in/out so
-    // it never snaps, and it damps toward ~0 while aiming so ADS stays rock-steady.
-    // Driven off the player's actual world velocity, so it reacts to real acceleration.
-    {
-      const cRgtX = Math.cos(yaw.rotation.y), cRgtZ = -Math.sin(yaw.rotation.y); // right (x,z)
-      const vx = player.velX || 0, vz = player.velZ || 0;
-      const maxSpd = Math.max(1, player.sprintSpeed || player.speed || 6);
-      const speedNorm = Math.min(1, Math.hypot(vx, vz) / maxSpd);
-      const latNorm = clamp((vx * cRgtX + vz * cRgtZ) / maxSpd, -1, 1);
-      // Smooth the drivers (spring toward the live values).
-      cameraFX.cineSpeed  = dampValue(cameraFX.cineSpeed,  speedNorm, 6, dt);
-      cameraFX.cineLatLag = dampValue(cameraFX.cineLatLag, latNorm,   7, dt);
-      cameraFX.cineLean   = dampValue(cameraFX.cineLean,   latNorm,   5, dt);
-      // Gait phase advances faster the quicker you move (footfall cadence).
-      cameraFX.cinePhase += dt * (5 + cameraFX.cineSpeed * 7);
-      const ph = cameraFX.cinePhase;
-      const atten = (1 - viewState.ads * 0.85) * (game.state === "playing" ? 1 : 0);
-      const sp = cameraFX.cineSpeed;
-      // Figure-8 float (camera-local: +x right, +y up, +z back).
-      shakeX += Math.sin(ph)     * (0.006 + sp * 0.016) * atten;
-      shakeY += Math.sin(ph * 2) * (0.004 + sp * 0.010) * atten;
-      // Lateral whip: the camera trails the strafe, then catches up (spring lag).
-      shakeX += -cameraFX.cineLatLag * 0.03 * atten;
-      // Slight pull-back at speed — reads as urgency without touching FOV.
-      shakeZ += sp * 0.03 * atten;
-      // Rotation cadence (roll into the strafe + a gentle run nod), applied below.
-      cameraFX.cineRoll  = (cameraFX.cineLean * 0.05 + Math.sin(ph) * sp * 0.006) * atten;
-      cameraFX.cinePitch = Math.sin(ph * 2) * sp * 0.005 * atten;
-    }
+    const follow = updateMovementCamera(cameraFX.movement, {
+      x: yaw.position.x, y: yaw.position.y, z: yaw.position.z,
+      yaw: yaw.rotation.y, maxSpeed: player.sprintSpeed || player.speed || 6,
+      ads: viewState.ads, active: game.state === "playing" && !cutscene.active,
+      grounded: player.grounded, dt,
+    });
+    shakeX += follow.x;
+    shakeY += follow.y;
+    shakeZ += follow.z;
     const useThirdPersonCamera = thirdPerson.enabled && thirdPerson.ready && !shouldUseFirstPersonAdsView();
     thirdPerson.viewBlend = useThirdPersonCamera ? 1 : 0;
     thirdPerson.switchPulse = Math.max(0, thirdPerson.switchPulse - dt * 5.2);
     thirdPerson.adsSwapProgress = thirdPerson.switchPulse * 0.32;
 
     if (useThirdPersonCamera) {
-      camera.position.copy(resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ));
+      camera.position.copy(resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ, dt));
     } else if (unifiedFirstPersonBodyActive()) {
       // Sit at the EYES: forward of the body centre-line (past the shoulders) so the
       // view looks out from the face and the arms read from below, not from behind.
@@ -20787,13 +20760,11 @@ async function spawnEnemies(wave, options: any = {}) {
     const scopeSwayX = currentGun === GUNS.SNIPER ? Math.sin(noiseT * 0.34) * sniperAds * 0.00045 : 0;
     const scopeSwayY = currentGun === GUNS.SNIPER ? Math.cos(noiseT * 0.28) * sniperAds * 0.00038 : 0;
 
-    const bobLat = (player.bobLateral || 0) * (1 - viewState.ads * 0.7);
-    const strafeLean = (weaponAnim?.strafeTilt || 0) * 0.32 * (1 - viewState.ads * 0.6);
-    const landJoltPitch = (weaponAnim?.landJolt || 0) * 0.018 * (1 - viewState.ads * 0.5);
-
-    camera.rotation.x = scopeSwayX - Math.max(0, cameraFX.recoil) * 0.012 - landJoltPitch + (cameraFX.cinePitch || 0);
-    camera.rotation.y = Math.PI * viewState.lookBack + scopeSwayY + bobLat * 0.012;
-    camera.rotation.z = cameraFX.roll * 0.035 + Math.sin(noiseT * 0.7) * cameraFX.shake * 0.015 + viewState.lookBack * 0.045 + strafeLean + (cameraFX.cineRoll || 0);
+    // Locomotion keeps the horizon level. Only combat feedback and deliberate
+    // look-back affect camera rotation; weapon sway stays on the weapon itself.
+    camera.rotation.x = scopeSwayX - Math.max(0, cameraFX.recoil) * 0.012;
+    camera.rotation.y = Math.PI * viewState.lookBack + scopeSwayY;
+    camera.rotation.z = cameraFX.roll * 0.035 + Math.sin(noiseT * 0.7) * cameraFX.shake * 0.015 + viewState.lookBack * 0.045;
   }
 
   // ── Interact prompt pill ─────────────────────────────────────────────────────
