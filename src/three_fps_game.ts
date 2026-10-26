@@ -6476,6 +6476,63 @@ function createLightningEffect() {
     entry.bone = bone; entry.quat.copy(quat); thirdPerson.aimOffsets.push(entry);
   }
 
+  // ── Pistol grip fingers ──────────────────────────────────────────────────────
+  // The sidearm clips leave the support hand's fingers fanned and half open, so from the
+  // front it reads as a flat claw beside the gun. After the mixer, close the fan and curl the
+  // support fingers over the shooting hand (the shooting hand's clip pose already wraps the
+  // grip, so it gets none). Applied as recorded aim offsets, undone next frame like every
+  // other procedural bone offset. Angles are extra radians per joint (proximal, middle, distal)
+  // about the finger's local X, positive = more curl. window.__rbGrip tunes it live.
+  const GRIP_CURL = {
+    right: { Index: [0, 0, 0], Middle: [0, 0, 0], Ring: [0, 0, 0], Pinky: [0, 0, 0], Thumb: [0, 0, 0] },
+    left:  { Index: [0.55, 0.55, 0.45], Middle: [0.55, 0.55, 0.45], Ring: [0.55, 0.55, 0.45], Pinky: [0.55, 0.55, 0.45], Thumb: [0, 0, 0] },
+  };
+  const _fingerCache = new WeakMap();
+  const _fingerBase = new THREE.Quaternion(), _fingerQ = new THREE.Quaternion(), _fingerLocal = new THREE.Quaternion(), _fingerInv = new THREE.Quaternion();
+  const _fingerX = new THREE.Vector3(1, 0, 0), _fingerY = new THREE.Vector3(0, 1, 0), _fingerZ = new THREE.Vector3(0, 0, 1);
+  const _fingerFan = new THREE.Quaternion();
+  // Knuckle adduction (radians) and which way each finger closes toward the middle one.
+  const GRIP_FAN = 0.45;
+  const GRIP_FAN_DIR = { Index: 1, Middle: 0.3, Ring: -0.3, Pinky: -1 };
+  function applyPistolGripFingers(weight) {
+    const model = thirdPerson.model;
+    if (!model || weight < 0.01) return;
+    let bones = _fingerCache.get(model);
+    if (!bones) {
+      bones = {};
+      model.traverse(o => { if (o.isBone) bones[(o.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase()] = o; });
+      _fingerCache.set(model, bones);
+    }
+    const tune = (window as any).__rbGrip || {};
+    if (tune.off) return;
+    for (const side of ['right', 'left']) {
+      const curlTable = (tune.curl || GRIP_CURL)[side];
+      const fan = tune.fan ?? GRIP_FAN;
+      const fanAxis = tune.fanAxis || 'z';
+      for (const [finger, angles] of Object.entries(curlTable) as any) {
+        for (let i = 0; i < 3; i++) {
+          const bone = bones[`mixamorig${side}hand${finger.toLowerCase()}${i + 1}`];
+          if (!bone || !bone.parent) continue;
+          // Curl about the finger's local X (the clip's own curl axis, same sign on both hands),
+          // plus an adduction about the knuckle (joint 1 only) that closes the clip's fanned fingers.
+          _fingerLocal.setFromAxisAngle(_fingerX, angles[i] * weight * (tune.curlSign ?? 1));
+          if (i === 0 && GRIP_FAN_DIR[finger]) {
+            _fingerFan.setFromAxisAngle(fanAxis === 'y' ? _fingerY : _fingerZ, GRIP_FAN_DIR[finger] * fan * weight * (side === 'left' ? -1 : 1) * (tune.fanSign ?? 1));
+            _fingerLocal.multiply(_fingerFan);
+          }
+          // Normalised: invert() is a conjugate, so a slightly non-unit clip quaternion would make
+          // this offset non-unit and the next frame's undo would compound it into NaN.
+          _fingerBase.copy(bone.quaternion).normalize();
+          _fingerInv.copy(_fingerBase).invert();
+          // parent-frame equivalent of a local multiply, so the shared undo applies.
+          _fingerQ.copy(_fingerBase).multiply(_fingerLocal).multiply(_fingerInv).normalize();
+          bone.quaternion.premultiply(_fingerQ);
+          recordAimOffset(bone, _fingerQ);
+        }
+      }
+    }
+  }
+
   function clearThirdPersonAimOffsets() {
     if (!thirdPerson.aimOffsets?.length) return;
     // Undo in REVERSE application order. Offsets are applied with premultiply, so
@@ -7538,6 +7595,7 @@ function createLightningEffect() {
         pitchOffset: -thirdPerson.equip * thirdPerson.equip * .55 - inspectEnv * .2 - tpPackBump * .22,
         bank: thirdPerson.gunLag * .35 + thirdPerson.equip * thirdPerson.equip * .3 + tpPackBump * .55 });
     }
+    if (!unifiedFpActive && rightReady && leftReady && GUN_SPECS[currentGun]?.gripStyle === "oneHand" && !reloadPresent) applyPistolGripFingers(thirdPerson.aimBlend);
     const tpMats = thirdPerson.weapon.gun.userData.packMats;
     const tpGlowBase = thirdPerson.weapon.gun.userData.packGlowBase || 0;
     if (tpMats && (tpGlowBase > 0 || tpPackBump > 0)) {
@@ -25729,7 +25787,8 @@ async function spawnEnemies(wave, options: any = {}) {
               leftFore:thirdPerson.aimBones.leftForeArm,leftHand:thirdPerson.leftHand};
             const quaternions=Object.fromEntries(Object.entries(armBones).map(([name,bone]:[string,any])=>
               [name,bone.getWorldQuaternion(new THREE.Quaternion()).toArray()]));
-            return {fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
+            const handCenter=new THREE.Vector3().addVectors(thirdPerson.rightHand.getWorldPosition(new THREE.Vector3()),thirdPerson.leftHand.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5).toArray();
+            return {handCenter,fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
               phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),
               reloading:gunState.reloadTimer>0,quaternions,
               skin:thirdPerson.skinDiagnostic,authoredLegQuats:thirdPerson.authoredLegQuats,

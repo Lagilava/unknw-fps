@@ -41,6 +41,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     <div class="lab-row"><button id="lab-play">Pause</button><button id="lab-step">Step 1/60 s</button></div>
     <div class="lab-row"><button id="lab-reload">Reload</button><button id="lab-reset">Reset</button></div>
     <label>Camera</label><div class="lab-row"><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="rear">Rear</button></div>
+    <div class="lab-row"><button data-view="hands">Hands</button><button data-view="handsSide">Hands side</button><button data-view="handsRear">Hands rear</button><button data-view="handsTop">Hands top</button></div>
     <label><input id="lab-skeleton" type="checkbox"> Show bone chains</label>
     <label><input id="lab-skin-check" type="checkbox"> Measure skin stretch vs authored pose</label>\n    <label>Live measurements</label><pre id="lab-diagnostics">Preparing rig…</pre>
     <p>Drag to orbit · wheel to zoom. Movement follows the real animation and arm-pose pipeline. Clip comparison overrides automatic selection without changing game defaults.</p>
@@ -59,7 +60,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
   let playing=true,speed=1,elapsed=0,accumulator=0,diagnostics:any={},last=performance.now(),frameMs=16.7;
   const camera=new THREE.PerspectiveCamera(43,innerWidth/innerHeight,.05,500);
   const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.09;
-  controls.minDistance=1.1;controls.maxDistance=9;controls.target.set(0,1,0);
+  controls.minDistance=.6;controls.maxDistance=9;controls.target.set(0,1,0);
   camera.position.set(3,1.7,3.6);controls.update();
   scene.background=new THREE.Color(0x182633);scene.fog=null;scene.environment=null;
   scene.add(new THREE.HemisphereLight(0xe9f5ff,0x6f7b87,2.3));
@@ -69,9 +70,14 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
   const grid=new THREE.GridHelper(200,200,0x81a9bb,0x3a5361);scene.add(grid);
   const skeleton=new THREE.SkeletonHelper(getSubject());skeleton.visible=false;scene.add(skeleton);
   const previous=new THREE.Vector3(),position=new THREE.Vector3();getSubject().getWorldPosition(previous);
+  // Hand close-ups frame the weapon hands (about 1.45 m up) instead of the torso.
+  const HAND_VIEWS={hands:[0,.05,-.8],handsSide:[.8,.05,0],handsRear:[.25,.2,.8],handsTop:[0,.8,-.3]};
   function view(name) {
-    getSubject().getWorldPosition(position);controls.target.copy(position).y+=1;
-    const direction=name==='front'?new THREE.Vector3(0,.35,-3.7)
+    getSubject().getWorldPosition(position);
+    const hand=HAND_VIEWS[name]&&diagnostics.handCenter;
+    if(hand)controls.target.fromArray(hand);else controls.target.copy(position).y+=1;
+    const direction=HAND_VIEWS[name]?new THREE.Vector3(...HAND_VIEWS[name]).applyAxisAngle(new THREE.Vector3(0,1,0),state.yaw)
+      :name==='front'?new THREE.Vector3(0,.35,-3.7)
       :name==='side'?new THREE.Vector3(3.7,.35,0):new THREE.Vector3(0,.35,3.7);
     camera.position.copy(controls.target).add(direction);controls.update();
   }
