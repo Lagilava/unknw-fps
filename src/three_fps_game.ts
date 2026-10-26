@@ -7630,8 +7630,19 @@ function createLightningEffect() {
       // -aimPitch*0.18): with the procedural spine-pitch removed for two-handed guns,
       // this is what leans the operator's torso into the aim. Matches the clone's 0.18.
       // Aim bends the upper spine after the mixer, never the hips/legs/root.
-      thirdPerson.model.rotation.x = -bodyRecoilPitch;
-      thirdPerson.model.rotation.z = bodyRecoilRoll;
+      // Momentum lean: tip into the run, rock back when braking, bank into a strafe.
+      // Whole-body and small (<= ~5 deg) so grips and foot contacts are unaffected.
+      const velF = -Math.sin(yaw.rotation.y) * (player.velX || 0) - Math.cos(yaw.rotation.y) * (player.velZ || 0);
+      const velR = Math.cos(yaw.rotation.y) * (player.velX || 0) - Math.sin(yaw.rotation.y) * (player.velZ || 0);
+      const accelF = dt > 1e-4 ? (velF - (thirdPerson.prevVelF || 0)) / dt : 0;
+      thirdPerson.prevVelF = velF;
+      const grounded = !thirdPerson.lastMove?.jumping && !thirdPerson.cutsceneAction && player.hp > 0;
+      const leanFTarget = grounded ? clamp(velF / 9.2, -0.4, 1) * 0.07 + clamp(accelF * 0.0025, -0.05, 0.05) : 0;
+      const leanRTarget = grounded ? clamp(velR / 9.2, -0.7, 0.7) * 0.07 : 0;
+      thirdPerson.leanF = THREE.MathUtils.damp(thirdPerson.leanF || 0, leanFTarget, 7, dt);
+      thirdPerson.leanR = THREE.MathUtils.damp(thirdPerson.leanR || 0, leanRTarget, 7, dt);
+      thirdPerson.model.rotation.x = -bodyRecoilPitch - thirdPerson.leanF;
+      thirdPerson.model.rotation.z = bodyRecoilRoll - thirdPerson.leanR;
     }
     thirdPerson.lastMove = moveState || thirdPerson.lastMove;
     thirdPerson.fireTimer = Math.max(0, thirdPerson.fireTimer - dt);
@@ -7749,7 +7760,13 @@ function createLightningEffect() {
       targetAction=labClipOverride; pistolHold=false; rifleHold=false;
       thirdPerson.actions[targetAction].timeScale=1;
     }
-    if(movingNow && thirdPerson.actions[targetAction]) thirdPerson.actions[targetAction].timeScale=locoCadence;
+    if (/^(jump|jumpRifle|jumpNeutral|jumpForward|jumpBack|pistolJump)$/.test(targetAction) && thirdPerson.actions[targetAction]) {
+      // Stretch the take-off-to-landing clip over the real flight time (it used to run
+      // at the ground-speed cadence, so a moving jump was cut off before touchdown).
+      const airtime = Math.max(0.3, 2 * JUMP_VELOCITY / JUMP_GRAVITY);
+      const jumpAction = thirdPerson.actions[targetAction];
+      jumpAction.timeScale = clamp(jumpAction.getClip().duration / airtime, 0.4, 1.6);
+    } else if(movingNow && thirdPerson.actions[targetAction]) thirdPerson.actions[targetAction].timeScale=locoCadence;
     clearThirdPersonAimOffsets();
     setThirdPersonAction(targetAction);
     // Reload owns torso/arms while a disjoint layer owns hips and legs. Keep its

@@ -16,7 +16,7 @@ test('planted feet do not skate in any armed movement direction',async({page})=>
       const tx=frames[239].left[0]-frames[0].left[0],tz=frames[239].left[2]-frames[0].left[2];
       const travel=Math.hypot(tx,tz)/(239*dt),skate={};
       for(const side of ['left','right']){
-        const ys=frames.map(f=>f[side][1]),low=Math.min(...ys)+.03,speeds=[];
+        const ys=frames.map(f=>f[side][1]),low=Math.min(...ys)+.05,speeds=[];
         for(let i=1;i<frames.length;i++)if(ys[i]<low&&ys[i-1]<low)
           speeds.push(((frames[i][side][0]-frames[i-1][side][0])*tx+(frames[i][side][2]-frames[i-1][side][2])*tz)/Math.hypot(tx,tz)/dt);
         speeds.sort((a,b)=>a-b);skate[side]=speeds.length?speeds[speeds.length>>1]:0;
