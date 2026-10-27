@@ -1,4 +1,3 @@
-import { createMovementCamera, updateMovementCamera, smoothCameraBoom, dampCamera } from "./modules/movement_camera";
 import { createDamageIndicators } from "./modules/damage_indicators";
 import { createWeaponMaterials } from "./modules/weapon_materials";
 import { showShadowPerformancePrompt } from "./modules/shadow_performance_prompt";
@@ -11512,8 +11511,6 @@ async function spawnEnemies(wave, options: any = {}) {
   captureWeaponAnimationBases(weaponAnim, weapon);
 
   const cameraFX: any = { shake: 0, damageShake: 0, recoil: 0, recoilVel: 0, roll: 0, rollVel: 0, targetFov: 74,
-    movement: createMovementCamera(),
-    boomRatio: 1,
     hipFov: null,
     inTP: null,
   };
@@ -14104,8 +14101,6 @@ async function spawnEnemies(wave, options: any = {}) {
     cameraFX.recoilVel = 0;
     cameraFX.roll = 0;
     cameraFX.rollVel = 0;
-    cameraFX.movement = createMovementCamera();
-    cameraFX.boomRatio = 1;
     cameraFX.hipFov = null;
     cameraFX.inTP = null;
     if (hud.damageVig) hud.damageVig.style.setProperty("opacity", "0", "important");
@@ -17743,7 +17738,7 @@ async function spawnEnemies(wave, options: any = {}) {
     return Infinity;
   }
 
-  function resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ, dt = 0) {
+  function resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ) {
     const origin = yaw.position;
     const forward = thirdPersonForwardTmp.set(-Math.sin(yaw.rotation.y), 0, -Math.cos(yaw.rotation.y));
     const right = thirdPersonRightTmp.set(Math.cos(yaw.rotation.y), 0, -Math.sin(yaw.rotation.y));
@@ -17795,8 +17790,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
       if (score > bestScore) {
         bestScore = score;
-        if (dt > 0) cameraFX.boomRatio = smoothCameraBoom(cameraFX.boomRatio, ratio, dt);
-        thirdPersonCameraSolvedTmp.copy(thirdPersonCameraLocalTmp).multiplyScalar(dt > 0 ? cameraFX.boomRatio : ratio);
+        thirdPersonCameraSolvedTmp.copy(thirdPersonCameraLocalTmp).multiplyScalar(ratio);
       }
     }
 
@@ -20688,7 +20682,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const targetHipFov = baseFov + cinFovOffset + userFovOffset;
     // Ease sprint framing, while keeping ADS magnification in sync with the sight.
     cameraFX.hipFov = cameraFX.hipFov === null || cameraFX.inTP !== inTP
-      ? targetHipFov : dampCamera(cameraFX.hipFov, targetHipFov, 8, dt);
+      ? targetHipFov : dampValue(cameraFX.hipFov, targetHipFov, 8, dt);
     cameraFX.inTP = inTP;
     const hipFov = cameraFX.hipFov;
     const aimFov = Math.min(hipFov, getWeaponAdsFov(gunSpec.adsFov, inTP));
@@ -20729,22 +20723,16 @@ async function spawnEnemies(wave, options: any = {}) {
     let shakeY = Math.cos(noiseT * 0.9) * shakeAmp * 0.8;
     let shakeZ = -Math.max(0, cameraFX.recoil) * 0.008 + Math.sin(noiseT * 1.8) * shakeAmp * 0.35;
 
-    const follow = updateMovementCamera(cameraFX.movement, {
-      x: yaw.position.x, y: yaw.position.y, z: yaw.position.z,
-      yaw: yaw.rotation.y, maxSpeed: player.sprintSpeed || player.speed || 6,
-      ads: viewState.ads, active: game.state === "playing" && !cutscene.active,
-      grounded: player.grounded, dt,
-    });
-    shakeX += follow.x;
-    shakeY += follow.y;
-    shakeZ += follow.z;
+    // The camera inherits the player's already-damped movement through yaw/pitch.
+    // Additional velocity lag here detaches the view from the body and makes
+    // collision corrections, jumps and direction changes feel like camera jolts.
     const useThirdPersonCamera = thirdPerson.enabled && thirdPerson.ready && !shouldUseFirstPersonAdsView();
     thirdPerson.viewBlend = useThirdPersonCamera ? 1 : 0;
     thirdPerson.switchPulse = Math.max(0, thirdPerson.switchPulse - dt * 5.2);
     thirdPerson.adsSwapProgress = thirdPerson.switchPulse * 0.32;
 
     if (useThirdPersonCamera) {
-      camera.position.copy(resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ, dt));
+      camera.position.copy(resolveThirdPersonCameraPosition(shakeX, shakeY, shakeZ));
     } else if (unifiedFirstPersonBodyActive()) {
       // Sit at the EYES: forward of the body centre-line (past the shoulders) so the
       // view looks out from the face and the arms read from below, not from behind.
