@@ -110,7 +110,7 @@ export function createWeaponHandFitter() {
   return {
     diag,
     update({rig,root,bones,rightHand,leftHand,gunType,yaw,pitch,reload,dead,applyRotation,
-      bank=0,yawOffset=0,pitchOffset=0,support=true}) {
+      bank=0,yawOffset=0,pitchOffset=0,support=true,carry=0}) {
       diag.valid=false;
       const gun=rig?.gun,fit=WEAPON_HAND_FITS[gunType];
       if(!gun || !fit || !rightHand || !leftHand) return;
@@ -137,7 +137,7 @@ export function createWeaponHandFitter() {
       leftWristQ.copy(pitchQ).multiply(authoredLeftQ).normalize();
       // One target orientation; no additional hand/forearm pitch is layered on it.
       worldQ.setFromAxisAngle(axis.set(0,1,0),yaw+yawOffset+Math.PI/2);
-      pitchQ.setFromAxisAngle(right,aimedElevation); worldQ.premultiply(pitchQ);
+      pitchQ.setFromAxisAngle(right,aimedElevation-carry*.18); worldQ.premultiply(pitchQ);
       worldQ.multiply(pitchQ.setFromAxisAngle(axis.set(1,0,0),reload*.3+bank));
       root.getWorldQuaternion(parentQ);
       gun.quaternion.copy(parentQ.invert()).multiply(worldQ); gun.scale.setScalar(scale);
@@ -160,6 +160,9 @@ export function createWeaponHandFitter() {
         pitchQ.setFromAxisAngle(right,elevation*.82);
         anchor.applyQuaternion(pitchQ).add(shoulder);
       }
+      // A running sidearm is carried closer to the chest with soft elbows. The
+      // same smooth blend releases it back to the authored aim on ADS/fire.
+      anchor.addScaledVector(forward,-.14*carry);anchor.y-=.08*carry;
       if(reload>0) { palmPoint(leftHand,palm); anchor.lerp(palm,reload); }
       root.worldToLocal(anchor);
       offset.copy(reload>.5?leftGrip:rightGrip).multiplyScalar(scale).applyQuaternion(gun.quaternion);

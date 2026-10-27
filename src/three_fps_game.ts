@@ -6853,6 +6853,12 @@ function createLightningEffect() {
     const aimSuppressed = thirdPerson.reloadTimer > 0 || player.pvpDead || player.hp <= 0 || !!thirdPerson.cutsceneAction;
     const aimTarget = (!unifiedFp && aimSuppressed) ? 0.0 : 1.0;
     thirdPerson.aimBlend += (aimTarget - thirdPerson.aimBlend) * Math.min(1, dt * 9);
+    const sidearm=GUN_SPECS[currentGun]?.gripStyle==="oneHand";
+    const moving=Math.hypot(thirdPerson.lastMove?.f||0,thirdPerson.lastMove?.s||0)>.1;
+    const carrying=sidearm && moving && !aimSuppressed && player.meleeTimer<=0
+      && !mouse.aiming && !mouse.down && thirdPerson.fireTimer<=0;
+    thirdPerson.pistolCarry=THREE.MathUtils.damp(thirdPerson.pistolCarry||0,
+      carrying ? (thirdPerson.lastMove?.sprinting ? 1 : .45) : 0,carrying?8:18,dt);
 
     // â"€â"€ Fire punch spring â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     thirdPerson.firePunchVel += (-thirdPerson.firePunch * 55 - thirdPerson.firePunchVel * 13) * dt;
@@ -7596,6 +7602,7 @@ function createLightningEffect() {
         yaw: yaw.rotation.y, pitch: pitch.rotation.x, reload: reloadPresent,
         dead: player.pvpDead || player.hp <= 0, applyRotation: applyWorldQuatToBone,
         support: player.meleeTimer <= 0,
+        carry: GUN_SPECS[currentGun]?.gripStyle === "oneHand" ? thirdPerson.pistolCarry||0 : 0,
         yawOffset: thirdPerson.gunLag + inspectSpin * .6,
         pitchOffset: -thirdPerson.equip * thirdPerson.equip * .55 - inspectEnv * .2 - tpPackBump * .22,
         bank: thirdPerson.gunLag * .35 + thirdPerson.equip * thirdPerson.equip * .3 + tpPackBump * .55 });
@@ -25720,6 +25727,7 @@ async function spawnEnemies(wave, options: any = {}) {
         for(const gun of Object.values(GUNS)) grantWeapon(gun);
         createAnimationLab({
           scene,renderer,canvas,weapons:GUN_SPECS,clips:Object.keys(thirdPerson.actions),
+          getPlayerCamera:()=>camera,
           getSubject:()=>thirdPerson.root,
           onWeapon:(gun)=>{
             clearThirdPersonAimOffsets();
@@ -25753,6 +25761,7 @@ async function spawnEnemies(wave, options: any = {}) {
             updateReload(dt);
             updateThirdPersonCharacter(dt,{f,s,sprinting:state.motion==="sprint",jumping:false});
             updateWeapon(dt);
+            updateCameraFX(dt);
             thirdPerson.root.visible=true;if(thirdPerson.weapon?.gun)thirdPerson.weapon.gun.visible=true;
             const armBones={rightUpper:thirdPerson.aimBones.rightUpperArm,rightFore:thirdPerson.aimBones.rightForeArm,
               rightHand:thirdPerson.rightHand,leftUpper:thirdPerson.aimBones.leftUpperArm,
@@ -25760,7 +25769,9 @@ async function spawnEnemies(wave, options: any = {}) {
             const quaternions=Object.fromEntries(Object.entries(armBones).map(([name,bone]:[string,any])=>
               [name,bone.getWorldQuaternion(new THREE.Quaternion()).toArray()]));
             const handCenter=new THREE.Vector3().addVectors(thirdPerson.rightHand.getWorldPosition(new THREE.Vector3()),thirdPerson.leftHand.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5).toArray();
-            return {handCenter,fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
+            return {handCenter,pistolCarry:thirdPerson.pistolCarry||0,
+              playerCamera:{position:camera.getWorldPosition(new THREE.Vector3()).toArray(),quaternion:camera.getWorldQuaternion(new THREE.Quaternion()).toArray(),fov:camera.fov},
+              fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
               phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),
               reloading:gunState.reloadTimer>0,quaternions,
               skin:thirdPerson.skinDiagnostic,authoredLegQuats:thirdPerson.authoredLegQuats,

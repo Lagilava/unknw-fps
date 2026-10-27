@@ -19,8 +19,11 @@ test('four views share one pistol simulation and a steady carry through directio
   return {rows,views:lab.getViews(),layout:lab.getLayout()};
  });
  expect(report.layout).toBe('quad');
- expect(report.views.map(v=>v.name)).toEqual(['orbit','front','side','rear']);
- for(const row of report.rows){expect(row.bounce,`${row.motion} carry bounce`).toBeLessThan(.025);expect(row.error).toBeLessThan(.02);}
+ expect(report.views.map(v=>v.name)).toEqual(['player','front','side','rear']);
+ for(const row of report.rows){
+  expect(row.bounce,`${row.motion} retains natural body motion`).toBeGreaterThan(.004);
+  expect(row.bounce,`${row.motion} carry bounce`).toBeLessThan(.025);expect(row.error).toBeLessThan(.02);
+ }
  await page.evaluate(()=>{const l=window.__animationLab;l.set({motion:'left',yaw:0});l.step(60);});
  await page.screenshot({path:'test-artifacts/pistol-multiview.png'});
  const poseBefore=await page.evaluate(()=>window.__animationLab.getDiagnostics().quaternions);
@@ -34,4 +37,46 @@ test('four views share one pistol simulation and a steady carry through directio
  for(const v of layout.views){expect(v.width).toBeGreaterThan(150);expect(844-v.y).toBeLessThanOrEqual(layout.panel.top+1);}
  expect(errors).toEqual([]);
  console.log('PISTOL CARRY '+JSON.stringify(report.rows));
+});
+
+test('player POV uses the gameplay camera and sprint carry smoothly yields to aim',async({page})=>{
+ await page.goto('http://127.0.0.1:3000/?animationLab=1');
+ await page.waitForFunction(()=>window.__animationLab,null,{timeout:180000});
+ const result=await page.evaluate(()=>{
+  const lab=window.__animationLab;lab.setPlaying(false);lab.setLayout('player');
+  lab.set({weapon:'pistol',motion:'sprint',yaw:Math.PI/2,pitch:.08,ads:false},false);
+  lab.step(120);const sprint=lab.getDiagnostics(),rendered=lab.getPlayerView();
+  let previous=sprint.quaternions,maxJointJump=0;
+  const sample=()=>{
+   const d=lab.step(1,false);
+   for(const name of Object.keys(d.quaternions)) {
+    const a=previous[name],b=d.quaternions[name];
+    const dot=Math.abs(a.reduce((sum,v,i)=>sum+v*b[i],0))/(Math.hypot(...a)*Math.hypot(...b));
+    maxJointJump=Math.max(maxJointJump,2*Math.acos(Math.min(1,dot)));
+   }
+   previous=d.quaternions;return d;
+  };
+  lab.set({ads:true},false);
+  const transition=[];for(let i=0;i<45;i++)transition.push(sample().pistolCarry);
+  const aimed=lab.getDiagnostics();
+  for(const motion of ['left','right','back','diagonal','jog','sprint','idle']) {
+   lab.set({motion,ads:false},false);for(let i=0;i<30;i++)sample();
+  }
+  lab.set({motion:'idle',ads:false},false);lab.step(60,false);const idle=lab.getDiagnostics();
+  lab.set({motion:'sprint',ads:false},false);lab.step(60,false);
+  lab.set({weapon:'rifle'},false);lab.step(30,false);const rifle=lab.getDiagnostics();
+  return {sprint,rendered,transition,aimed,idle,rifle,maxJointJump,views:lab.getViews()};
+ });
+ expect(result.views[0].name).toBe('player');
+ expect(result.rendered).toEqual(result.sprint.playerCamera);
+ expect(result.sprint.pistolCarry).toBeGreaterThan(.99);
+ expect(result.maxJointJump).toBeLessThan(.55);
+ for(let i=1;i<result.transition.length;i++){
+  expect(result.transition[i]).toBeLessThan(result.transition[i-1]);
+  expect(result.transition[i-1]-result.transition[i]).toBeLessThan(.3);
+ }
+ expect(result.aimed.pistolCarry).toBeLessThan(.001);
+ expect(result.idle.pistolCarry).toBeLessThan(.001);
+ expect(result.rifle.fit.rightError).toBeLessThan(.02);
+ expect(result.rifle.fit.leftError).toBeLessThan(.02);
 });

@@ -14,12 +14,15 @@ export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.
   if(steadySidearm) {
     // Directional sprint hips turn toward travel. Copying forward-run spine keys
     // onto them also turns the chest/arms sideways and pumps the gun vertically.
-    // Keep the authored legs; cancel their hip rotation at the first spine joint.
+    // Keep the authored legs and the pelvis' weight transfer. Remove the large
+    // directional yaw at the spine, while letting a fraction of its tilt/roll
+    // reach the shoulders; fully cancelling it makes the body look rigid in POV.
     const hips=clip.tracks.find(t=>/Hips\.quaternion$/i.test(t.name));
     const reference=upper.tracks.find(t=>/Hips\.quaternion$/i.test(t.name));
     const hipSample=hips?.createInterpolant();
     const neutralHip=reference ? new THREE.Quaternion().fromArray(reference.values) : null;
     const q=new THREE.Quaternion(),base=new THREE.Quaternion(),hip=new THREE.Quaternion();
+    const transfer=new THREE.Quaternion(),tilt=new THREE.Euler(0,0,0,'YXZ');
     for(const track of clip.tracks) {
       if(!(track instanceof THREE.QuaternionKeyframeTrack) || !carryTrack(track))continue;
       base.fromArray(track.values).normalize();
@@ -29,10 +32,12 @@ export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.
       for(let i=0;i<count;i++) {
         const time=clip.duration*i/(count-1);times[i]=time;
         // Retain a little authored motion instead of freezing the upper body.
-        q.fromArray(sample.evaluate(time)).normalize();q.slerpQuaternions(base,q,.2);
+        q.fromArray(sample.evaluate(time)).normalize();q.slerpQuaternions(base,q,.65);
         if(/Spine\.quaternion$/i.test(track.name) && hipSample && neutralHip) {
-          hip.fromArray(hipSample.evaluate(time)).normalize().invert();
-          q.premultiply(neutralHip).premultiply(hip);
+          hip.fromArray(hipSample.evaluate(time)).normalize();
+          transfer.copy(neutralHip).invert().multiply(hip);tilt.setFromQuaternion(transfer,'YXZ');
+          transfer.setFromEuler(tilt.set(tilt.x*.35,0,tilt.z*.35,'YXZ'));
+          q.premultiply(transfer).premultiply(neutralHip).premultiply(hip.invert());
         }
         q.normalize().toArray(values,i*4);
       }
