@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 // Authored armed clips stay on the upper body; real directional clips own feet.
 export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.AnimationClip,
-  upperBody: (track: THREE.KeyframeTrack) => boolean, name: string) {
+  upperBody: (track: THREE.KeyframeTrack) => boolean, name: string, steadySidearm=false) {
   const carryTrack=(t:THREE.KeyframeTrack)=>upperBody(t)||/spine|chest|neck|head/i.test(t.name);
   const tracks = lower.tracks.filter(t=>!carryTrack(t)).map(t=>t.clone());
   for(const track of upper.tracks.filter(carryTrack)) {
@@ -10,7 +10,36 @@ export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.
     copy.times=Float32Array.from(copy.times,t=>t*lower.duration/Math.max(.001,upper.duration));
     tracks.push(copy);
   }
-  return closeLocomotionLoop(new THREE.AnimationClip(name,lower.duration,tracks));
+  const clip=closeLocomotionLoop(new THREE.AnimationClip(name,lower.duration,tracks));
+  if(steadySidearm) {
+    // Directional sprint hips turn toward travel. Copying forward-run spine keys
+    // onto them also turns the chest/arms sideways and pumps the gun vertically.
+    // Keep the authored legs; cancel their hip rotation at the first spine joint.
+    const hips=clip.tracks.find(t=>/Hips\.quaternion$/i.test(t.name));
+    const reference=upper.tracks.find(t=>/Hips\.quaternion$/i.test(t.name));
+    const hipSample=hips?.createInterpolant();
+    const neutralHip=reference ? new THREE.Quaternion().fromArray(reference.values) : null;
+    const q=new THREE.Quaternion(),base=new THREE.Quaternion(),hip=new THREE.Quaternion();
+    for(const track of clip.tracks) {
+      if(!(track instanceof THREE.QuaternionKeyframeTrack) || !carryTrack(track))continue;
+      base.fromArray(track.values).normalize();
+      const sample=track.createInterpolant();
+      const count=Math.max(2,Math.ceil(clip.duration*60)+1);
+      const times=new Float32Array(count),values=new Float32Array(count*4);
+      for(let i=0;i<count;i++) {
+        const time=clip.duration*i/(count-1);times[i]=time;
+        // Retain a little authored motion instead of freezing the upper body.
+        q.fromArray(sample.evaluate(time)).normalize();q.slerpQuaternions(base,q,.2);
+        if(/Spine\.quaternion$/i.test(track.name) && hipSample && neutralHip) {
+          hip.fromArray(hipSample.evaluate(time)).normalize().invert();
+          q.premultiply(neutralHip).premultiply(hip);
+        }
+        q.normalize().toArray(values,i*4);
+      }
+      track.times=times;track.values=values;
+    }
+  }
+  return clip;
 }
 
 // Ground speed (m/s) each loop's stance foot travels at timeScale 1, measured in the

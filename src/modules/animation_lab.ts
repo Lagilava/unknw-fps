@@ -22,7 +22,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     #animation-lab-panel output{float:right;color:#64e6c4;font-variant-numeric:tabular-nums}
     #lab-diagnostics{white-space:pre-wrap;background:#07131e;padding:10px;border-radius:6px;font:11px/1.6 monospace}
     #lab-note{position:fixed;left:18px;top:14px;z-index:20000;color:#d2e7f4;font:12px/1.5 system-ui;text-shadow:0 1px 3px #000}
-    @media(max-width:700px){#animation-lab-panel{width:235px;padding:12px}#lab-note{max-width:calc(100% - 280px)}}
+    @media(max-width:700px){#animation-lab-panel{top:60%;bottom:0;right:0;width:100%;padding:12px;border-radius:12px 12px 0 0}#lab-note{max-width:100%;font-size:10px}}
   `;
   document.head.append(css);
   const panel=document.createElement('aside');panel.id='animation-lab-panel';
@@ -40,6 +40,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     <label for="lab-speed">Playback rate <output id="lab-speed-value">1×</output></label><input id="lab-speed" type="range" min=".1" max="1.5" step=".1" value="1">
     <div class="lab-row"><button id="lab-play">Pause</button><button id="lab-step">Step 1/60 s</button></div>
     <div class="lab-row"><button id="lab-reload">Reload</button><button id="lab-reset">Reset</button></div>
+    <label for="lab-layout">View layout</label><select id="lab-layout"><option value="quad">Four synchronized views</option><option value="single">Single orbit view</option></select>
     <label>Camera</label><div class="lab-row"><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="rear">Rear</button></div>
     <div class="lab-row"><button data-view="hands">Hands</button><button data-view="handsSide">Hands side</button><button data-view="handsRear">Hands rear</button><button data-view="handsTop">Hands top</button></div>
     <label><input id="lab-skeleton" type="checkbox"> Show bone chains</label>
@@ -47,6 +48,13 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     <p>Drag to orbit · wheel to zoom. Movement follows the real animation and arm-pose pipeline. Clip comparison overrides automatic selection without changing game defaults.</p>
     <a href="./" style="color:#6fe7d0">Return to game</a>`;
   document.body.append(panel);
+  const labels=document.createElement('div');labels.id='lab-view-labels';
+  labels.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:19999;color:#d2e7f4;font:12px system-ui';
+  const viewLabels=['Orbit','Front','Side','Rear'].map(name=>{
+    const el=document.createElement('span');el.textContent=name;
+    el.style.cssText='position:absolute;background:#101c28d9;border:1px solid #486174;border-radius:4px;padding:5px 9px';
+    labels.append(el);return el;
+  });document.body.append(labels);
   const note=document.createElement('div');note.id='lab-note';note.textContent='UNKNW / ANIMATION LAB\n1 metre grid · aim and grip diagnostics';document.body.append(note);
   const get=(id:string)=>panel.querySelector('#'+id) as HTMLInputElement;
   const weaponSelect=get('lab-weapon');
@@ -59,9 +67,50 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
   const state:LabState={weapon:'pistol',motion:'idle',pitch:0,yaw:0,ads:false,clip:'',sweep:false};
   let playing=true,speed=1,elapsed=0,accumulator=0,diagnostics:any={},last=performance.now(),frameMs=16.7;
   const camera=new THREE.PerspectiveCamera(43,innerWidth/innerHeight,.05,500);
-  const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.09;
-  controls.minDistance=.6;controls.maxDistance=9;controls.target.set(0,1,0);
-  camera.position.set(3,1.7,3.6);controls.update();
+  let layout='quad';
+  const fixedCameras=['front','side','rear'].map(()=>new THREE.PerspectiveCamera(43,1,.05,500));
+  // Orbit input belongs only to the orbit tile; the other views stay locked.
+  const orbitSurface=document.createElement('div');orbitSurface.id='lab-orbit-surface';
+  orbitSurface.style.cssText='position:fixed;left:0;top:0;z-index:19998;touch-action:none';
+  document.body.append(orbitSurface);
+  const controls=new OrbitControls(camera,orbitSurface);
+  controls.enableDamping=true;controls.dampingFactor=.09;controls.minDistance=.6;controls.maxDistance=9;
+  controls.target.set(0,1,0);camera.position.set(3,1.7,3.6);controls.update();
+  function viewportRects() {
+    const size=renderer.getSize(new THREE.Vector2());
+    const bounds=panel.getBoundingClientRect(),mobile=innerWidth<=700;
+    const width=Math.max(1,mobile?size.x:Math.min(size.x,bounds.left-8));
+    const height=Math.max(1,mobile?bounds.top:size.y),bottom=size.y-height;
+    if(layout==='single')return [{x:0,y:bottom,width,height}];
+    const halfW=Math.floor(width/2),halfH=Math.floor(height/2);
+    return [{x:0,y:bottom+halfH,width:halfW,height:height-halfH},
+      {x:halfW,y:bottom+halfH,width:width-halfW,height:height-halfH},
+      {x:0,y:bottom,width:halfW,height:halfH},{x:halfW,y:bottom,width:width-halfW,height:halfH}];
+  }
+  function renderViews() {
+    const rects=viewportRects(),size=renderer.getSize(new THREE.Vector2());
+    const target=position.clone().add(new THREE.Vector3(0,1,0));
+    const offsets=[[0,.35,-3.7],[3.7,.35,0],[0,.35,3.7]];
+    fixedCameras.forEach((cam,i)=>{
+      cam.position.copy(target).add(new THREE.Vector3(...offsets[i]).applyAxisAngle(new THREE.Vector3(0,1,0),state.yaw));
+      cam.lookAt(target);
+    });
+    renderer.setScissorTest(false);renderer.setViewport(0,0,size.x,size.y);renderer.clear();
+    renderer.setScissorTest(true);
+    rects.forEach((r,i)=>{
+      const cam=i===0?camera:fixedCameras[i-1];
+      cam.aspect=r.width/r.height;cam.updateProjectionMatrix();
+      renderer.setViewport(r.x,r.y,r.width,r.height);renderer.setScissor(r.x,r.y,r.width,r.height);
+      renderer.render(scene,cam);
+    });
+    renderer.setScissorTest(false);renderer.setViewport(0,0,size.x,size.y);
+    viewLabels.forEach((el,i)=>{
+      const r=rects[i];el.hidden=!r;
+      if(r){el.style.left=(r.x+12)+'px';el.style.top=(size.y-r.y-r.height+42)+'px';}
+    });
+    const orbit=rects[0];orbitSurface.style.top=(size.y-orbit.y-orbit.height)+'px';
+    orbitSurface.style.width=orbit.width+'px';orbitSurface.style.height=orbit.height+'px';
+  }
   scene.background=new THREE.Color(0x182633);scene.fog=null;scene.environment=null;
   scene.add(new THREE.HemisphereLight(0xe9f5ff,0x6f7b87,2.3));
   const key=new THREE.DirectionalLight(0xfff0df,2.5);key.position.set(3,7,5);scene.add(key);
@@ -103,7 +152,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     const delta=position.clone().sub(previous);camera.position.add(delta);controls.target.add(delta);previous.copy(position);
     floor.position.x=Math.round(position.x/50)*50;floor.position.z=Math.round(position.z/50)*50;
     grid.position.x=floor.position.x;grid.position.z=floor.position.z;
-    controls.update();renderer.render(scene,camera);
+    controls.update();renderViews();
     const d=diagnostics.fit||{};
     get('lab-diagnostics').textContent=[
       'ACTION  '+(diagnostics.action||'—'),'PHASE   '+Number(diagnostics.phase||0).toFixed(2),
@@ -139,11 +188,16 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
     step(12,false);view('front');render();
   });
   get('lab-skin-check').addEventListener('change',()=>set({measureSkin:get('lab-skin-check').checked}));
+  function setLayout(value:string) {
+    layout=value==='single'?'single':'quad';get('lab-layout').value=layout;render();
+  }
+  get('lab-layout').addEventListener('change',()=>setLayout(get('lab-layout').value));
   get('lab-skeleton').addEventListener('change',()=>{skeleton.visible=get('lab-skeleton').checked;render();});
   panel.querySelectorAll('[data-view]').forEach(el=>el.addEventListener('click',()=>view(el.getAttribute('data-view'))));
   addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();render();});
   const api={set,step,getState:()=>({...state,playing}),getDiagnostics:()=>diagnostics,
-    setPlaying:(value:boolean)=>{playing=value;refresh();},view,
+    setPlaying:(value:boolean)=>{playing=value;refresh();},view,setLayout,getLayout:()=>layout,
+    getViews:()=>viewportRects().map((rect,i)=>({name:layout==='single'?'orbit':['orbit','front','side','rear'][i],...rect})),
     getClips:()=>[...clips],reload:()=>onReload()};
   window.__animationLab=api;
   document.body.dataset.animationLabReady='1';

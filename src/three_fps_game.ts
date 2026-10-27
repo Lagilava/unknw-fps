@@ -6279,9 +6279,14 @@ function createLightningEffect() {
       ['pistolSprintRight',source.sprintRight||source.strafe,pistolUpper],
     ] as const) {
       if(!lower || !upper) continue;
-      const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model),upper,isUpperBodyTrack,name);
+      const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model),upper,isUpperBodyTrack,name,name.startsWith('pistol'));
       const action=thirdPerson.mixer.clipAction(clip); action.loop=THREE.LoopRepeat;
       action.enabled=true; thirdPerson.actions[name]=action;
+    }
+    if(pistolUpper) {
+      const clip=composeArmedLocomotion(pistolUpper,pistolUpper,isUpperBodyTrack,'pistolRun',true);
+      const action=thirdPerson.mixer.clipAction(clip);action.loop=THREE.LoopRepeat;
+      action.enabled=true;thirdPerson.actions.pistolRun=action;
     }
 
     // A frozen run frame leaves one foot lifted at rest. Combine the actual idle
@@ -10314,6 +10319,14 @@ function createLightningEffect() {
       // code: WebGPU-safe, low-poly, self-animating — no external assets.
       const warden = createStormWarden(THREE, mergeGeometries, {
         palette: { accent: type.color || 0x4fc3ff, accent2: type.emissive || 0x66d4ff, accent3: 0xb266ff },
+        groundHeight:(x,z,y)=>{
+          let top=0;
+          for(const c of scene.userData.propColliders || []) {
+            if(c.maxY>top && c.maxY<=y+.1 && x+.08>c.minX && x-.08<c.maxX
+              && z+.08>c.minZ && z-.08<c.maxZ)top=c.maxY;
+          }
+          return top;
+        },
       });
       const siegeModel = warden.root;
       siegeModel.traverse(obj => { if (obj.isMesh || obj.isSkinnedMesh) obj.frustumCulled = false; });
@@ -17290,7 +17303,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   function beginEnemyDeathVisual(enemy) {
     if (enemyRemovalQueue.includes(enemy)) return;
-    enemy.deathVisualRemaining = 1.2;
+    enemy.deathVisualRemaining = enemy.mesh.userData.wardenAnim ? 3 : 1.2;
     enemy.mesh.visible = true;
     const zombie = enemy.mesh.userData.zombieAnim;
     const warden = enemy.mesh.userData.wardenAnim;

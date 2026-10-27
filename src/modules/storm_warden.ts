@@ -663,6 +663,54 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
   // Each stores its base local transform + a scatter direction/amplitude + a tumble.
   let _captured = false;
   const sepParts = [];
+  let deathParts = null;
+  const deathPoint=new THREE.Vector3(),deathScale=new THREE.Vector3();
+  const deathParentQ=new THREE.Quaternion();
+  const deathEuler=new THREE.Euler();
+  function startDeath() {
+    if(dead)return;
+    if(!_captured)captureParts();
+    dead=true;deadTime=0;
+    warden.updateWorldMatrix(true,true);
+    // Simulate in metres/world space: enemy variants have different rig scales.
+    // Parent parts are applied first; children keep their own world trajectory.
+    const objects=[rig.pelvis,rig.chest,...sepParts.map(p=>p.obj)];
+    deathParts=objects.map((obj,i)=>({obj,position:obj.getWorldPosition(new THREE.Vector3()),
+      quaternion:obj.getWorldQuaternion(new THREE.Quaternion()),
+      localPosition:obj.position.clone(),localQuaternion:obj.quaternion.clone(),
+      bounds:new THREE.Box3(),corners:[],
+      velocity:new THREE.Vector3(Math.sin(i*2.4)*1.2,.3+(i%3)*.15,Math.cos(i*2.4)*1.2),
+      spin:new THREE.Vector3(.7+(i%3)*.3,(i%2?1:-1)*1.2,.5),settled:false}));
+    const owner=new Map(deathParts.map(p=>[p.obj,p]));
+    const boneOwners=skeleton.bones.map(bone=>{
+      for(let node=bone;node;node=node.parent)if(owner.has(node))return owner.get(node);
+      return null;
+    });
+    // The body is one rigid-weighted SkinnedMesh. Measure each fragment's actual
+    // posed vertices instead of colliding the shared body box at hover height.
+    skeleton.update();
+    const indices=body.geometry.attributes.skinIndex;
+    for(let i=0;i<body.geometry.attributes.position.count;i++) {
+      const p=boneOwners[indices.getX(i)];if(!p)continue;
+      body.getVertexPosition(i,deathPoint).applyMatrix4(body.matrixWorld);
+      p.bounds.expandByPoint(p.obj.worldToLocal(deathPoint));
+    }
+    for(const p of deathParts) {
+      p.obj.traverse(obj=>{
+        if(!obj.isMesh || obj===body)return;
+        for(let node=obj;node && node!==p.obj;node=node.parent)if(owner.has(node))return;
+        obj.geometry.computeBoundingBox();
+        const box=obj.geometry.boundingBox;
+        for(let i=0;i<8;i++) {
+          deathPoint.set(i&1?box.max.x:box.min.x,i&2?box.max.y:box.min.y,i&4?box.max.z:box.min.z);
+          deathPoint.applyMatrix4(obj.matrixWorld);p.bounds.expandByPoint(p.obj.worldToLocal(deathPoint));
+        }
+      });
+      if(p.bounds.isEmpty())p.bounds.set(new THREE.Vector3(-.06,-.06,-.06),new THREE.Vector3(.06,.06,.06));
+      for(let i=0;i<8;i++)p.corners.push(new THREE.Vector3(
+        i&1?p.bounds.max.x:p.bounds.min.x,i&2?p.bounds.max.y:p.bounds.min.y,i&4?p.bounds.max.z:p.bounds.min.z));
+    }
+  }
   function captureParts() {
     const add = (obj, dir, amp, spin, isShard?) => {
       if (!obj) return;
@@ -723,7 +771,7 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     const isSeraph = tn === "Blink Seraph";
     const isCherub = tn === "Null Cherub";
 
-    if (!alive && !dead) { dead = true; deadTime = 0; }
+    if (!alive && !dead) startDeath();
     if (dead) { _updateDead(dt); return; }
 
     // ── Ability stance blends (anticipation → release, keyed off existing AI
@@ -1040,35 +1088,44 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
     if (armorFlashOn) setArmorFlash(0);
     if (!_captured) captureParts();
     const t = clamp01(deadTime / 1.4);
-    const blast = smootherStep(t);
     // reactor swells then implodes
     if (rig.reactorCore) {
       const rs = deadTime < 0.4 ? 1 + (deadTime / 0.4) * 3.5 : Math.max(0, 1 - (deadTime - 0.4) * 5);
       rig.reactorCore.scale.setScalar(Math.max(0, rs));
     }
     if (rig.faceCore) rig.faceCore.scale.setScalar(Math.max(0, 1 - t * 1.5));
-    // all parts blast outward and tumble — each part on a slightly staggered,
-    // eased timeline (reads as a collapse rippling through the body, not one
-    // uniform pop). Stagger is derived from the part's base position (stable,
-    // no per-frame allocation or randomness).
-    for (let pi = 0; pi < sepParts.length; pi++) {
-      const p = sepParts[pi];
-      const stag = (pi % 5) * 0.05;
-      const pb = smootherStep(clamp01((deadTime - stag) / 1.4));
-      const o = (0.4 + pb * 1.8) * p.amp;
-      const sag = pb * pb * 0.55; // parts sink as they die (gravity read)
-      p.obj.position.set(p.bx + p.dx * o, p.by + p.dy * o - sag, p.bz + p.dz * o);
-      p.obj.rotation.set(p.rx + p.sx * pb * 5, p.ry + p.sy * pb * 5, p.rz + p.sz * pb * 5);
+    for(const p of deathParts || []) {
+      if(!p.settled) {
+        p.velocity.y-=9.81*dt;p.position.addScaledVector(p.velocity,dt);
+        deathParentQ.setFromEuler(deathEuler.set(p.spin.x*dt,p.spin.y*dt,p.spin.z*dt));
+        p.quaternion.premultiply(deathParentQ).normalize();
+        p.obj.getWorldScale(deathScale);
+        let bottom=Infinity;
+        for(const corner of p.corners)bottom=Math.min(bottom,deathPoint.copy(corner).multiply(deathScale).applyQuaternion(p.quaternion).y);
+        const floor=options.groundHeight?.(p.position.x,p.position.z,p.position.y) ?? 0;
+        if(p.position.y+bottom<floor) {
+          p.position.y=floor-bottom;
+          p.velocity.y=Math.abs(p.velocity.y)*.18;
+          p.velocity.x*=.55;p.velocity.z*=.55;p.spin.multiplyScalar(.45);
+          if(p.velocity.y<.35){p.velocity.set(0,0,0);p.settled=true;}
+        }
+      }
+      p.obj.position.copy(p.obj.parent.worldToLocal(deathPoint.copy(p.position)));
+      p.obj.parent.getWorldQuaternion(deathParentQ);
+      p.obj.quaternion.copy(deathParentQ.invert()).multiply(p.quaternion);
+      p.obj.updateMatrixWorld(true);
     }
-    if (baseY !== null) warden.position.y = damp(warden.position.y, baseY + HOVER_BASE - blast * 0.7, 3, dt);
     energyMats.forEach((m) => { m.opacity = damp(m.opacity, Math.max(0, 1 - t * 1.3), 8, dt); });
     if (dischargeRingMat) dischargeRingMat.opacity = 0;
     rig.arcLines?.forEach(({ mat }) => { mat.opacity = 0; });
   }
 
   function setDead(v = true) {
-    dead = v;
+    if(v){startDeath();return;}
+    dead = false;
     if (!v) {
+      for(const p of deathParts || []){p.obj.position.copy(p.localPosition);p.obj.quaternion.copy(p.localQuaternion);}
+      deathParts=null;
       deadTime = 0; separation = 0; attackWindUp = 0; attackFireFlash = 0;
       prevIsAttacking = false; fireHoldTimer = 0;
       bodyPitch = 0; bodyBank = 0; ringPulseOpacity = 0; rageBlend = 0; crownSpin = 0;
@@ -1087,6 +1144,8 @@ export function createStormWarden(THREE: any, mergeGeometries: any, options: any
       if (baseY !== null) warden.position.y = baseY + HOVER_BASE;
       for (const p of sepParts) { p.obj.position.set(p.bx, p.by, p.bz); p.obj.rotation.set(p.rx, p.ry, p.rz); }
       energyMats.forEach((m) => { if (m.userData.baseColor) m.color.copy(m.userData.baseColor); });
+      if(rig.reactorCore)rig.reactorCore.scale.setScalar(1);
+      if(rig.faceCore)rig.faceCore.scale.setScalar(1);
       warden.rotation.set(0, 0, 0);
       if (rig.spine) rig.spine.rotation.set(0, 0, 0);
       if (rig.chest) rig.chest.rotation.set(0, 0, 0);
