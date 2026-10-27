@@ -9,12 +9,14 @@ test('four views share one pistol simulation and a steady carry through directio
   const rows=[];
   for(const motion of ['jog','sprint','left','right','diagonal','back'])for(const yaw of [0,Math.PI/2]){
    lab.set({weapon:'pistol',motion,yaw,pitch:0,clip:''},false);lab.step(90,false);
-   const heights=[];let error=0;
+   const heights=[],pelvis=[];let error=0;
    for(let i=0;i<240;i++){
     const d=lab.step(1,false);heights.push(d.handCenter[1]);
+    pelvis.push(d.pelvis);
     error=Math.max(error,d.fit.rightError,d.fit.leftError);
    }
-   rows.push({motion,yaw,bounce:Math.max(...heights)-Math.min(...heights),error});
+   rows.push({motion,yaw,bounce:Math.max(...heights)-Math.min(...heights),error,
+    hipRange:[0,1,2].map(axis=>Math.max(...pelvis.map(p=>p[axis]))-Math.min(...pelvis.map(p=>p[axis])))});
   }
   return {rows,views:lab.getViews(),layout:lab.getLayout()};
  });
@@ -22,7 +24,12 @@ test('four views share one pistol simulation and a steady carry through directio
  expect(report.views.map(v=>v.name)).toEqual(['player','front','side','rear']);
  for(const row of report.rows){
   expect(row.bounce,`${row.motion} retains natural body motion`).toBeGreaterThan(.004);
-  expect(row.bounce,`${row.motion} carry bounce`).toBeLessThan(.025);expect(row.error).toBeLessThan(.02);
+  // The previous 2.5 cm hand ceiling rewarded a frozen pelvis. Validate captured
+  // body travel and grip contact separately; the camera itself remains stable.
+  expect(row.bounce,`${row.motion} carry bounce`).toBeLessThan(.13);expect(row.error).toBeLessThan(.02);
+  expect(row.hipRange[1],`${row.motion} pelvis rises/falls with support`).toBeGreaterThan(.025);
+  expect(row.hipRange[1]).toBeLessThan(.11);
+  expect(Math.hypot(row.hipRange[0],row.hipRange[2]),`${row.motion} lateral weight transfer`).toBeGreaterThan(.015);
  }
  await page.evaluate(()=>{const l=window.__animationLab;l.set({motion:'left',yaw:0});l.step(60);});
  await page.screenshot({path:'test-artifacts/pistol-multiview.png'});
@@ -46,7 +53,7 @@ test('player POV uses the gameplay camera and sprint carry smoothly yields to ai
   const lab=window.__animationLab;lab.setPlaying(false);lab.setLayout('player');
   lab.set({weapon:'pistol',motion:'sprint',yaw:Math.PI/2,pitch:.08,ads:false},false);
   lab.step(120);const sprint=lab.getDiagnostics(),rendered=lab.getPlayerView();
-  let previous=sprint.quaternions,maxJointJump=0;
+  let previous=sprint.quaternions,previousPelvis=sprint.pelvis,maxJointJump=0,maxPelvisStep=0;
   const sample=()=>{
    const d=lab.step(1,false);
    for(const name of Object.keys(d.quaternions)) {
@@ -54,7 +61,8 @@ test('player POV uses the gameplay camera and sprint carry smoothly yields to ai
     const dot=Math.abs(a.reduce((sum,v,i)=>sum+v*b[i],0))/(Math.hypot(...a)*Math.hypot(...b));
     maxJointJump=Math.max(maxJointJump,2*Math.acos(Math.min(1,dot)));
    }
-   previous=d.quaternions;return d;
+   maxPelvisStep=Math.max(maxPelvisStep,Math.hypot(...d.pelvis.map((v,i)=>v-previousPelvis[i])));
+   previousPelvis=d.pelvis;previous=d.quaternions;return d;
   };
   lab.set({ads:true},false);
   const transition=[];for(let i=0;i<45;i++)transition.push(sample().pistolCarry);
@@ -65,12 +73,22 @@ test('player POV uses the gameplay camera and sprint carry smoothly yields to ai
   lab.set({motion:'idle',ads:false},false);lab.step(60,false);const idle=lab.getDiagnostics();
   lab.set({motion:'sprint',ads:false},false);lab.step(60,false);
   lab.set({weapon:'rifle'},false);lab.step(30,false);const rifle=lab.getDiagnostics();
-  return {sprint,rendered,transition,aimed,idle,rifle,maxJointJump,views:lab.getViews()};
+  lab.set({motion:'idle'},false);lab.step(90,false);lab.set({motion:'jog'},false);
+  const acceleration=[];for(let i=0;i<12;i++)acceleration.push(Math.hypot(...lab.step(1,false).velocity));
+  lab.set({motion:'idle'},false);
+  const braking=[];for(let i=0;i<12;i++)braking.push(Math.hypot(...lab.step(1,false).velocity));
+  return {sprint,rendered,transition,aimed,idle,rifle,maxJointJump,maxPelvisStep,acceleration,braking,views:lab.getViews()};
  });
  expect(result.views[0].name).toBe('player');
  expect(result.rendered).toEqual(result.sprint.playerCamera);
  expect(result.sprint.pistolCarry).toBeGreaterThan(.99);
  expect(result.maxJointJump).toBeLessThan(.55);
+ expect(result.maxPelvisStep).toBeLessThan(.05);
+ expect(result.acceleration[0]).toBeLessThan(result.acceleration.at(-1)*.5);
+ for(let i=1;i<12;i++){
+  expect(result.acceleration[i]).toBeGreaterThan(result.acceleration[i-1]);
+  expect(result.braking[i]).toBeLessThan(result.braking[i-1]);
+ }
  for(let i=1;i<result.transition.length;i++){
   expect(result.transition[i]).toBeLessThan(result.transition[i-1]);
   expect(result.transition[i-1]-result.transition[i]).toBeLessThan(.3);

@@ -174,6 +174,7 @@ export function createAnimationLab({scene,renderer,canvas,weapons,clips,onWeapon
       'WRIST   '+(Math.max(d.leftWristDelta||0,d.rightWristDelta||0)*180/Math.PI).toFixed(1)+'° correction',
       'SKIN95  '+(diagnostics.skin?diagnostics.skin.p95.toFixed(2)+'×':'measurement off'),
       'LEGS    authored clip / foot locks off',
+      'PELVIS  '+Number(diagnostics.pelvis?.[1]||0).toFixed(3)+' m · captured weight shift',
       'LENGTH  '+Number(d.length||0).toFixed(2)+' m','FRAME   '+frameMs.toFixed(1)+' ms',
       'PITCH   '+(state.pitch*180/Math.PI).toFixed(1)+'° / ±7°','YAW     '+(state.yaw*180/Math.PI).toFixed(1)+'°',
       diagnostics.reloading?'RELOAD  active':'RELOAD  ready'

@@ -44,7 +44,7 @@ import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
 import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
 import { limitWeaponElevation } from "./modules/weapon_pose_limits";
-import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop, LOCOMOTION_NATIVE_SPEED } from "./modules/weapon_locomotion";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop, inPlacePelvisTrack, LOCOMOTION_NATIVE_SPEED } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
@@ -6218,7 +6218,8 @@ function createLightningEffect() {
 
     for (const [name, rawClip] of Object.entries(source)) {
       if (!rawClip) continue;
-      let clip = makeInPlaceClipForModel(rawClip, model, { preserveHipsHeight: name === 'death' });
+      let clip = makeInPlaceClipForModel(rawClip, model, { preserveHipsHeight: name === 'death',
+        preserveLocomotion: /^(idle|walk|walkBack|strafe|strafeAlt|sprint|sprintLeft|sprintRight|rifleRun|runBack|pistolRun|pistolStrafe)$/.test(name) });
       if (!clip.tracks.length) continue;
       if (/^(walk|walkBack|strafe|strafeAlt|sprint|sprintLeft|sprintRight|rifleRun|runBack|pistolRun|pistolStrafe)$/.test(name)) clip=closeLocomotionLoop(clip);
       if (name === "reload") {
@@ -6279,19 +6280,19 @@ function createLightningEffect() {
       ['pistolSprintRight',source.sprintRight||source.strafe,pistolUpper],
     ] as const) {
       if(!lower || !upper) continue;
-      const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model),upper,isUpperBodyTrack,name,name.startsWith('pistol'));
+      const clip=composeArmedLocomotion(makeInPlaceClipForModel(lower,model,{preserveLocomotion:true}),upper,isUpperBodyTrack,name,name.startsWith('pistol'));
       const action=thirdPerson.mixer.clipAction(clip); action.loop=THREE.LoopRepeat;
       action.enabled=true; thirdPerson.actions[name]=action;
     }
     if(pistolUpper) {
-      const clip=composeArmedLocomotion(pistolUpper,pistolUpper,isUpperBodyTrack,'pistolRun',true);
+      const clip=composeArmedLocomotion(makeInPlaceClipForModel(source.pistolRun,model,{preserveLocomotion:true}),pistolUpper,isUpperBodyTrack,'pistolRun',true);
       const action=thirdPerson.mixer.clipAction(clip);action.loop=THREE.LoopRepeat;
       action.enabled=true;thirdPerson.actions.pistolRun=action;
     }
 
     // A frozen run frame leaves one foot lifted at rest. Combine the actual idle
     // hips/legs with the original animated aiming-idle arms for each grip style.
-    const standingLegs = source.idle && makeInPlaceClipForModel(source.idle, model).tracks.filter(isLegTrack);
+    const standingLegs = source.idle && makeInPlaceClipForModel(source.idle, model,{preserveLocomotion:true}).tracks.filter(isLegTrack);
     if (standingLegs?.length) for (const [name, raw] of [['idlePistol', source.pistolRun || source.idle], ['idleRifle', source.idle]] as const) {
       if (!raw) continue;
       const duration = source.idle.duration;
@@ -7639,6 +7640,7 @@ function createLightningEffect() {
     if (player.hp < previousHp && player.hp > 0) thirdPerson.damageFlinch = 0.12;
     thirdPerson.previousHp = player.hp;
     if (thirdPerson.lastMove?.jumping && !moveState?.jumping) thirdPerson.landAbsorb = 0.07;
+    thirdPerson.lastMove = moveState || thirdPerson.lastMove;
     thirdPerson.damageFlinch = THREE.MathUtils.damp(thirdPerson.damageFlinch || 0, 0, 12, dt);
     thirdPerson.landAbsorb = THREE.MathUtils.damp(thirdPerson.landAbsorb || 0, 0, 10, dt);
 
@@ -7714,7 +7716,6 @@ function createLightningEffect() {
       thirdPerson.model.rotation.x = -bodyRecoilPitch - thirdPerson.leanF;
       thirdPerson.model.rotation.z = bodyRecoilRoll - thirdPerson.leanR;
     }
-    thirdPerson.lastMove = moveState || thirdPerson.lastMove;
     thirdPerson.fireTimer = Math.max(0, thirdPerson.fireTimer - dt);
     // Local reload time is advanced once by updateReload, never by the pose/menu loop.
 
@@ -8445,17 +8446,20 @@ function createLightningEffect() {
     await Promise.all(entries.map(async ([key, path]) => {
       try {
         let clip = null;
+        let sourceHipsHeight=0;
         if (PLAYER_ANIMATION_GLTF_PATHS[key]) try {
           const animGltf = await gltfLoader.loadAsync(new URL(PLAYER_ANIMATION_GLTF_PATHS[key], window.location.href).href);
           clip = animGltf.animations?.[0] ?? null;
+          animGltf.scene.traverse(node=>{if(/Hips$/.test(node.name))sourceHipsHeight=node.position.y;});
         } catch (glbErr) {
           console.warn(`${PLAYER_ANIMATION_GLTF_PATHS[key]} could not be loaded; trying FBX animation.`, glbErr);
         }
         if (!clip) {
           const animFbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
           clip = animFbx.animations?.[0] ?? null;
+          animFbx.traverse(node=>{if(/Hips$/.test(node.name))sourceHipsHeight=node.position.y;});
         }
-        if (clip) PLAYER_CHARACTER_ANIMS[key] = clip;
+        if (clip) {clip.sourceHipsHeight=sourceHipsHeight;PLAYER_CHARACTER_ANIMS[key] = clip;}
       } catch (err) {
         console.warn(`${path} could not be loaded; skipping player animation.`, err);
       } finally {
@@ -9623,6 +9627,13 @@ function createLightningEffect() {
       if (!track.name.endsWith(".position")) return true;
       return preserveBonePositions && nodeName && nodeName !== model.name;
     }).map(track=>track.clone());
+
+    if(options.preserveLocomotion) {
+      const source=clip.tracks.find(t=>/Hips\.position$/.test(t.name));
+      const hips=source && model.getObjectByName(getAnimationTrackNodeName(source.name));
+      if(hips && clip.sourceHipsHeight>0)
+        tracks.push(inPlacePelvisTrack(source,hips.position,clip.sourceHipsHeight,Math.max(.001,clip.duration)));
+    }
 
     // Death needs vertical hip travel or the collapsed pose floats at standing
     // height. Retarget centimetre FBX translation into the target skeleton units,
@@ -25752,14 +25763,19 @@ async function spawnEnemies(wave, options: any = {}) {
             pitch.rotation.x=state.pitch;yaw.rotation.y=state.yaw;
             const inputs={idle:[0,0],jog:[1,0],sprint:[1,0],left:[0,-1],right:[0,1],back:[-1,0],diagonal:[1,1]};
             const [f,s]=inputs[state.motion]||[0,0];
-            const speed=state.motion==="sprint"?player.sprintSpeed:player.speed;
+            const sprinting=state.motion==="sprint"&&!state.ads;
+            const spec=GUN_SPECS[currentGun];
+            const speed=(sprinting?player.sprintSpeed:player.speed)*(spec.moveSpeedMul||1)
+              *(1-(spec.adsMovePenalty??.14)*(state.ads?1:0));
             const len=Math.hypot(f,s)||1;
-            player.velX=(Math.cos(state.yaw)*s-Math.sin(state.yaw)*f)*speed/len;
-            player.velZ=(-Math.sin(state.yaw)*s-Math.cos(state.yaw)*f)*speed/len;
+            // Match gameplay acceleration/braking so starts and reversals can be
+            // reviewed here, rather than teleporting immediately to full speed.
+            player.velX=dampValue(player.velX||0,(Math.cos(state.yaw)*s-Math.sin(state.yaw)*f)*speed/len,f||s?15:13,dt);
+            player.velZ=dampValue(player.velZ||0,(-Math.sin(state.yaw)*s-Math.cos(state.yaw)*f)*speed/len,f||s?15:13,dt);
             yaw.position.x+=player.velX*dt;yaw.position.z+=player.velZ*dt;
             mouse.aiming=state.ads;viewState.ads=state.ads?1:0;
             updateReload(dt);
-            updateThirdPersonCharacter(dt,{f,s,sprinting:state.motion==="sprint",jumping:false});
+            updateThirdPersonCharacter(dt,{f,s,sprinting,jumping:false});
             updateWeapon(dt);
             updateCameraFX(dt);
             thirdPerson.root.visible=true;if(thirdPerson.weapon?.gun)thirdPerson.weapon.gun.visible=true;
@@ -25770,6 +25786,7 @@ async function spawnEnemies(wave, options: any = {}) {
               [name,bone.getWorldQuaternion(new THREE.Quaternion()).toArray()]));
             const handCenter=new THREE.Vector3().addVectors(thirdPerson.rightHand.getWorldPosition(new THREE.Vector3()),thirdPerson.leftHand.getWorldPosition(new THREE.Vector3())).multiplyScalar(.5).toArray();
             return {handCenter,pistolCarry:thirdPerson.pistolCarry||0,
+              pelvis:thirdPerson.aimBones.hips?.position.toArray(),velocity:[player.velX,player.velZ],
               playerCamera:{position:camera.getWorldPosition(new THREE.Vector3()).toArray(),quaternion:camera.getWorldQuaternion(new THREE.Quaternion()).toArray(),fov:camera.fov},
               fit:{...weaponHandFitter.diag},action:thirdPerson.activeActionName,rate:thirdPerson.activeAction?.timeScale,warp:thirdPerson.warp||0,
               phase:thirdPerson.activeAction?.time/Math.max(.001,thirdPerson.activeAction?.getClip().duration||1),

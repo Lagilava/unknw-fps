@@ -1,5 +1,31 @@
 import * as THREE from 'three';
 
+// Retarget root translation using the SOURCE bind height, not the first running
+// frame (whose hips are already lowered for knee flexion). Remove linear travel
+// only; keep the captured lateral weight shift and vertical stance/flight motion.
+export function inPlacePelvisTrack(source:THREE.KeyframeTrack,rest:THREE.Vector3,sourceHeight:number,duration:number) {
+  const values=new Float32Array(source.values.length),times=source.times;
+  const ratio=rest.y/Math.max(.001,sourceHeight),last=source.values.length-3;
+  const lateral=[0,0,0];
+  for(let i=0;i<times.length;i++)for(const axis of [0,2])
+    lateral[axis]+=source.values[i*3+axis]-THREE.MathUtils.lerp(source.values[axis],source.values[last+axis],times[i]/duration);
+  for(const axis of [0,2])lateral[axis]/=times.length;
+  for(let i=0;i<times.length;i++) {
+    const t=times[i]/duration;
+    for(let axis=0;axis<3;axis++) {
+      const value=source.values[i*3+axis];
+      if(axis===1) {
+        const height=(value-(source.values[last+1]-source.values[1])*t)*ratio;
+        values[i*3+axis]=THREE.MathUtils.clamp(height,rest.y*.75,rest.y*1.08);
+      } else {
+        const residual=value-THREE.MathUtils.lerp(source.values[axis],source.values[last+axis],t)-lateral[axis];
+        values[i*3+axis]=rest.getComponent(axis)+THREE.MathUtils.clamp(residual*ratio,-rest.y*.06,rest.y*.06);
+      }
+    }
+  }
+  return new THREE.VectorKeyframeTrack(source.name,Float32Array.from(times),values);
+}
+
 // Authored armed clips stay on the upper body; real directional clips own feet.
 export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.AnimationClip,
   upperBody: (track: THREE.KeyframeTrack) => boolean, name: string, steadySidearm=false) {
@@ -23,6 +49,13 @@ export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.
     const neutralHip=reference ? new THREE.Quaternion().fromArray(reference.values) : null;
     const q=new THREE.Quaternion(),base=new THREE.Quaternion(),hip=new THREE.Quaternion();
     const transfer=new THREE.Quaternion(),tilt=new THREE.Euler(0,0,0,'YXZ');
+    let sinHeading=0,cosHeading=0;
+    if(hipSample && neutralHip)for(let i=0;i<60;i++) {
+      hip.fromArray(hipSample.evaluate(clip.duration*i/60)).normalize();
+      transfer.copy(neutralHip).invert().multiply(hip);tilt.setFromQuaternion(transfer,'YXZ');
+      sinHeading+=Math.sin(tilt.y);cosHeading+=Math.cos(tilt.y);
+    }
+    const heading=Math.atan2(sinHeading,cosHeading);
     for(const track of clip.tracks) {
       if(!(track instanceof THREE.QuaternionKeyframeTrack) || !carryTrack(track))continue;
       base.fromArray(track.values).normalize();
@@ -32,11 +65,15 @@ export function composeArmedLocomotion(lower: THREE.AnimationClip, upper: THREE.
       for(let i=0;i<count;i++) {
         const time=clip.duration*i/(count-1);times[i]=time;
         // Retain a little authored motion instead of freezing the upper body.
-        q.fromArray(sample.evaluate(time)).normalize();q.slerpQuaternions(base,q,.65);
+        q.fromArray(sample.evaluate(time)).normalize();q.slerpQuaternions(base,q,.9);
         if(/Spine\.quaternion$/i.test(track.name) && hipSample && neutralHip) {
-          hip.fromArray(hipSample.evaluate(time)).normalize();
+          // The shoulder girdle follows a little after the pelvis, counter-turning
+          // its cyclical yaw instead of cancelling every degree of natural motion.
+          hip.fromArray(hipSample.evaluate((time-.045+clip.duration)%clip.duration)).normalize();
           transfer.copy(neutralHip).invert().multiply(hip);tilt.setFromQuaternion(transfer,'YXZ');
-          transfer.setFromEuler(tilt.set(tilt.x*.35,0,tilt.z*.35,'YXZ'));
+          const yaw=Math.atan2(Math.sin(tilt.y-heading),Math.cos(tilt.y-heading));
+          transfer.setFromEuler(tilt.set(tilt.x*.7,THREE.MathUtils.clamp(-yaw*.45,-.12,.12),tilt.z*.7,'YXZ'));
+          hip.fromArray(hipSample.evaluate(time)).normalize();
           q.premultiply(transfer).premultiply(neutralHip).premultiply(hip.invert());
         }
         q.normalize().toArray(values,i*4);
