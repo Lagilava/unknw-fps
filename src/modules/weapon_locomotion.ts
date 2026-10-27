@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 
+// Global player pace, applied before velocity integration. Locomotion then uses
+// the actual velocity, keeping slower playback and ground travel in sync even
+// with saved developer presets, weapon weight, ADS, or movement perks.
+export const PLAYER_MOVEMENT_PACE = .75;
+
 // Retarget root translation using the SOURCE bind height, not the first running
 // frame (whose hips are already lowered for knee flexion). Remove linear travel
 // only; keep the captured lateral weight shift and vertical stance/flight motion.

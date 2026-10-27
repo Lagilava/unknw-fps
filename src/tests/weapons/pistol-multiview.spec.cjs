@@ -15,7 +15,8 @@ test('four views share one pistol simulation and a steady carry through directio
     pelvis.push(d.pelvis);
     error=Math.max(error,d.fit.rightError,d.fit.leftError);
    }
-   rows.push({motion,yaw,bounce:Math.max(...heights)-Math.min(...heights),error,
+   const d=lab.getDiagnostics();
+   rows.push({motion,yaw,bounce:Math.max(...heights)-Math.min(...heights),error,rate:Math.abs(d.rate),speed:Math.hypot(...d.velocity),
     hipRange:[0,1,2].map(axis=>Math.max(...pelvis.map(p=>p[axis]))-Math.min(...pelvis.map(p=>p[axis])))});
   }
   return {rows,views:lab.getViews(),layout:lab.getLayout()};
@@ -30,6 +31,8 @@ test('four views share one pistol simulation and a steady carry through directio
   expect(row.hipRange[1],`${row.motion} pelvis rises/falls with support`).toBeGreaterThan(.025);
   expect(row.hipRange[1]).toBeLessThan(.11);
   expect(Math.hypot(row.hipRange[0],row.hipRange[2]),`${row.motion} lateral weight transfer`).toBeGreaterThan(.015);
+  expect(row.speed,`${row.motion} reduced ground speed`).toBeLessThan(row.motion==='sprint'?7.6:5);
+  expect(row.rate,`${row.motion} reduced animation cadence`).toBeLessThan(row.motion==='sprint'?1.25:.9);
  }
  await page.evaluate(()=>{const l=window.__animationLab;l.set({motion:'left',yaw:0});l.step(60);});
  await page.screenshot({path:'test-artifacts/pistol-multiview.png'});

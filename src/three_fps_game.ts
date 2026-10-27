@@ -44,7 +44,7 @@ import { installIntelGallery } from "./modules/intel_gallery";
 import { createWeaponHandFitter, WEAPON_HAND_FITS } from "./modules/weapon_hand_fit";
 import { sampleAuthoredSkin, compareSolvedSkin } from "./modules/pose_skin_diagnostics";
 import { limitWeaponElevation } from "./modules/weapon_pose_limits";
-import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop, inPlacePelvisTrack, LOCOMOTION_NATIVE_SPEED } from "./modules/weapon_locomotion";
+import { composeArmedLocomotion, chooseArmedLocomotion, locomotionRate, locomotionSector, closeLocomotionLoop, inPlacePelvisTrack, LOCOMOTION_NATIVE_SPEED, PLAYER_MOVEMENT_PACE } from "./modules/weapon_locomotion";
 import { createAnimationLab } from "./modules/animation_lab";
 import { SFX_MANIFEST, VO_MANIFEST, HOWLER_MANIFEST } from "./modules/audio_assets.js";
 import { audioEngine } from "./modules/audio_engine.js";
@@ -19314,7 +19314,7 @@ async function spawnEnemies(wave, options: any = {}) {
     const aimSpeedMul = 1 - adsPenalty * viewState.ads;
     // Per-gun weight: heavy weapons (LMG/railgun) slow the carrier, sidearms speed up.
     const heldWeightMul = Number.isFinite(GUN_SPECS[currentGun]?.moveSpeedMul) ? GUN_SPECS[currentGun].moveSpeedMul : 1;
-    const speed = (sprinting ? player.sprintSpeed : player.speed) * aimSpeedMul * player.effectSpeedMul * heldWeightMul * (player.perkSpeedMul || 1);
+    const speed = (sprinting ? player.sprintSpeed : player.speed) * PLAYER_MOVEMENT_PACE * aimSpeedMul * player.effectSpeedMul * heldWeightMul * (player.perkSpeedMul || 1);
     const len = Math.hypot(f, s) || 1;
     // Keyboard is always full-speed in its direction; analog joystick scales speed
     // by how far the stick is pushed (clamped to 1).
@@ -24209,7 +24209,8 @@ async function spawnEnemies(wave, options: any = {}) {
             s: state.includes('strafe') ? 1 : 0, sprinting: state.includes('sprint'), jumping: state.includes('jump') };
           thirdPerson.reloadTimer = state.includes('reload') ? weaponAnim.animSpec.reloadDuration : 0;
           thirdPerson.fireTimer = state === 'fire' ? 1 : 0;
-          player.velX = move.s * 5.8; player.velZ = move.f * (move.sprinting ? 9.2 : 5.8);
+          player.velX = move.s * player.speed * PLAYER_MOVEMENT_PACE;
+          player.velZ = move.f * (move.sprinting ? player.sprintSpeed : player.speed) * PLAYER_MOVEMENT_PACE;
           player.meleeTimer = state.includes('melee') ? .34 : 0;
           thirdPerson.previousHp = state === 'hit' ? 120 : 100;
           thirdPerson.lastMove = { f: 0, s: 0, sprinting: false, jumping: state === 'land' };
@@ -25765,7 +25766,7 @@ async function spawnEnemies(wave, options: any = {}) {
             const [f,s]=inputs[state.motion]||[0,0];
             const sprinting=state.motion==="sprint"&&!state.ads;
             const spec=GUN_SPECS[currentGun];
-            const speed=(sprinting?player.sprintSpeed:player.speed)*(spec.moveSpeedMul||1)
+            const speed=(sprinting?player.sprintSpeed:player.speed)*PLAYER_MOVEMENT_PACE*(spec.moveSpeedMul||1)
               *(1-(spec.adsMovePenalty??.14)*(state.ads?1:0));
             const len=Math.hypot(f,s)||1;
             // Match gameplay acceleration/braking so starts and reversals can be
