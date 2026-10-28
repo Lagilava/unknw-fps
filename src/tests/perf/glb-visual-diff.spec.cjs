@@ -24,6 +24,7 @@ const VIEWER_HTML = `<!doctype html><meta charset="utf-8"><body style="margin:0;
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 const SIZE = ${SIZE};
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -34,6 +35,8 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 window.renderGlb = async (url) => {
   const loader = new GLTFLoader(); loader.setMeshoptDecoder(MeshoptDecoder);
+  // Only the ORIGINAL of a re-encoded Draco file (ferrari.glb) needs this; the game has no Draco support.
+  const draco = new DRACOLoader().setDecoderPath("/node_modules/three/examples/jsm/libs/draco/gltf/"); loader.setDRACOLoader(draco);
   const gltf = await loader.loadAsync(url);
   const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2b2f36); scene.environment = env;
   scene.add(new THREE.DirectionalLight(0xffffff, 1.2));

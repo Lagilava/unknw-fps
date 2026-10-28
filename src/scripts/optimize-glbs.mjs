@@ -26,7 +26,9 @@ import { ALL_EXTENSIONS, EXTTextureWebP } from "@gltf-transform/extensions";
 import { dedup, prune, weld, quantize, meshopt } from "@gltf-transform/functions";
 import { MeshoptEncoder, MeshoptDecoder } from "meshoptimizer";
 import sharp from "sharp";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import vm from "node:vm";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 const ASSETS = resolve("assets");
@@ -43,7 +45,9 @@ const HERO = new Set([
   "world/landmark-statue.glb",
 ]);
 // Always processed even if under MIN_BYTES.
-const EXTRA = [];
+// ferrari.glb is under the size sweep but is Draco-compressed and the game has no DRACOLoader,
+// so it never rendered; decoding it and re-encoding as meshopt makes it loadable.
+const EXTRA = ["models/ferrari.glb"];
 
 const dryRun = process.argv.includes("--dry-run");
 const explicit = process.argv.slice(2).filter(a => !a.startsWith("--"));
@@ -70,11 +74,21 @@ function targets() {
   return [...out].sort();
 }
 
+// Draco decoder for reading Draco inputs, taken from three's own copy (no extra dependency).
+async function createDracoDecoder() {
+  const dir = resolve("node_modules/three/examples/jsm/libs/draco/gltf");
+  const ctx = { module: { exports: {} }, require: createRequire(import.meta.url), __dirname: dir, console, process, WebAssembly, TextDecoder, setTimeout };
+  ctx.exports = ctx.module.exports; ctx.self = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync(`${dir}/draco_decoder.js`, "utf8"), ctx);
+  return ctx.module.exports({ wasmBinary: readFileSync(`${dir}/draco_decoder.wasm`) });
+}
+
 await MeshoptEncoder.ready;
 await MeshoptDecoder.ready;
 const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
-  .registerDependencies({ "meshopt.decoder": MeshoptDecoder, "meshopt.encoder": MeshoptEncoder });
+  .registerDependencies({ "meshopt.decoder": MeshoptDecoder, "meshopt.encoder": MeshoptEncoder, "draco3d.decoder": await createDracoDecoder() });
 
 // Some shipped textures have JPEG data gltf-transform's strict size parser
 // rejects (Pete.glb). Re-encode those through sharp (which is tolerant) first.
@@ -127,6 +141,8 @@ for (const file of targets()) {
 
   const doc = await io.read(source);
   const root = doc.getRoot();
+  // Draco inputs are decoded on read; drop the extension so the output is not Draco.
+  for (const ext of root.listExtensionsUsed()) if (ext.extensionName === "KHR_draco_mesh_compression") ext.dispose();
   // assets-src/ is git-ignored, so on a fresh clone the files in assets/ are already
   // the optimised ones. Re-encoding them would be a second lossy generation (and would
   // back the optimised file up as if it were the original) — skip instead.
@@ -139,7 +155,7 @@ for (const file of targets()) {
   const repaired = await repairUnreadableTextures(doc);
 
   const steps = [dedup(), prune({ keepLeaves: true })];
-  if (!skinned) steps.push(weld(), quantize(), meshopt({ encoder: MeshoptEncoder, level: "medium" }));
+  if (!skinned) steps.push(weld(), quantize(), meshopt({ encoder: MeshoptEncoder, level: "high" }));
   await doc.transform(...steps);
   await compressTextures(doc, maxSize);
 
