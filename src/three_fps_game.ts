@@ -126,6 +126,10 @@ declare module "three" {
   RectAreaLightUniformsLib.init();
 
   const createGLTFLoader = () => createConfiguredGLTFLoader(THREE, GLTFLoader);
+  // exterior_map.js is a classic script (outside Vite's module graph, no importmap in the
+  // built page), so it cannot import GLTFLoader by bare specifier. It borrows the configured
+  // loader (MeshoptDecoder set) from here instead.
+  (window as any).__rbCreateGLTFLoader = createGLTFLoader;
 
   function withStartupTimeout(promise, ms, label) {
     let timeoutId: any = 0;

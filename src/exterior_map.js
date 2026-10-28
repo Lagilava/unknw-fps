@@ -1395,12 +1395,22 @@
     }
 
     // ── GLTF loaders ─────────────────────────────────────────────────────
+    // The built page has no importmap, so a bare "three/examples/..." import from this classic
+    // script fails there. three_fps_game.ts publishes its configured loader (MeshoptDecoder set;
+    // assets/ GLBs are meshopt-compressed) as window.__rbCreateGLTFLoader; the dynamic import is
+    // only the path for pages without it.
+    async function createExteriorGLTFLoader() {
+      if (typeof window.__rbCreateGLTFLoader === "function") return window.__rbCreateGLTFLoader();
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+      const { MeshoptDecoder } = await import("three/examples/jsm/libs/meshopt_decoder.module.js");
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      return loader;
+    }
+
     async function loadAndPlaceCars() {
       try {
-        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        const { MeshoptDecoder } = await import("three/examples/jsm/libs/meshopt_decoder.module.js");
-        const loader = new GLTFLoader();
-        loader.setMeshoptDecoder(MeshoptDecoder); // assets/ GLBs are meshopt-compressed (optimize-glbs.mjs)
+        const loader = await createExteriorGLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load(
           "../assets/models/ferrari.glb",
           res, undefined, rej
@@ -1434,17 +1444,15 @@
           });
           scene.add(clone); addCollider(cx, cz, 4.2, 2.2); extWallMeshes.push(clone);
         }
-      } catch (_) {
+      } catch (err) {
+        console.warn("[Exterior] ferrari.glb could not be loaded; using procedural parked cars.", err);
         placeParkedCars();
       }
     }
 
     async function loadAndPlaceTrees() {
       try {
-        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        const { MeshoptDecoder } = await import("three/examples/jsm/libs/meshopt_decoder.module.js");
-        const loader = new GLTFLoader();
-        loader.setMeshoptDecoder(MeshoptDecoder); // assets/ GLBs are meshopt-compressed (optimize-glbs.mjs)
+        const loader = await createExteriorGLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load("../assets/models/tree.glb", res, undefined, rej));
         const template = gltf.scene;
         const box = new THREE.Box3().setFromObject(template);
@@ -1464,7 +1472,8 @@
           });
           scene.add(clone); addCollider(cx, cz, Math.max(2, cr), Math.max(2, cr));
         }
-      } catch (_) {
+      } catch (err) {
+        console.warn("[Exterior] tree.glb could not be loaded; using procedural trees.", err);
         buildTrees(TREE_SPOTS);
       }
     }
