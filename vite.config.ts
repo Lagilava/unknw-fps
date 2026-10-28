@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import { cpSync, existsSync, statSync, readdirSync, createReadStream } from 'node:fs';
-import { resolve, join, extname, basename } from 'node:path';
+import { resolve, join, extname, basename, relative, sep } from 'node:path';
 
 const projectRoot = process.cwd();
 const srcRoot = resolve(projectRoot, 'src');
@@ -54,9 +54,16 @@ function copySiblingAssetsOnBuild(): Plugin {
         const keepFbx = process.env.KEEP_FBX === '1';
         // Also never requested at runtime: the zombie BASE MESH FBX (legacy FBX 6100,
         // already converted to parasite_zombie.glb) and FBX2glTF's extracted-texture
-        // folders (*.fbm). KEEP_ALL_ASSETS=1 disables just these two filters (KEEP_FBX covers the shadowed FBX).
+        // folders (*.fbm). KEEP_ALL_ASSETS=1 disables just these never-requested/orphan filters (KEEP_FBX covers the shadowed FBX).
         const keepAll = process.env.KEEP_ALL_ASSETS === '1';
         const NEVER_REQUESTED_FILES = new Set(['Parasite L Starkie.fbx']);
+        // Orphans: no file in the repo (src/, html, js, mjs, cjs, ts, json) mentions them.
+        // Matched by path under assets/ so same-named files elsewhere are unaffected.
+        const ORPHAN_PATHS = [
+          /^models\/player\/editor-generated_[^/]*\.png$/,
+          /^landmarks\/(GlassVaseFlowers|ScatteringSkull|ToyCar|AntiqueCamera|Lantern)\.glb$/,
+        ];
+        const relToAssets = (p: string) => relative(assetsDir, p).split(sep).join('/');
         let skipped = 0;
         let skippedBytes = 0;
         const skipSize = (p: string) => {
@@ -68,7 +75,7 @@ function copySiblingAssetsOnBuild(): Plugin {
           recursive: true,
           filter(src) {
             const base = basename(src);
-            if (!keepAll && (base.toLowerCase().endsWith('.fbm') || NEVER_REQUESTED_FILES.has(base))) {
+            if (!keepAll && (base.toLowerCase().endsWith('.fbm') || NEVER_REQUESTED_FILES.has(base) || ORPHAN_PATHS.some(re => re.test(relToAssets(src))))) {
               skipped++;
               skippedBytes += skipSize(src);
               return false;
