@@ -107,7 +107,10 @@ declare module "three" {
   const THREE = await import("three");
   const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
   const { RGBELoader } = await import("three/examples/jsm/loaders/RGBELoader.js");
-  const { FBXLoader } = await import("three/examples/jsm/loaders/FBXLoader.js");
+  // FBXLoader is only a fallback (every asset has a GLB), so it is imported on first
+  // use instead of being fetched at boot. Shared so all fallbacks reuse one instance.
+  let fbxLoaderPromise: Promise<any> | null = null;
+  const getFbxLoader = () => (fbxLoaderPromise ||= import("three/examples/jsm/loaders/FBXLoader.js").then(m => new m.FBXLoader()));
   const { clone: skeletonClone } = await import("three/examples/jsm/utils/SkeletonUtils.js");
   const { mergeGeometries } = await import("three/examples/jsm/utils/BufferGeometryUtils.js");
   const { RectAreaLightUniformsLib } = await import("three/examples/jsm/lights/RectAreaLightUniformsLib.js");
@@ -8186,14 +8189,13 @@ function createLightningEffect() {
     }
 
     const gltfLoader = createGLTFLoader();
-    const fbxLoader = new FBXLoader();
     try {
       try {
         const gltf = await gltfLoader.loadAsync(new URL(PLAYER_MODEL_GLTF_PATH, window.location.href).href);
         PLAYER_CHARACTER_FBX = gltf.scene;
       } catch (glbErr) {
         console.warn("Pete.glb could not be loaded; trying the original FBX.", glbErr);
-        PLAYER_CHARACTER_FBX = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(PLAYER_MODEL_PATH, window.location.href).href));
+        PLAYER_CHARACTER_FBX = await withFilteredFbxWarnings(async () => (await getFbxLoader()).loadAsync(new URL(PLAYER_MODEL_PATH, window.location.href).href));
       }
       // FBX2glTF (used to convert Pete's raw FBX into a scale-consistent GLB — see
       // scripts/convert-pete.mjs) dedupes bone names on conversion, turning
@@ -8253,7 +8255,7 @@ function createLightningEffect() {
           console.warn(`${PLAYER_ANIMATION_GLTF_PATHS[key]} could not be loaded; trying FBX animation.`, glbErr);
         }
         if (!clip) {
-          const animFbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
+          const animFbx = await withFilteredFbxWarnings(async () => (await getFbxLoader()).loadAsync(new URL(path, window.location.href).href));
           clip = animFbx.animations?.[0] ?? null;
           animFbx.traverse(node=>{if(/Hips$/.test(node.name))sourceHipsHeight=node.position.y;});
         }
@@ -8273,7 +8275,6 @@ function createLightningEffect() {
       return;
     }
     const gltfLoader = createGLTFLoader();
-    const fbxLoader = new FBXLoader();
     try {
       const gltf = await gltfLoader.loadAsync(new URL(ZOMBIE_MODEL_GLB_PATH, window.location.href).href);
       ZOMBIE_CHARACTER_GLB = gltf.scene;
@@ -8318,7 +8319,7 @@ function createLightningEffect() {
             const animGltf = await gltfLoader.loadAsync(new URL(ZOMBIE_ANIMATION_GLTF_PATHS[key], window.location.href).href);
             clip = animGltf.animations?.[0] ?? null;
           } else {
-            const fbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
+            const fbx = await withFilteredFbxWarnings(async () => (await getFbxLoader()).loadAsync(new URL(path, window.location.href).href));
             clip = fbx.animations?.[0] ?? null;
           }
           if (clip) clips[key] = clip;
