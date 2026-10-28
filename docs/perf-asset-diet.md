@@ -194,3 +194,13 @@ and at the end:
 - Cost (not fixed, report only): each Ferrari is ~358,788 tris / 51 meshes / 17 materials, 7 cars ~ 2.5M tris, ~357 draws. tree.glb is 37,248 tris, 1 mesh; 15 separate clones (shared geometry, not InstancedMesh) ~ 559k tris, 15 draws. Trees do not cast shadows (`receiveShadow` only); the Ferraris are in `extWallMeshes` and their shadow behaviour was not measured. Procedural trees were ~164 tris each (~2.5k total).
 - Cheapest fixes: simplify both GLBs with meshopt `simplify` in `optimize-glbs.mjs` (tree to ~3k tris -> ~45k total, -92%; Ferrari to ~20-30k each -> ~170k total, -93%). Instancing the trees saves draw calls only, not triangles.
 - Frame time is unmeasurable in the software-GL sandbox.
+
+## Follow-up 4: decimate ferrari.glb and tree.glb
+
+`optimize-glbs.mjs` has a `DECIMATE` table (originals still in `assets-src/`, re-running is byte-identical).
+
+- **ferrari.glb**: 358,788 -> 41,673 tris, 51 -> 16 meshes (one per material; lamp materials stay separate), ~16 draws per car (was 51+), file 2.23 MB -> 0.35 MB. The source is *double-shelled*: every surface exists twice with an inverted twin, so meshopt could not simplify it at all. The script removes the back-face-culled twin (a voxel ray test picks the one facing open air, voted per component), which alone halves it (179k tris, visually identical), then simplifies per material (interiors hardest). The 25k target was not met: at ~25k the wheel spokes and rear haunches visibly smear, so the plans were kept at 41.7k.
+- **tree.glb**: 37,248 -> 2,982 tris (-92%), 0.24 MB -> 0.03 MB. The 256x1 palette texture is byte-identical. The source is a voxel tree, so the decimated one reads as an organic low-poly tree (slightly greener, less blocky) and loses the red/purple/dark-hole accent voxels; 3k and 6k looked the same at play distance, so 3k stays.
+- **Shadows**: `sun.castShadow` is always on and `renderer.shadowMap.enabled` is true by default, but the GLB cars and trees only set `receiveShadow`, so neither casts (the procedural cars did). Shadow-pass cost from them is 0 triangles before and after; the shadow pass is a constant 62 draws / 154k tris.
+- **Measured per frame (exact GL draw/tri counters, `probe`-style; same three viewpoints)**: main-pass triangles 2.61M -> 0.56M (avenue), 2.60M -> 0.55M (plaza), 2.57M -> 0.52M (interior); main-pass draw calls 489 -> 456, 472 -> 439, 509 -> 481. The cars/trees are in every view because they are never culled. Counts are from 1-2 frames per view (software GL).
+- **dist** 32 MB -> 30 MB, boot download 19.68 MiB -> 17.58 MiB.
