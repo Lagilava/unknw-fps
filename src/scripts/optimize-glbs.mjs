@@ -127,6 +127,14 @@ for (const file of targets()) {
 
   const doc = await io.read(source);
   const root = doc.getRoot();
+  // assets-src/ is git-ignored, so on a fresh clone the files in assets/ are already
+  // the optimised ones. Re-encoding them would be a second lossy generation (and would
+  // back the optimised file up as if it were the original) — skip instead.
+  const alreadyOptimised = root.listExtensionsUsed().some(e => e.extensionName === "EXT_texture_webp" || e.extensionName === "EXT_meshopt_compression");
+  if (source === file && alreadyOptimised) {
+    console.log(`${key}: already optimised and no original in assets-src/ — skipped (restore the original from git history into assets-src/ to re-run)`);
+    continue;
+  }
   const skinned = root.listSkins().length > 0;
   const repaired = await repairUnreadableTextures(doc);
 
