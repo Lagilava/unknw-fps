@@ -25433,6 +25433,20 @@ async function spawnEnemies(wave, options: any = {}) {
     }
   }
 
+  // collapseStaticDrawCalls leaves every instanced batch frustumCulled=false (its instances are
+  // spread across the map, so a one-instance sphere would cull them wrongly). The exterior car and
+  // tree batches are the heavy ones (~250k tris) and all live in the exterior, so give just those
+  // a bounding sphere over all their instances and let three cull them, e.g. while the player is
+  // inside. exterior_map.js registers their geometry uuids in window.__extCullGeometries.
+  function cullExteriorInstancedGroups() {
+    const geos = (window as any).__extCullGeometries as Set<string> | undefined;
+    if (!geos || !geos.size) return;
+    scene.traverse(o => {
+      const inst = o as any;
+      if (inst.isInstancedMesh && geos.has(inst.geometry.uuid)) { inst.computeBoundingSphere(); inst.frustumCulled = true; }
+    });
+  }
+
   // Load GLTF landmark models listed in modules/landmarks.js and place them in the
   // world. Imported PBR materials pick up scene.environment (IBL) automatically. Each
   // item is guarded so one bad/missing model can't break boot. No-op if the manifest
@@ -25675,6 +25689,7 @@ async function spawnEnemies(wave, options: any = {}) {
       // Collapse the now-fully-built static world into instanced draw calls
       // before warming combat effects (enemies/weapons are added after this).
       collapseStaticDrawCalls();
+      cullExteriorInstancedGroups();
       // Build spatial indexes while loading; shots retain exact surface hits.
       accelerateStaticRaycasts(wallMeshes);
 

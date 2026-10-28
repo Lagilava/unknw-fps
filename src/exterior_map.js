@@ -1408,6 +1408,13 @@
       return loader;
     }
 
+    // Geometry uuids of the car/tree GLB templates. The game's collapseStaticDrawCalls turns the
+    // shared-material clones of these into InstancedMeshes that are never frustum-culled; the game
+    // reads this set afterwards (cullExteriorInstancedGroups) to give just those batches a bounding
+    // sphere over all their instances.
+    window.__extCullGeometries = window.__extCullGeometries || new Set();
+    const markCullable = root => root.traverse(o => { if (o.isMesh) window.__extCullGeometries.add(o.geometry.uuid); });
+
     async function loadAndPlaceCars() {
       try {
         const loader = await createExteriorGLTFLoader();
@@ -1416,6 +1423,7 @@
           res, undefined, rej
         ));
         const templateScene = gltf.scene;
+        markCullable(templateScene);
         const box = new THREE.Box3().setFromObject(templateScene);
         const sz = new THREE.Vector3(); box.getSize(sz);
         const scaleFactor = 3.8 / Math.max(sz.x, sz.z);
@@ -1460,8 +1468,7 @@
         // The GLB cars do not cast shadows (40 meshes x 7 cars would triple the shadow pass), so
         // a single instanced 24-triangle hull (lower body + cabin) casts for all of them. Its
         // material writes neither colour nor depth, so it is invisible in the main pass; the
-        // shadow pass uses its own depth material and ignores that. frustumCulled stays off like
-        // the game's other instanced batches (collapseStaticDrawCalls), the sphere is one instance.
+        // shadow pass uses its own depth material and ignores that.
         const hullParts = [[3.7, 0.55, 1.85, 0.5, 0], [1.9, 0.5, 1.55, 0.98, -0.2]].map(([w, h, d, y, x]) => {
           const g = new THREE.BoxGeometry(w, h, d).toNonIndexed(); g.translate(x, y, 0); return g;
         });
@@ -1475,9 +1482,9 @@
         const proxy = new THREE.InstancedMesh(hull, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }), CAR_SPOTS.length);
         proxy.name = "car-shadow-proxy";
         proxy.castShadow = true;
-        proxy.frustumCulled = false;
         const m4 = new THREE.Matrix4();
         CAR_SPOTS.forEach(({ cx, cz, ry }, i) => { m4.makeRotationY(ry); m4.setPosition(cx, 0, cz); proxy.setMatrixAt(i, m4); });
+        proxy.computeBoundingSphere();   // over all 7 instances, so it culls with the rest of the exterior
         scene.add(proxy);
       } catch (err) {
         console.warn("[Exterior] ferrari.glb could not be loaded; using procedural parked cars.", err);
@@ -1490,6 +1497,7 @@
         const loader = await createExteriorGLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load("../assets/models/tree.glb", res, undefined, rej));
         const template = gltf.scene;
+        markCullable(template);
         const box = new THREE.Box3().setFromObject(template);
         const sz = new THREE.Vector3(); box.getSize(sz);
         if (sz.y < 0.1) { buildTrees(TREE_SPOTS); return; }
