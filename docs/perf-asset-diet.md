@@ -186,3 +186,11 @@ and at the end:
   provided" and the procedural cars are used. The legacy page has always behaved this way (silently). The built site
   now downloads the 1.6 MB file and discards it. Options: wire a DRACOLoader with a locally hosted decoder (~250 KB,
   copy `three/examples/jsm/libs/draco/gltf/` into the build), re-encode ferrari.glb to meshopt, or stop requesting it.
+
+## Follow-up 3: ferrari.glb re-encode, car check, tree report
+
+- `models/ferrari.glb` was Draco-compressed and the game has no DRACOLoader, so it never rendered. `optimize-glbs.mjs` now decodes Draco (three's own decoder, run in Node) and writes weld + quantize + meshopt. Original in `assets-src/models/ferrari.glb`. 1.60 MB (Draco) -> 2.23 MB (meshopt). No `KHR_draco_mesh_compression`; requires `EXT_meshopt_compression` + `KHR_mesh_quantization`; loads through the shared `createGLTFLoader`. Visual diff (`glb-visual-diff.spec.cjs`): PSNR 47.2 dB.
+- Built site: `ferrari.glb` and `tree.glb` both 200, no loader warnings. The model's nose points -Z (the procedural car's is +X), so `exterior_map.js` now sets `clone.rotation.y = ry - Math.PI / 2`, clones lamp materials per car and registers each car in `window.__extCarAlarms` so alarms flash it. Scale (3.8 m long) and ground contact (min y = 0) were already right.
+- Cost (not fixed, report only): each Ferrari is ~358,788 tris / 51 meshes / 17 materials, 7 cars ~ 2.5M tris, ~357 draws. tree.glb is 37,248 tris, 1 mesh; 15 separate clones (shared geometry, not InstancedMesh) ~ 559k tris, 15 draws. Trees do not cast shadows (`receiveShadow` only); the Ferraris are in `extWallMeshes` and their shadow behaviour was not measured. Procedural trees were ~164 tris each (~2.5k total).
+- Cheapest fixes: simplify both GLBs with meshopt `simplify` in `optimize-glbs.mjs` (tree to ~3k tris -> ~45k total, -92%; Ferrari to ~20-30k each -> ~170k total, -93%). Instancing the trees saves draw calls only, not triangles.
+- Frame time is unmeasurable in the software-GL sandbox.
