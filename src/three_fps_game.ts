@@ -10,15 +10,11 @@ import { createWeaponHud } from "./modules/weapon_hud";
 import { beginWeaponReload, cancelWeaponReload, advanceWeaponReload, weaponReloadProgress, aimCursorTangents, adsLookScale, dampAds } from "./modules/weapon_handling";
 import { AIM_PROFILES, getWeaponAdsFov, createAimSight } from "./modules/weapon_ads";
 ﻿﻿import {
-  ANGEL_DRONE_TEXTURE_PATHS,
   EXTERIOR_CITY_MODEL_PATH,
   PLAYER_ANIMATION_GLTF_PATHS,
   PLAYER_ANIMATION_PATHS,
   PLAYER_MODEL_GLTF_PATH,
   PLAYER_MODEL_PATH,
-  SIEGE_DRONE_MODEL_PATH,
-  SIEGE_DRONE_MODEL_GLB_PATH,
-  SIEGE_DRONE_WALK_ANIMATION_PATH,
   STARTUP_TEXTURE_ASSETS,
 } from "./modules/asset_paths.js";
 import {
@@ -1439,9 +1435,6 @@ declare module "three" {
   const damageNumbers = [];
   const lightningEffects = [];
   const lightningPool = [];
-  let SIEGE_DRONE_MODEL_GLTF = null;
-  let SIEGE_DRONE_WALK_FBX = null;
-  let ANGEL_DRONE_MATERIALS = null;
   let PLAYER_CHARACTER_FBX = null;
   const PLAYER_CHARACTER_ANIMS: Record<string, any> = {};
   let ZOMBIE_CHARACTER_GLB = null;       // shared base scene; per-enemy clones via SkeletonUtils
@@ -8178,205 +8171,10 @@ function createLightningEffect() {
     await Promise.all(Array.from({ length: Math.min(concurrency, paths.length) }, worker));
   }
 
-  function loadTexture(path, options: any = {}) {
-    const texture = new THREE.TextureLoader().load(new URL(path, window.location.href).href);
-    texture.colorSpace = options.color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    texture.flipY = false;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    return texture;
-  }
-
-  function createAngelDroneMaterials() {
-    const skeletonBaseColor = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.skeletonBaseColor, { color: true });
-    const skeletonNormal = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.skeletonNormal);
-    const skeletonRoughness = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.skeletonRoughness);
-    const skeletonMetallic = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.skeletonMetallic);
-    const skeletonAo = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.skeletonAo);
-
-    const armBaseColor = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.armBaseColor, { color: true });
-    const armNormal = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.armNormal);
-    const armRoughness = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.armRoughness);
-    const armMetallic = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.armMetallic);
-    const armAo = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.armAo);
-
-    const glowAlpha = loadTexture(ANGEL_DRONE_TEXTURE_PATHS.glowAlpha);
-
-    return {
-      skeleton: new THREE.MeshStandardMaterial({
-        name: "angel_skeleton_pbr",
-        map: skeletonBaseColor,
-        normalMap: skeletonNormal,
-        normalScale: new THREE.Vector2(1.12, -1.12),
-        roughnessMap: skeletonRoughness,
-        metalnessMap: skeletonMetallic,
-        aoMap: skeletonAo,
-        color: 0xf1f7ff,
-        emissive: 0x07101a,
-        emissiveIntensity: 0.12,
-        roughness: 0.54,
-        metalness: 0.62,
-        envMapIntensity: 0.95,
-      }),
-      arm: new THREE.MeshStandardMaterial({
-        name: "angel_arm_pbr",
-        map: armBaseColor,
-        normalMap: armNormal,
-        roughnessMap: armRoughness,
-        metalnessMap: armMetallic,
-        aoMap: armAo,
-        color: 0xdbe9f5,
-        emissive: 0x08111a,
-        emissiveIntensity: 0.1,
-        roughness: 0.48,
-        metalness: 0.5,
-        envMapIntensity: 0.82,
-      }),
-      glow: new THREE.MeshBasicMaterial({
-        name: "angel_glow",
-        color: 0x9eeaff,
-        alphaMap: glowAlpha,
-        transparent: true,
-        opacity: 0.2,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    };
-  }
-
-  function prepareAngelDroneModel(model) {
-    const materials = ANGEL_DRONE_MATERIALS || (ANGEL_DRONE_MATERIALS = createAngelDroneMaterials());
-    const removableNames = /^(bg_plane|halo_outer_ring|blood_drops_|inner_torus|outter_torus|glow|halo|aura)/i;
-    // The source FBX ships its animation rig's control gizmos as renderable meshes
-    // (per-finger "*_control" shapes, joint controls, etc.) — ~150 invisible-intent
-    // meshes per drone, each a draw call that scales with enemy count. The body is
-    // skinned to bones, not these controls, so stripping them is purely a render
-    // win. This was the dominant draw-call cost at higher waves.
-    const rigControlNames = /(control|_ctrl)\b|_control_|_control$/i;
-    const removals = [];
-    let keptHandMesh = false;
-
-    model.traverse(obj => {
-      // Rig-control gizmos render as Line/LineSegments/Points (NURBS control
-      // curves), not just Mesh — so we must catch all renderable types here.
-      // Bones are isBone (non-renderable) and are left intact, so skinning works.
-      const renderable = obj.isMesh || obj.isLine || obj.isLineSegments || obj.isPoints;
-      if (!renderable) return;
-      if (removableNames.test(obj.name || "") || rigControlNames.test(obj.name || "")) {
-        removals.push(obj);
-        return;
-      }
-      if (!obj.isMesh) return; // only true meshes get the material/uv treatment below
-
-      if (/^hand\d*arm_mesh$/i.test(obj.name || "")) {
-        if (keptHandMesh) {
-          removals.push(obj);
-          return;
-        }
-        keptHandMesh = true;
-      }
-
-      obj.castShadow = true;
-      obj.receiveShadow = true;
-      obj.frustumCulled = false;
-
-      if (!obj.geometry.attributes.uv2 && obj.geometry.attributes.uv) {
-        obj.geometry.setAttribute("uv2", obj.geometry.attributes.uv);
-      }
-
-      const name = `${obj.name || ""} ${Array.isArray(obj.material) ? obj.material.map(mat => mat?.name || "").join(" ") : obj.material?.name || ""}`.toLowerCase();
-      if (name.includes("arm_mat") || name.includes("arm_mesh")) {
-        obj.material = materials.arm;
-      } else if (name.includes("glow")) {
-        obj.material = materials.glow;
-      } else {
-        obj.material = materials.skeleton;
-      }
-
-      const materialList = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const material of materialList) {
-        if (!material) continue;
-        material.flatShading = false;
-        material.morphNormals = true;
-        material.roughness = Math.min(0.88, (material.roughness ?? 0.6) + 0.015);
-        material.metalness = Math.min(0.78, (material.metalness ?? 0.35) + 0.06);
-        if (typeof material.emissiveIntensity === "number") material.emissiveIntensity *= 0.88;
-        if (typeof material.envMapIntensity === "number") material.envMapIntensity *= 1.14;
-        material.needsUpdate = true;
-      }
-    });
-
-    let removed = 0;
-    for (const obj of removals) {
-      // Safety: never strip something that contains the skinned body (guards
-      // against a rig where a control is an ancestor of the deforming mesh).
-      let holdsSkin = false;
-      obj.traverse(c => { if (c.isSkinnedMesh) holdsSkin = true; });
-      if (holdsSkin) continue;
-      obj.parent?.remove(obj);
-      obj.geometry?.dispose?.();
-      if (Array.isArray(obj.material)) obj.material.forEach(mat => mat?.dispose?.());
-      else obj.material?.dispose?.();
-      removed++;
-    }
-    console.log(`[drone] prepareAngelDroneModel: removed ${removed} rig/junk objects from source model`);
-  }
-
-  async function loadSiegeDroneModel() {
-    if (window.location.protocol === "file:") {
-      console.warn("angel drone model is not loaded from file:// pages");
-      return null;
-    }
-    // Prefer the decimated glb (~53k tris) — vastly cheaper than the ~1M-tri FBX.
-    // Falls back to the original FBX if the glb is missing.
-    try {
-      const gltfLoader = createGLTFLoader();
-      const glbUrl = new URL(SIEGE_DRONE_MODEL_GLB_PATH, window.location.href);
-      const gltf = await gltfLoader.loadAsync(glbUrl.href);
-      const model = gltf.scene;
-      prepareAngelDroneModel(model);
-      model.userData.modelEditorHeight = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).y;
-      registerModelEditorRoot(model, "angel");
-      console.log(`[drone] loaded optimized glb (${(gltf.animations || []).length} clips)`);
-      return { scene: model, animations: gltf.animations || [] };
-    } catch (glbErr) {
-      console.warn("angel skeleton.glb unavailable; falling back to the FBX.", glbErr);
-    }
-    try {
-      const loader = new FBXLoader();
-      const modelUrl = new URL(SIEGE_DRONE_MODEL_PATH, window.location.href);
-      loader.setResourcePath(new URL("../textures/", modelUrl).href);
-      const model = await withFilteredFbxWarnings(() => loader.loadAsync(modelUrl.href));
-      prepareAngelDroneModel(model);
-      model.userData.modelEditorHeight = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).y;
-      registerModelEditorRoot(model, "angel");
-      return { scene: model, animations: model.animations || [] };
-    } catch (err) {
-      console.warn("angel skeleton.fbx could not be loaded; Siege Drone character rig unavailable.", err);
-      return null;
-    }
-  }
-
-  async function loadSiegeDroneWalkAnimation() {
-    try {
-      if (window.location.protocol === "file:") {
-        console.warn("angel skeleton.fbx animation is not loaded from file:// pages");
-        return null;
-      }
-      const loader = new FBXLoader();
-      const animationUrl = new URL(SIEGE_DRONE_WALK_ANIMATION_PATH, window.location.href);
-      loader.setResourcePath(new URL("../textures/", animationUrl).href);
-      const fbx = await withFilteredFbxWarnings(() => loader.loadAsync(animationUrl.href));
-      if (!fbx.animations || fbx.animations.length === 0) {
-        console.warn("angel skeleton.fbx loaded but contains no animation clips.");
-        return null;
-      }
-      return fbx;
-    } catch (err) {
-      console.warn("angel skeleton.fbx animation could not be loaded; Siege Drone will walk without the FBX animation.", err);
-      return null;
-    }
-  }
+  // The pre-Storm-Warden angel drone loaders (loadSiegeDroneModel, loadSiegeDroneWalkAnimation,
+  // prepareAngelDroneModel, createAngelDroneMaterials) were unreachable — drones are the
+  // procedural Storm Warden — and pointed at assets/drones/angel/, which is not in the repo
+  // (it would 404 in production). Removed; see git history before this note to restore.
 
   async function loadPlayerCharacterAssets() {
     PLAYER_CHARACTER_FBX = null;
@@ -8555,8 +8353,6 @@ function createLightningEffect() {
     // Drones are now the procedural Storm Warden (modules/storm_warden.js), built
     // in code with no external assets — so the old ~60MB angel FBX + textures are
     // no longer loaded at all. Only the player rig needs downloading here.
-    SIEGE_DRONE_MODEL_GLTF = null;
-    SIEGE_DRONE_WALK_FBX = null;
     setLoadingProgress("Loading player rig", 0.2);
     await loadPlayerCharacterAssets();
     setLoadingProgress("Loading zombie rig", 0.34);

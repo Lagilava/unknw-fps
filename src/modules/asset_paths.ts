@@ -1,5 +1,8 @@
 const MODEL_ASSET_ROOT = "../assets/models";
 const PLAYER_MODEL_ASSET_ROOT = `${MODEL_ASSET_ROOT}/player`;
+// DEAD for the game: assets/drones/angel/ is not in the repo and nothing in
+// three_fps_game.ts loads it any more (drones are the procedural Storm Warden).
+// These constants remain only because the standalone model_preview.html imports them.
 const ANGEL_DRONE_ASSET_ROOT = "../assets/drones/angel";
 
 export const SIEGE_DRONE_MODEL_PATH = `${ANGEL_DRONE_ASSET_ROOT}/source/skeleton.fbx`;
