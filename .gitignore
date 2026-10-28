@@ -28,6 +28,9 @@ angel.zip
 # ── Unused heavyweight assets (not referenced by any runtime code) ────────────
 assets/models/player/Remy.fbx
 assets-original/
+# Untouched originals of GLBs shrunk by src/scripts/optimize-glbs.mjs (local backup;
+# the vite build only copies assets/, so these never reach dist)
+assets-src/
 
 # ── Babylon.js editor leftovers (unrelated tooling, not loaded by the game) ───
 .bjseditor/

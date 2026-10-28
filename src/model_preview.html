@@ -1226,6 +1226,7 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
     import {
       PLAYER_ANIMATION_GLTF_PATHS,
       PLAYER_ANIMATION_PATHS,
@@ -1880,7 +1881,7 @@
     }
 
     async function loadGltfModel(primaryPath, fallbackPath) {
-      const loader = new GLTFLoader();
+      const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
       try {
         const gltf = await loader.loadAsync(new URL(primaryPath, window.location.href).href);
         return gltf.scene;
@@ -1899,7 +1900,7 @@
       if (animationClipCache.has(cacheKey)) return animationClipCache.get(cacheKey);
 
       const promise = (async () => {
-        const gltfLoader = new GLTFLoader();
+        const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
         const fbxLoader = new FBXLoader();
         try {
           const clipScene = await gltfLoader.loadAsync(new URL(primaryPath, window.location.href).href);

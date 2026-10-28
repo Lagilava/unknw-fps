@@ -25654,7 +25654,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
   async function loadWorldLandmarks() {
     if (!Array.isArray(LANDMARKS) || LANDMARKS.length === 0) return;
-    const loader = new GLTFLoader();
+    const loader = createGLTFLoader();
     const group = new THREE.Group();
     group.name = "WorldLandmarks";
     scene.add(group);

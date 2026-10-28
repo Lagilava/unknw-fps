@@ -1,3 +1,5 @@
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+
 // THREE / GLTF parser are supplied by the game's dynamic Three import, so they're
 // typed loosely here (any) — this custom glTF extension pokes at internal parser
 // state that @types/three doesn't model. Tighten if/when the loaders are typed.
@@ -53,6 +55,9 @@ class GLTFMaterialsPbrSpecularGlossinessExtension {
 
 export function createGLTFLoader(THREE: any, GLTFLoader: any) {
   const loader = new GLTFLoader();
+  // assets/ GLBs are meshopt-compressed by src/scripts/optimize-glbs.mjs — every
+  // GLTFLoader in the game must come from here (or set this itself) or they fail.
+  loader.setMeshoptDecoder(MeshoptDecoder);
   loader.register((parser: any) => new GLTFMaterialsPbrSpecularGlossinessExtension(parser, THREE));
   return loader;
 }

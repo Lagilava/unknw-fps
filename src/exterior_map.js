@@ -1398,7 +1398,9 @@
     async function loadAndPlaceCars() {
       try {
         const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        const { MeshoptDecoder } = await import("three/examples/jsm/libs/meshopt_decoder.module.js");
         const loader = new GLTFLoader();
+        loader.setMeshoptDecoder(MeshoptDecoder); // assets/ GLBs are meshopt-compressed (optimize-glbs.mjs)
         const gltf = await new Promise((res, rej) => loader.load(
           "../assets/models/ferrari.glb",
           res, undefined, rej
@@ -1440,7 +1442,9 @@
     async function loadAndPlaceTrees() {
       try {
         const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        const { MeshoptDecoder } = await import("three/examples/jsm/libs/meshopt_decoder.module.js");
         const loader = new GLTFLoader();
+        loader.setMeshoptDecoder(MeshoptDecoder); // assets/ GLBs are meshopt-compressed (optimize-glbs.mjs)
         const gltf = await new Promise((res, rej) => loader.load("../assets/models/tree.glb", res, undefined, rej));
         const template = gltf.scene;
         const box = new THREE.Box3().setFromObject(template);
