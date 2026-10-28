@@ -149,3 +149,24 @@ and at the end:
 5. `src/tests/perf/network-audit.spec.cjs` needs `npx vite preview` running to audit the built output (command in
    its header). Also note Playwright 1.61 in my sandbox didn't match the installed browsers, so I ran with a scratch
    config pointing at `/opt/pw-browsers/chromium`; the repo's `playwright.config.cjs` is unchanged.
+
+## Follow-up (same branch)
+
+1. **Deploy trim** — `vite.config.ts` also skips `Parasite L Starkie.fbx` and `*.fbm/` (only `models/character.fbm`,
+   4.4 MB). `KEEP_ALL_ASSETS=1` disables just these two filters (`KEEP_FBX=1` still covers the shadowed FBX).
+   Nothing at runtime references them: the only source mentions are the unused `ZOMBIE_MODEL_FBX_PATH` constant and
+   the converter scripts. `dist` 63 MB -> **43 MB**.
+   Left in the deploy for your decision, none referenced by any runtime code (`grep` over `src/` finds no
+   references to any of them): `models/player/editor-generated_79c6….png` 2.57 MiB and `…e94a….png` 2.15 MiB
+   (no reference anywhere in the repo; added with the pistol-animation commit `e5f943a`), and the landmark GLBs
+   `GlassVaseFlowers` 1.8 MB, `ScatteringSkull` 1.4, `ToyCar` 1.4, `AntiqueCamera` 1.2, `Lantern` 0.5 (not in
+   `landmarks.ts`'s manifest).
+2. **Lazy FBXLoader** — now `import()`ed on first fallback use (`getFbxLoader` in `three_fps_game.ts`). Built-site
+   audit: the `FBXLoader-*.js` chunk (47 KB, 15.9 KB over the wire) is no longer requested at boot. Fallback test:
+   a `KEEP_FBX=1` build with `zombies/zombie walk.glb` deleted from `dist` logged "zombie walk.glb could not be loaded;
+   will fall back to the FBX set", fetched the FBXLoader chunk on demand, loaded all 12 zombie FBX clips, 0 failed requests.
+3. **ferrari.glb / tree.glb on the built site** — confirmed never loaded. Evidence: zero requests for either in the
+   built-site audit; the legacy importmap page requests both; and `import("three/examples/jsm/loaders/GLTFLoader.js")`
+   from a classic-script context fails on the built page with "Failed to resolve module specifier" but works on the
+   legacy page. `exterior_map.js` swallows the error (`catch (_) { placeParkedCars(); }` / `buildTrees(...)`), so players on
+   Pages see the procedural boxy cars and procedural trees. No console warning is printed.
