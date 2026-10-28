@@ -81,7 +81,8 @@ async function compare(a, b) {
 test("optimised GLBs render like their originals", async ({ page }) => {
   test.setTimeout(600000);
   fs.mkdirSync(OUT, { recursive: true });
-  const originals = [...walk(path.join(ROOT, "assets-src"))];
+  const only = process.env.GLB_ONLY && new RegExp(process.env.GLB_ONLY);
+  const originals = [...walk(path.join(ROOT, "assets-src"))].filter(f => !only || only.test(f));
   test.skip(originals.length === 0, "no assets-src/ originals — run src/scripts/optimize-glbs.mjs first");
 
   await page.route(VIEWER, route => route.fulfill({ contentType: "text/html", body: VIEWER_HTML }));
