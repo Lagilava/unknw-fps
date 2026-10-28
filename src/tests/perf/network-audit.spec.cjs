@@ -52,6 +52,11 @@ test("network audit: boot + wave + 20s of play", async ({ page }) => {
     const timing = request.timing();
     rows.push({ url, status, bytes, ms: Math.max(0, Math.round(timing.responseEnd)), at: Date.now() - t0, phase, type: request.resourceType() });
   });
+  const loaderWarnings = [];
+  page.on("console", msg => {
+    // Loader fallbacks (e.g. "x.glb could not be loaded; trying FBX") show up here.
+    if (/could not be loaded|failed to load|fall back|falling back/i.test(msg.text()) && ["warning", "error"].includes(msg.type())) loaderWarnings.push(msg.text().slice(0, 200));
+  });
   page.on("requestfailed", request => {
     const url = request.url();
     if (/favicon/i.test(url)) return;
@@ -94,6 +99,7 @@ test("network audit: boot + wave + 20s of play", async ({ page }) => {
     fbxRequests: rows.filter(r => /\.fbx(\?|$)/i.test(r.url)).map(r => ({ url: r.url, bytes: r.bytes, phase: r.phase })),
     lazyOver2MB: rows.filter(r => r.phase === "after" && r.bytes > LAZY_FLAG_BYTES).map(r => ({ url: r.url, bytes: r.bytes })),
     failed: rows.filter(r => r.failed || r.status >= 400).map(r => ({ url: r.url, status: r.status, failed: r.failed })),
+    loaderWarnings,
   };
   for (const r of rows) {
     const b = r.phase === "boot" ? summary.boot : summary.after;
@@ -109,6 +115,8 @@ test("network audit: boot + wave + 20s of play", async ({ page }) => {
   console.log(`Lazy loads >2MB: ${summary.lazyOver2MB.length}`);
   console.log(`Failed/4xx+: ${summary.failed.length}`);
   for (const f of summary.failed) console.log(`  ${f.status} ${f.failed || ""} ${short(f.url)}`);
+  console.log(`Loader fallback warnings: ${loaderWarnings.length}`);
+  for (const w of loaderWarnings) console.log(`  ${w}`);
   console.log(`Wrote ${OUT}`);
 
   expect(rows.length).toBeGreaterThan(0);

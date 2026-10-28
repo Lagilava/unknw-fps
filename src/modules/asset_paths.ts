@@ -55,29 +55,11 @@ export const PLAYER_ANIMATION_PATHS = {
 };
 
 export const PLAYER_MODEL_GLTF_PATH = PLAYER_MODEL_PATH.replace(/\.fbx$/i, ".glb");
-const PLAYER_ANIMATION_GLB_KEYS = new Set([
-  "idle",
-  "walk",
-  "strafe",
-  "sprint",
-  "sprintLeft",
-  "sprintRight",
-  "jump",
-  "fallbackJump",
-  "fire",
-  "reload",
-  // Animation-only GLBs from src/scripts/convert-pistol-anims.mjs (the FBXs
-  // embed a full character, ~52 MB each).
-  "pistolRun",
-  "pistolStrafe",
-  "pistolJump",
-  "grabPistol",
-  "fallenIdle",
-]);
+// Every player clip has an animation-only GLB beside its FBX (the FBX is the
+// fallback): src/scripts/convert-pistol-anims.mjs for the pistol set (their FBXs
+// embed a full ~52 MB character), src/scripts/convert-fbx-anims.mjs for the rest.
 export const PLAYER_ANIMATION_GLTF_PATHS = Object.fromEntries(
-  Object.entries(PLAYER_ANIMATION_PATHS)
-    .filter(([key]) => PLAYER_ANIMATION_GLB_KEYS.has(key))
-    .map(([key, path]) => [key, path.replace(/\.fbx$/i, ".glb")])
+  Object.entries(PLAYER_ANIMATION_PATHS).map(([key, path]) => [key, path.replace(/\.fbx$/i, ".glb")])
 );
 
 // Only the slab's maps are downloaded; walls are generated procedurally in

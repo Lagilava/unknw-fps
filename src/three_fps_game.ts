@@ -37,7 +37,7 @@ import { initPhysics, buildStaticWallColliders, buildExteriorColliders, physicsB
 import { createParticleFX, type ParticleFX } from "./modules/particle_fx";
 import { createStormWarden, STORM_WARDEN_HOVER } from "./modules/storm_warden.js";
 import { createZombieCharacter } from "./modules/zombie_character.js";
-import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
+import { ZOMBIE_MODEL_GLB_PATH, ZOMBIE_ANIMATION_PATHS, ZOMBIE_ANIMATION_GLTF_PATHS, ZOMBIE_ONCE_ANIMATIONS } from "./modules/zombie_assets.js";
 import { LANDMARKS } from "./modules/landmarks.js";
 import { RELAY_UPLOAD_SECONDS, simulationFrame } from "./modules/gameplay_pacing.js";
 import { installIntelGallery } from "./modules/intel_gallery";
@@ -8506,26 +8506,42 @@ function createLightningEffect() {
     }
     // Skeleton-only Mixamo clips (bind 1:1 to the GLB skeleton — verified by
     // modules/zombie_diagnostics.mjs). Bites are excluded by the asset list.
+    // GLB first, FBX only as a fallback — same as the player clips. The two sources
+    // use different units (glTF metres, FBX centimetres) and the crawl clips are
+    // re-scaled against the idle clip's hips height below, so if ANY clip is missing
+    // as GLB the whole set is re-read from FBX rather than mixing units.
     const entries = Object.entries(ZOMBIE_ANIMATION_PATHS);
-    const rawZombieClips: Record<string, any> = {};
-    await Promise.all(entries.map(async ([key, path]) => {
-      try {
-        const fbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
-        const rawClip = fbx.animations?.[0] ?? null;
-        if (!rawClip) return;
-        rawZombieClips[key] = rawClip;
-        // CRITICAL: Mixamo clips carry a Hips.position track in CENTIMETRES (~100),
-        // but the GLB skeleton is in metres (~1). Played as-is, the mixer teleports the
-        // skinned mesh ~100 units into the air (invisible) while collision stays at the
-        // bind-pose box. Stripping the .position tracks (in-place clip) keeps it grounded
-        // and visible — exactly what the player/ghost rigs already do.
-        ZOMBIE_CHARACTER_ANIMS[key] = ZOMBIE_CHARACTER_GLB
-          ? makeInPlaceClipForModel(rawClip, ZOMBIE_CHARACTER_GLB, { preserveHipsHeight: key === 'death' || key === 'dying' })
-          : rawClip;
-      } catch (err) {
-        console.warn(`${path} could not be loaded; skipping zombie animation.`, err);
-      }
-    }));
+    const loadRawClips = async (viaGlb: boolean) => {
+      const clips: Record<string, any> = {};
+      await Promise.all(entries.map(async ([key, path]) => {
+        try {
+          let clip = null;
+          if (viaGlb) {
+            const animGltf = await gltfLoader.loadAsync(new URL(ZOMBIE_ANIMATION_GLTF_PATHS[key], window.location.href).href);
+            clip = animGltf.animations?.[0] ?? null;
+          } else {
+            const fbx = await withFilteredFbxWarnings(() => fbxLoader.loadAsync(new URL(path, window.location.href).href));
+            clip = fbx.animations?.[0] ?? null;
+          }
+          if (clip) clips[key] = clip;
+        } catch (err) {
+          console.warn(`${viaGlb ? ZOMBIE_ANIMATION_GLTF_PATHS[key] : path} could not be loaded; ${viaGlb ? "will fall back to the FBX set" : "skipping zombie animation"}.`, err);
+        }
+      }));
+      return clips;
+    };
+    let rawZombieClips: Record<string, any> = await loadRawClips(true);
+    if (Object.keys(rawZombieClips).length < entries.length) rawZombieClips = await loadRawClips(false);
+    for (const [key, rawClip] of Object.entries(rawZombieClips)) {
+      // CRITICAL: Mixamo clips carry a Hips.position track in CENTIMETRES (~100),
+      // but the GLB skeleton is in metres (~1). Played as-is, the mixer teleports the
+      // skinned mesh ~100 units into the air (invisible) while collision stays at the
+      // bind-pose box. Stripping the .position tracks (in-place clip) keeps it grounded
+      // and visible — exactly what the player/ghost rigs already do.
+      ZOMBIE_CHARACTER_ANIMS[key] = ZOMBIE_CHARACTER_GLB
+        ? makeInPlaceClipForModel(rawClip, ZOMBIE_CHARACTER_GLB, { preserveHipsHeight: key === 'death' || key === 'dying' })
+        : rawClip;
+    }
     // Crawling starts below standing height. Use the idle clip's source-unit
     // reference rather than mapping the crawl's first crouched frame to standing.
     const standingHeight = rawZombieClips.idle?.tracks.find(t => /Hips\.position$/.test(t.name))?.values[1];

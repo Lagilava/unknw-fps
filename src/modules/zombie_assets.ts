@@ -15,7 +15,7 @@ export const ZOMBIE_MODEL_FBX_PATH = `${ZOMBIE_ASSET_ROOT}/Parasite L Starkie.fb
 // Included animation states. The three bite clips are now used as melee VARIANTS
 // (randomised per swing in zombie_character) so the attack reads dynamically instead
 // of the same slap every time — see attackVariants there.
-export const ZOMBIE_ANIMATION_PATHS = {
+export const ZOMBIE_ANIMATION_PATHS: Record<string, string> = {
   idle:       `${ZOMBIE_ASSET_ROOT}/zombie idle.fbx`,
   walk:       `${ZOMBIE_ASSET_ROOT}/zombie walk.fbx`,
   run:        `${ZOMBIE_ASSET_ROOT}/zombie run.fbx`,
@@ -29,6 +29,13 @@ export const ZOMBIE_ANIMATION_PATHS = {
   dying:      `${ZOMBIE_ASSET_ROOT}/zombie dying.fbx`,
   death:      `${ZOMBIE_ASSET_ROOT}/zombie death.fbx`,
 };
+
+// Animation-only GLB beside each clip's FBX (src/scripts/convert-fbx-anims.mjs); the
+// game loads these first and falls back to the FBX. Glb clips carry hips height in
+// metres, FBX in centimetres, so the loader never mixes the two sources.
+export const ZOMBIE_ANIMATION_GLTF_PATHS: Record<string, string> = Object.fromEntries(
+  Object.entries(ZOMBIE_ANIMATION_PATHS).map(([key, path]) => [key, path.replace(/\.fbx$/i, ".glb")])
+);
 
 // The melee-swing clips (all played as upper-body layers over the running legs).
 // zombie_character builds an *_upper variant of each and picks one at random per hit.
