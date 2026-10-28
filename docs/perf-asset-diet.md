@@ -170,3 +170,19 @@ and at the end:
    from a classic-script context fails on the built page with "Failed to resolve module specifier" but works on the
    legacy page. `exterior_map.js` swallows the error (`catch (_) { placeParkedCars(); }` / `buildTrees(...)`), so players on
    Pages see the procedural boxy cars and procedural trees. No console warning is printed.
+
+## Follow-up 2 (same branch)
+
+- **Orphans trimmed from the deploy** (`38d0083`): `models/player/editor-generated_*.png` and
+  `landmarks/{GlassVaseFlowers,ScatteringSkull,ToyCar,AntiqueCamera,Lantern}.glb`. A grep of every
+  html/js/mjs/cjs/ts/json file outside `node_modules`/`dist`/`assets-src` found no reference to any of them.
+  `KEEP_ALL_ASSETS=1` keeps them. `dist` 43 MB -> **32 MB**.
+- **tree.glb on the built site** (own commit): `exterior_map.js` now gets its GLTFLoader (MeshoptDecoder set)
+  from `window.__rbCreateGLTFLoader`, published by `three_fps_game.ts`; its own import stays as the path for pages without it.
+  Catch blocks now `console.warn`. Built site: `tree.glb` 200, real voxel trees render
+  (`built-before/after-tree-fix.png`). Boot download 17.2 -> 19.1 MiB.
+- **ferrari.glb still does not render, on either page.** It is Draco-compressed (`KHR_draco_mesh_compression`
+  required) and no `DRACOLoader` exists anywhere in the codebase, so GLTFLoader throws "No DRACOLoader instance
+  provided" and the procedural cars are used. The legacy page has always behaved this way (silently). The built site
+  now downloads the 1.6 MB file and discards it. Options: wire a DRACOLoader with a locally hosted decoder (~250 KB,
+  copy `three/examples/jsm/libs/draco/gltf/` into the build), re-encode ferrari.glb to meshopt, or stop requesting it.
