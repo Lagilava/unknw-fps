@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import { cpSync, existsSync, statSync, createReadStream } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, extname } from 'node:path';
 
 const projectRoot = process.cwd();
 const srcRoot = resolve(projectRoot, 'src');
@@ -45,7 +45,29 @@ function copySiblingAssetsOnBuild(): Plugin {
         const from = resolve(srcRoot, entry);
         if (existsSync(from)) cpSync(from, resolve(out, entry), { recursive: true });
       }
-      if (existsSync(assetsDir)) cpSync(assetsDir, resolve(out, 'assets'), { recursive: true });
+      if (existsSync(assetsDir)) {
+        // Every runtime loader tries the .glb first and only falls back to the
+        // .fbx (see asset_paths.ts / loadPlayerCharacterAssets), so an .fbx with
+        // a same-named sibling .glb is ~355 MB of dead weight on Pages. Skip it
+        // unless KEEP_FBX=1. The source files in assets/ are never touched, and
+        // the dev server (serveSiblingAssetsInDev) still serves them.
+        const keepFbx = process.env.KEEP_FBX === '1';
+        let skipped = 0;
+        let skippedBytes = 0;
+        cpSync(assetsDir, resolve(out, 'assets'), {
+          recursive: true,
+          filter(src) {
+            if (keepFbx || extname(src).toLowerCase() !== '.fbx') return true;
+            if (!existsSync(src.slice(0, -4) + '.glb')) return true;
+            skipped++;
+            skippedBytes += statSync(src).size;
+            return false;
+          },
+        });
+        if (skipped) {
+          console.log(`[copy-sibling-assets] skipped ${skipped} .fbx with a sibling .glb (${(skippedBytes / 1048576).toFixed(1)} MB); KEEP_FBX=1 to keep`);
+        }
+      }
     },
   };
 }
