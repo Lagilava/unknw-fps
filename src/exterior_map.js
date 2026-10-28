@@ -1433,15 +1433,28 @@
           const clone = templateScene.clone(true);
           clone.scale.setScalar(scaleFactor);
           clone.position.set(cx, yOff, cz);
-          clone.rotation.y = ry;
+          // ferrari.glb is long along Z with its nose at -Z; the procedural car (and the
+          // 4.2 x 2.2 collider below) is long along X with its nose at +X, so turn it -90deg.
+          clone.rotation.y = ry - Math.PI / 2;
+          // Per-car lamp materials so the KeyE car alarm (window.__extCarAlarms, which the
+          // procedural cars register in buildCar) can flash them without lighting every car.
+          const lampMats = [];
           clone.traverse(c => {
             if (!c.isMesh) return;
             c.receiveShadow = true;
             if (c.material?.isMeshBasicMaterial) c.material = new THREE.MeshStandardMaterial({ color: c.material.color });
-            if (c.material && c.material.name && c.material.name.toLowerCase().includes("body")) {
+            const matName = c.material && c.material.name ? c.material.name.toLowerCase() : "";
+            if (matName.includes("body")) {
               c.material = c.material.clone(); c.material.color.setHex(color);
+            } else if (/taillight|turn_signal|projector/.test(matName)) {
+              c.material = c.material.clone();
+              c.material.emissive = new THREE.Color(matName.includes("taillight") ? 0xcc0010 : 0xff6010);
+              c.material.emissiveIntensity = 0;
+              lampMats.push({ mat: c.material, base: 0, scale: 1 });
             }
           });
+          window.__extCarAlarms = window.__extCarAlarms || [];
+          window.__extCarAlarms.push({ x: cx, z: cz, cooldownUntil: 0, mats: lampMats });
           scene.add(clone); addCollider(cx, cz, 4.2, 2.2); extWallMeshes.push(clone);
         }
       } catch (err) {
