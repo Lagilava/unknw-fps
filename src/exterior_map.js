@@ -1457,6 +1457,28 @@
           window.__extCarAlarms.push({ x: cx, z: cz, cooldownUntil: 0, mats: lampMats });
           scene.add(clone); addCollider(cx, cz, 4.2, 2.2); extWallMeshes.push(clone);
         }
+        // The GLB cars do not cast shadows (40 meshes x 7 cars would triple the shadow pass), so
+        // a single instanced 24-triangle hull (lower body + cabin) casts for all of them. Its
+        // material writes neither colour nor depth, so it is invisible in the main pass; the
+        // shadow pass uses its own depth material and ignores that. frustumCulled stays off like
+        // the game's other instanced batches (collapseStaticDrawCalls), the sphere is one instance.
+        const hullParts = [[3.7, 0.55, 1.85, 0.5, 0], [1.9, 0.5, 1.55, 0.98, -0.2]].map(([w, h, d, y, x]) => {
+          const g = new THREE.BoxGeometry(w, h, d).toNonIndexed(); g.translate(x, y, 0); return g;
+        });
+        const hull = new THREE.BufferGeometry();
+        for (const name of ["position", "normal", "uv"]) {
+          const parts = hullParts.map(g => g.attributes[name].array), len = parts.reduce((n, a) => n + a.length, 0);
+          const merged = new Float32Array(len); let off = 0;
+          for (const a of parts) { merged.set(a, off); off += a.length; }
+          hull.setAttribute(name, new THREE.BufferAttribute(merged, hullParts[0].attributes[name].itemSize));
+        }
+        const proxy = new THREE.InstancedMesh(hull, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }), CAR_SPOTS.length);
+        proxy.name = "car-shadow-proxy";
+        proxy.castShadow = true;
+        proxy.frustumCulled = false;
+        const m4 = new THREE.Matrix4();
+        CAR_SPOTS.forEach(({ cx, cz, ry }, i) => { m4.makeRotationY(ry); m4.setPosition(cx, 0, cz); proxy.setMatrixAt(i, m4); });
+        scene.add(proxy);
       } catch (err) {
         console.warn("[Exterior] ferrari.glb could not be loaded; using procedural parked cars.", err);
         placeParkedCars();
