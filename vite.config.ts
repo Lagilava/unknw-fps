@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
-import { cpSync, existsSync, statSync, readdirSync, createReadStream } from 'node:fs';
+import { readFileSync, cpSync, existsSync, statSync, readdirSync, createReadStream } from 'node:fs';
 import { resolve, join, extname, basename, relative, sep } from 'node:path';
 
 const projectRoot = process.cwd();
@@ -14,6 +14,23 @@ const srcRoot = resolve(projectRoot, 'src');
 // configured `root` (src/), so assets/ needs an explicit dev-time middleware;
 // `vite build` only bundles the HTML's module graph, so all four need an
 // explicit copy into dist on build.
+function canonicalGamePage(): Plugin {
+  return {
+    name: 'canonical-game-page',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, context) {
+        if (resolve(context.filename) !== resolve(srcRoot, 'index.html')) return html;
+        return readFileSync(resolve(srcRoot, 'first_person_shooter_room_game (1).html'), 'utf8')
+          .replace(/<script type="importmap">[\s\S]*?<\/script>/, '')
+          .replace('href="/src/menu_halo.css"', 'href="./menu_halo.css"')
+          .replace(/<!-- Inject the game module[\s\S]*?<\/script>/,
+            '<script type="module" src="./three_fps_game.ts"></script>');
+      },
+    },
+  };
+}
+
 function serveSiblingAssetsInDev(): Plugin {
   const assetsDir = resolve(projectRoot, 'assets');
   return {
@@ -100,7 +117,7 @@ export default defineConfig({
   // Relative URLs so the build works from any sub-path (GitHub Pages serves the
   // game under /<repo>/play/, see .github/workflows/deploy-pages.yml).
   base: './',
-  plugins: [serveSiblingAssetsInDev(), copySiblingAssetsOnBuild()],
+  plugins: [canonicalGamePage(), serveSiblingAssetsInDev(), copySiblingAssetsOnBuild()],
   server: { port: 3000 },
   build: {
     outDir: resolve(projectRoot, 'dist'),

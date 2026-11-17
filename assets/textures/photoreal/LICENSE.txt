@@ -1,0 +1,13 @@
+Source: ambientCG, CC0 1.0 Universal.
+https://ambientcg.com/license
+
+asphalt: https://ambientcg.com/a/Asphalt012
+paving: https://ambientcg.com/a/PavingStones036
+brick: https://ambientcg.com/a/Bricks026
+concrete: https://ambientcg.com/a/Concrete023
+wood: https://ambientcg.com/a/Wood049
+block: https://ambientcg.com/a/Concrete023
+slab: https://ambientcg.com/a/Concrete034
+metal: https://ambientcg.com/a/Metal063
+
+Compressed derivatives: 1024px color WebP; 512px lossless OpenGL normal and packed AO/roughness/metalness WebP. No displacement geometry.

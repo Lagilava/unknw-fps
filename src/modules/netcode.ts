@@ -19,6 +19,7 @@ const ROOM_PREFIX = "rbfps-";
 // Safety limits.
 const MAX_GUESTS        = 7;      // Host + 7 guests = 8 players max.
 const MAX_MSG_BYTES     = 32768;  // 32 KB per message.
+const messageEncoder = new TextEncoder();
 const RATE_LIMIT_WINDOW = 1000;   // ms
 const RATE_LIMIT_MAX    = 200;    // messages per window per peer (for 50 Hz snapshots).
 
@@ -226,7 +227,7 @@ export function createNetwork() {
   }
 
   function estimateMsgSize(data) {
-    try { return JSON.stringify(data).length; } catch (_) { return 0; }
+    try { return messageEncoder.encode(JSON.stringify(data)).byteLength; } catch (_) { return Infinity; }
   }
 
   // ── Heartbeat ──────────────────────────────────────────────────────────────
@@ -244,8 +245,11 @@ export function createNetwork() {
 
   // ── Incoming data handler ─────────────────────────────────────────────────
   function handleIncomingData(conn, data) {
+    // Internal control traffic shares the same budget as gameplay traffic.
+    if (!checkRateLimit(conn.peer)) return;
     if (!data || typeof data !== "object" || Array.isArray(data)) return;
     if (typeof data.t !== "string" || data.t.length > 32) return;
+    if (estimateMsgSize(data) > MAX_MSG_BYTES) return;
 
     // Heartbeat bypass.
     if (data.t === "__ping") {
@@ -264,9 +268,6 @@ export function createNetwork() {
       }
       return;
     }
-
-    if (estimateMsgSize(data) > MAX_MSG_BYTES) return;
-    if (!checkRateLimit(conn.peer)) return;
 
     touch(conn.peer);
     emit("data", data, conn.peer);

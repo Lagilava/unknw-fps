@@ -502,15 +502,7 @@
 
     // Texture cache
     const T = {
-      road:          makeRoadTex(),
-      roadNormal:    makeRoadNormalTex(),
-      wetRoadNormal: makeWetRoadNormalTex(),
       puddleNormal:  makePuddleNormalTex(),
-      sidewalk:      makeSidewalkTex(),
-      brick:         makeBrickTex(),
-      brickNormal:   makeBrickNormalTex(),
-      concrete:      makeConcreteWallTex(),
-      wood:          makeWoodTex(),
       waterNormals:  makeWaterNormalTex(),
       particle:      makeParticleTex(),
       debris:        makeDebrisTex(),
@@ -523,20 +515,20 @@
     const M = {
       // polygonOffset pushes the exterior ground slightly deeper so it never
       // z-fights with the interior floor where the two overlap near the exits.
-      ground:    std({ color:0xd6d7da, roughness:0.96, metalness:0,    map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.04,0.04), polygonOffset:true, polygonOffsetFactor:1.5, polygonOffsetUnits:1.5 }),
-      asphalt:   std({ color:0xc4c6ca, roughness:0.94, metalness:0, map:T.road,     normalMap:T.roadNormal, normalScale:new THREE.Vector2(0.035,0.035) }),
-      wetRoad:   std({ color:0x646a70, roughness:0.24, metalness:0, map:T.road,     normalMap:T.wetRoadNormal, normalScale:new THREE.Vector2(0.6,0.6), envMapIntensity:0.7 }),
-      sidewalk:  std({ color:0x8a8480, roughness:0.88, metalness:0,    map:T.sidewalk }),
-      concrete:  std({ color:0x909090, roughness:0.85, metalness:0,    map:T.concrete }),
-      brick:     std({ color:0xd1b3a1, roughness:0.88, metalness:0,    map:T.brick,    normalMap:T.brickNormal, normalScale:new THREE.Vector2(0.45,0.45) }),
-      brickDark: std({ color:0xa08e83, roughness:0.90, metalness:0,    map:T.brick,    normalMap:T.brickNormal, normalScale:new THREE.Vector2(0.40,0.40) }),
-      stone:     std({ color:0x888880, roughness:0.92, metalness:0,    map:T.concrete }),
+      ground:    std({ color:0xd6d7da, roughness:0.96, metalness:0, normalScale:new THREE.Vector2(0.04,0.04), polygonOffset:true, polygonOffsetFactor:1.5, polygonOffsetUnits:1.5 }),
+      asphalt:   std({ color:0xc4c6ca, roughness:0.94, metalness:0, normalScale:new THREE.Vector2(0.035,0.035) }),
+      wetRoad:   std({ color:0x646a70, roughness:0.24, metalness:0, normalScale:new THREE.Vector2(0.6,0.6), envMapIntensity:0.7 }),
+      sidewalk:  std({ color:0x8a8480, roughness:0.88, metalness:0 }),
+      concrete:  std({ color:0x909090, roughness:0.85, metalness:0 }),
+      brick:     std({ color:0xd1b3a1, roughness:0.88, metalness:0, normalScale:new THREE.Vector2(0.45,0.45) }),
+      brickDark: std({ color:0xa08e83, roughness:0.90, metalness:0, normalScale:new THREE.Vector2(0.40,0.40) }),
+      stone:     std({ color:0x888880, roughness:0.92, metalness:0 }),
       roof:      std({ color:0x5c5a57, roughness:0.95, metalness:0 }),
       metal:     std({ color:0x909090, roughness:0.30, metalness:0.85, normalScale:new THREE.Vector2(0.5,0.5) }),
       metalDark: std({ color:0x6e6e6e, roughness:0.45, metalness:0.80 }),
       metalBase: std({ color:0x3e3e3e, roughness:0.45, metalness:0.30 }),
       lampPole:  std({ color:0x606058, roughness:0.50, metalness:0.70 }),
-      wood:      std({ color:0x7a4e26, roughness:0.85, metalness:0,    map:T.wood }),
+      wood:      std({ color:0x7a4e26, roughness:0.85, metalness:0 }),
       glass:     std({ color:0x1a2030, roughness:0.05, metalness:0.1, transparent:true, opacity:0.45, emissive:new THREE.Color(0x121e34), emissiveIntensity:0.18 }),
       winLit:    std({ color:0x201808, roughness:0.10, metalness:0,   emissive:new THREE.Color(0xffb030), emissiveIntensity:0.28 }),
       winLitCool:std({ color:0x080c18, roughness:0.10, metalness:0,   emissive:new THREE.Color(0x50d8ff), emissiveIntensity:0.22 }),
@@ -554,15 +546,95 @@
       tireTrack: std({ color:0x0a0a0a, roughness:0.95, metalness:0, depthWrite:false, polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-1 }),
     };
 
+    const photo = window.RoomBreachEnvironment.applyPhotographicMaterial;
+    const photoSets = {
+      ground:'asphalt', asphalt:'asphalt', wetRoad:'asphalt', sidewalk:'paving',
+      concrete:'concrete', brick:'brick', brickDark:'brick', stone:'slab',
+      wood:'wood', roof:'asphalt', metal:'metal', metalDark:'metal',
+      metalBase:'metal', lampPole:'metal', manhole:'metal', rust:'metal',
+    };
+    for (const [name, set] of Object.entries(photoSets)) {
+      photo(THREE, renderer, M[name], set);
+      // Scans already contain their natural colour. Multiplying them by the old
+      // painted brown/grey stand-ins crushed the brick and timber into black.
+      if (['wood','asphalt','ground','sidewalk','concrete','brick','stone'].includes(name))
+        M[name].color.setHex(name === 'ground' ? 0xb8b6b0 : 0xffffff);
+    }
+    M.brickDark.color.setHex(0xb9a99d);
+    M.wetRoad.color.setHex(0x929ba2);
+    M.wetRoad.normalScale.setScalar(.12);
+    M.wood.roughness = .95;
+    M.metal.roughness = .65;
+    M.lampPole.roughness = .75;
+    M.rust.metalness = .18; // Oxidised surfaces are predominantly dielectric.
+    // Dark, reflective glazing sits behind the frames; diffuse grey windows
+    // flattened entire facades even after the brickwork gained surface detail.
+    for (const name of ['winDim','winOff','winBlue']) {
+      M[name].color.setHex(name === 'winOff' ? 0x142028 : 0x344957);
+      M[name].metalness = .32;
+      M[name].roughness = name === 'winOff' ? .25 : .14;
+      M[name].envMapIntensity = .85;
+      M[name].emissiveIntensity *= .18;
+    }
+    const paintWear = loadLocal('../assets/textures/photoreal/paint-color.webp',1,1,true);
+    for(const name of ['white','yellow']) {
+      M[name].map = paintWear;
+      M[name].roughnessMap = M.asphalt.roughnessMap;
+      M[name].roughness = .92;
+      M[name].envMapIntensity = .3;
+    }
+    // Diagnostic access for material previews and repeatable screenshots.
+    scene.userData.exteriorMaterials = M;
+
+    // Broad stains in world space break visible tile repetition without decals,
+    // lights, extra meshes, or per-frame CPU work. WebGPU keeps the scanned maps.
+    function weatherSurface(material, road) {
+      material.customProgramCacheKey = () => `photo-weather-v1-${road ? 1 : 0}`;
+      material.onBeforeCompile = shader => {
+        shader.vertexShader = 'varying vec3 vPhotoWorld;\n' + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace('#include <worldpos_vertex>', `
+          #include <worldpos_vertex>
+          vec4 photoPosition = vec4(transformed, 1.);
+          #ifdef USE_INSTANCING
+            photoPosition = instanceMatrix * photoPosition;
+          #endif
+          vPhotoWorld = (modelMatrix * photoPosition).xyz;
+        `);
+        shader.fragmentShader = `varying vec3 vPhotoWorld;
+          float photoHash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+          float photoNoise(vec2 p) {
+            vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+            return mix(mix(photoHash(i),photoHash(i+vec2(1,0)),f.x),
+                       mix(photoHash(i+vec2(0,1)),photoHash(i+vec2(1,1)),f.x),f.y);
+          }\n` + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
+          #include <map_fragment>
+          float photoMottle = photoNoise(vPhotoWorld.xz*.19 + vPhotoWorld.y*.11);
+          float photoDamp = ${road ? 'smoothstep(.48,.84,photoMottle)*.4' : '(1.-smoothstep(.1,1.25,vPhotoWorld.y))*smoothstep(.2,.8,photoMottle)*.5'};
+          diffuseColor.rgb *= mix(vec3(.91,.89,.85),vec3(1.04,1.03,1.01),photoMottle);
+          diffuseColor.rgb *= 1.-photoDamp*.28;
+        `).replace('#include <roughnessmap_fragment>', `
+          #include <roughnessmap_fragment>
+          roughnessFactor = clamp(roughnessFactor - photoDamp*.22, .32, 1.);
+        `);
+      };
+    }
+    for (const name of ['ground','asphalt','wetRoad','sidewalk','concrete','brick','brickDark','stone','wood'])
+      weatherSurface(M[name], ['ground','asphalt','wetRoad'].includes(name));
+
+
     // A texture tile covers a fixed number of metres on every box face.
     // Previously each facade/road slab received the same repeat count regardless
     // of size, stretching brickwork and asphalt across entire city blocks.
     const surfaceTileSize = new Map([
-      [M.ground, 6], [M.asphalt, 6], [M.wetRoad, 6], [M.sidewalk, 4],
-      [M.concrete, 4], [M.stone, 4], [M.brick, 3], [M.brickDark, 3], [M.wood, 3],
+      [M.ground, 3], [M.asphalt, 3], [M.wetRoad, 3], [M.sidewalk, 2],
+      [M.concrete, 3], [M.stone, 4], [M.brick, 2], [M.brickDark, 2], [M.wood, 2],
+      [M.roof, 3], [M.metal, 2], [M.metalDark, 2], [M.metalBase, 2],
+      [M.lampPole, 2], [M.manhole, 1], [M.rust, 2],
+      [M.white, 2], [M.yellow, 2],
     ]);
     for (const mat of surfaceTileSize.keys()) {
-      for (const tex of [mat.map, mat.normalMap]) if (tex) tex.repeat.set(1, 1);
+      for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.aoMap]) if (tex) tex.repeat.set(1, 1);
     }
     function mapSurfaceUV(geo, mat) {
       const tile = surfaceTileSize.get(mat);
@@ -1109,7 +1181,8 @@
 
     // ── Procedural cars ──────────────────────────────────────────────────
     function buildCar(cx, cz, ry, bodyColor) {
-      const bodyMat = std({ color:bodyColor, roughness:0.22, metalness:0.88 });
+      const bodyMat = std({ color:bodyColor, roughness:0.29, metalness:0.28, envMapIntensity:0.85 });
+      bodyMat.color.lerp(new THREE.Color(0x707579), .18);
       const glassMat = std({ color:0x1a2030, roughness:0.04, metalness:0.1, transparent:true, opacity:0.48, emissive:new THREE.Color(0x0a1020), emissiveIntensity:0.12 });
       const chromeMat = std({ color:0xd0d0d0, roughness:0.12, metalness:0.98 });
       const darkMat   = std({ color:0x181818, roughness:0.80, metalness:0.2 });

@@ -11,7 +11,12 @@
     "preview": "vite preview",
     "multiplayer": "node src/server.js",
     "optimize:textures": "node src/scripts/optimize-textures.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:startup": "playwright test --config playwright.startup.config.cjs",
+    "test:network-limits": "node --test src/tests/network/limits.test.cjs",
+    "test:source-modules": "node --test src/tests/startup/source-modules.test.cjs",
+    "textures:map": "node src/scripts/build-map-textures.mjs",
+    "photos:map": "node src/scripts/photograph-map.cjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",
@@ -21,7 +26,8 @@
     "peer": "^1.0.2",
     "peerjs": "^1.5.4",
     "three": "^0.166.1",
-    "three-mesh-bvh": "0.9.15"
+    "three-mesh-bvh": "0.9.15",
+    "esbuild": "0.27.7"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.0",

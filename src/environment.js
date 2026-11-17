@@ -108,6 +108,47 @@
   //   brick    — common clay brick infill, stretcher bond, per-brick tone
   //   plywood  — raw hoarding sheets with grain
   const constructionTextureCache = new Map();
+  // Shared image sources across repeat variants. ORM packs AO (R), roughness (G),
+  // metalness (B), so three physical properties share a single GPU texture.
+  const photoTextureCaches = new WeakMap();
+  function applyPhotographicMaterial(THREE, renderer, material, kind, repeatX = 1, repeatY = 1) {
+    let cache = photoTextureCaches.get(renderer);
+    if (!cache) { cache = new Map(); photoTextureCaches.set(renderer, cache); }
+    const key = `${kind}/${repeatX}/${repeatY}`;
+    let maps = cache.get(key);
+    if (!maps) {
+      const load = (suffix, color) => {
+        const sourceKey = `${kind}/${suffix}`;
+        let entry = cache.get(sourceKey);
+        if (!entry) {
+          entry = { texture:null, variants:[] };
+          entry.texture = new THREE.TextureLoader().load(`../assets/textures/photoreal/${kind}-${suffix}.webp`,
+            () => entry.variants.forEach(texture => { texture.needsUpdate = true; }));
+          cache.set(sourceKey, entry);
+        }
+        const texture = entry.texture.clone();
+        entry.variants.push(texture);
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(repeatX, repeatY);
+        texture.anisotropy = Math.min(4, renderer.capabilities?.getMaxAnisotropy?.() || 1);
+        texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        texture.name = `Photographic / ${kind} / ${suffix}`;
+        return texture;
+      };
+      maps = { map: load('color', true), normalMap: load('normal', false), orm: load('orm', false) };
+      cache.set(key, maps);
+    }
+    material.map = maps.map;
+    material.normalMap = maps.normalMap;
+    material.roughnessMap = maps.orm;
+    material.aoMap = maps.orm;
+    material.aoMapIntensity = .35;
+    material.normalScale.setScalar(kind === 'brick' || kind === 'paving' ? .45 : kind === 'metal' ? .16 : .3);
+    if (kind === 'metal') material.metalnessMap = maps.orm;
+    material.userData.photographicSurface = kind;
+    material.needsUpdate = true;
+    return material;
+  }
   function constructionMaterial(THREE, renderer, kind, repeatX = 1, repeatY = 1) {
     let source = constructionTextureCache.get(kind);
     if (!source) {
@@ -208,6 +249,7 @@
       roughness: kind === "plywood" ? .86 : .94, metalness: 0, envMapIntensity: .25,
     });
     material.name = `Construction / ${kind}`;
+    applyPhotographicMaterial(THREE, renderer, material, kind === "plywood" ? "wood" : kind === "block" ? "block" : kind === "brick" ? "brick" : "concrete", repeatX, repeatY);
     return material;
   }
 
@@ -306,6 +348,15 @@
           #endif
           #ifdef USE_NORMALMAP
             vNormalMapUv = rbUv;
+          #endif
+          #ifdef USE_ROUGHNESSMAP
+            vRoughnessMapUv = rbUv;
+          #endif
+          #ifdef USE_AOMAP
+            vAoMapUv = rbUv;
+          #endif
+          #ifdef USE_METALNESSMAP
+            vMetalnessMapUv = rbUv;
           #endif`);
       const hash = "float rbHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }";
       shader.fragmentShader = shader.fragmentShader
@@ -1144,7 +1195,7 @@
     scene.fog = new THREE.FogExp2(0xa4978e, 0.0042); // golden-hour haze matched to the HDR horizon so the distant skyline fades into it (density also set by applyWaveLighting)
     const lightingProfile = scene.userData.environmentLightingProfile || getLightingProfile(renderer);
 
-    const floorMaps = loadEnvironmentMaterialMaps(THREE, renderer, "floor", MAP_W * CELL / 6, MAP_H * CELL / 6);
+    const floorMaps = {};
     const floorMat = new THREE.MeshStandardMaterial({
       color: 0xd5cfc0,
       ...floorMaps, // Dusty unfinished slab: uniformly dry, never polished
@@ -1156,9 +1207,10 @@
       envMapIntensity: 0.42,
     });
 
+    applyPhotographicMaterial(THREE, renderer, floorMat, "slab", MAP_W * CELL / 6, MAP_H * CELL / 6);
     floorMat.name = "Construction / slab";
     applyWorldSurface(THREE, floorMat, "floor", { tile: 6, tone: 0.06 });
-    floorMaps.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    floorMat.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
     const floorGeo = new THREE.PlaneGeometry(MAP_W * CELL, MAP_H * CELL, 1, 1);
     floorGeo.rotateX(-Math.PI * 0.5);
@@ -1739,5 +1791,6 @@
     setupEnvironmentLighting,
     buildLevel,
     applyDevOverrides,
+    applyPhotographicMaterial,
   };
 })();

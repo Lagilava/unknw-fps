@@ -1,0 +1,65 @@
+{
+  "colorSize": 1024,
+  "dataSize": 512,
+  "sets": [
+    {
+      "name": "asphalt",
+      "source": "Asphalt012",
+      "sourceUrl": "https://ambientcg.com/a/Asphalt012",
+      "sourceBytes": 3903618,
+      "outputBytes": 889632
+    },
+    {
+      "name": "paving",
+      "source": "PavingStones036",
+      "sourceUrl": "https://ambientcg.com/a/PavingStones036",
+      "sourceBytes": 4624202,
+      "outputBytes": 952160
+    },
+    {
+      "name": "brick",
+      "source": "Bricks026",
+      "sourceUrl": "https://ambientcg.com/a/Bricks026",
+      "sourceBytes": 4787832,
+      "outputBytes": 1042688
+    },
+    {
+      "name": "concrete",
+      "source": "Concrete023",
+      "sourceUrl": "https://ambientcg.com/a/Concrete023",
+      "sourceBytes": 3968664,
+      "outputBytes": 940506
+    },
+    {
+      "name": "wood",
+      "source": "Wood049",
+      "sourceUrl": "https://ambientcg.com/a/Wood049",
+      "sourceBytes": 3223300,
+      "outputBytes": 404968
+    },
+    {
+      "name": "block",
+      "source": "Concrete023",
+      "sourceUrl": "https://ambientcg.com/a/Concrete023",
+      "sourceBytes": 3968664,
+      "outputBytes": 876724
+    },
+    {
+      "name": "slab",
+      "source": "Concrete034",
+      "sourceUrl": "https://ambientcg.com/a/Concrete034",
+      "sourceBytes": 1308890,
+      "outputBytes": 448752
+    },
+    {
+      "name": "metal",
+      "source": "Metal063",
+      "sourceUrl": "https://ambientcg.com/a/Metal063",
+      "sourceBytes": 2334805,
+      "outputBytes": 395294
+    }
+  ],
+  "sourceBytes": 24151311,
+  "outputBytes": 6002106,
+  "paintBytes": 51382
+}

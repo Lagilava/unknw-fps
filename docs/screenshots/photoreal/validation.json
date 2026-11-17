@@ -1,0 +1,184 @@
+{
+  "surfaces": [
+    {
+      "name": "Construction / slab",
+      "set": "slab",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / formwork",
+      "set": "concrete",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / block",
+      "set": "block",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / brick",
+      "set": "brick",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / plywood",
+      "set": "wood",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / kicker",
+      "set": "concrete",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / plywood",
+      "set": "wood",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / plywood",
+      "set": "wood",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "Construction / plywood",
+      "set": "wood",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "metal",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "asphalt",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "asphalt",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "paving",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "metal",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "brick",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "concrete",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "metal",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "asphalt",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "wood",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "slab",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "brick",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    },
+    {
+      "name": "",
+      "set": "metal",
+      "colorSpace": "srgb",
+      "dataSpace": "",
+      "normalSize": 512,
+      "packed": true
+    }
+  ],
+  "drawCalls": 190,
+  "triangles": 291758,
+  "textures": 35,
+  "errors": []
+}

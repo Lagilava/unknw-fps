@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UNKNW — map material review</title>
+<style>body{margin:0;background:#111;color:#eee;font:13px system-ui}canvas{display:block}nav{position:fixed;top:16px;left:16px;display:flex;gap:8px;z-index:2}button{background:#14202be8;color:#fff;border:1px solid #657485;padding:10px 16px;border-radius:4px;cursor:pointer}#status{position:fixed;bottom:14px;left:18px;padding:8px;background:#14202be8}body.clean nav,body.clean #status{display:none}</style>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/":"/node_modules/three/"}}</script>
+<script src="./environment.js"></script><script src="./exterior_map.js"></script>
+</head><body><nav id="views"></nav><div id="status">Building map and loading photographic textures…</div>
+<script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+window.GLTFLoader = GLTFLoader;
+const renderer = new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.append(renderer.domElement);
+const scene=new THREE.Scene();const camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,.1,700);
+const env=window.RoomBreachEnvironment;
+env.buildLevel(THREE,scene,renderer,[]);
+await window.buildExteriorPlayArea(THREE,scene,renderer);
+const pmrem=new THREE.PMREMGenerator(renderer);
+try {
+ const hdr=await new RGBELoader().loadAsync('../assets/hdri/kloppenheim_06_puresky_2k.hdr');
+ hdr.mapping=THREE.EquirectangularReflectionMapping;scene.background=hdr;
+ scene.environment=pmrem.fromEquirectangular(hdr).texture;
+ scene.environmentIntensity=.58; // Match the game's HDR illumination strength.
+} catch(e) {console.error(e);scene.background=new THREE.Color(0xc4ced4);}
+pmrem.dispose();
+// Same map builders and materials, photographed without combat or post effects.
+const views={
+ 'Street':[[20,2.1,149],[-48,5,165]],
+ 'Brickwork':[[-35,2.1,149],[-44,3,143]],
+ 'Paving':[[6,1.8,163],[-2,.15,169]],
+ 'Construction':[[10,2.5,36],[-12,2,3]],
+ 'Blockwork':[[24,3,90],[10,2,66]],
+ 'District':[[32,10,210],[-15,5,170]],
+};
+function view(name){const v=views[name]||views.Street;camera.position.fromArray(v[0]);camera.lookAt(...v[1]);renderer.render(scene,camera);document.title='UNKNW — '+name;}
+for(const name of Object.keys(views)){const b=document.createElement('button');b.textContent=name;b.onclick=()=>view(name);document.getElementById('views').append(b);}
+document.addEventListener('keydown',e=>{if(e.key.toLowerCase()==='h')document.body.classList.toggle('clean');});
+addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
+window.mapPhoto={scene,camera,renderer,view,views};
+view(new URLSearchParams(location.search).get('view')||'Street');
+renderer.setAnimationLoop(()=>renderer.render(scene,camera));
+document.getElementById('status').textContent='Photographic PBR maps · 1K colour / 512px data · H hides controls';
+document.body.dataset.ready='1';
+</script></body></html>

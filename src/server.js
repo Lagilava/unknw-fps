@@ -12,6 +12,7 @@ import path  from "path";
 import { fileURLToPath } from "url";
 import express from "express";
 import { ExpressPeerServer } from "peer";
+import sourceServing from "./source_modules.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.argv[2]) || 8000;
@@ -52,6 +53,7 @@ setInterval(() => {
 
 // ── Express app ───────────────────────────────────────────────────────────────
 const app = express();
+app.get("/", (req,res) => res.redirect("/src/first_person_shooter_room_game%20(1).html" + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "")));
 
 app.use((req, res, next) => {
   const headerSize = JSON.stringify(req.headers).length;
@@ -80,12 +82,13 @@ const ALLOWED_EXTENSIONS = new Set([
 app.use((req, res, next) => {
   if (req.path.startsWith("/peerjs") || req.path === "/health") return next();
   const ext = path.extname(req.path).toLowerCase();
-  if (ext && !ALLOWED_EXTENSIONS.has(ext)) { res.status(403).end("Forbidden"); return; }
+  if (ext && !(ext === ".ts" && req.path.startsWith("/src/")) && !ALLOWED_EXTENSIONS.has(ext)) { res.status(403).end("Forbidden"); return; }
   next();
 });
 
 // __dirname is src/; serve from the repo root instead so assets/ (a sibling
 // of src/, not inside it) is reachable at /assets/... alongside the game files.
+app.use("/src", sourceServing.sourceModules(__dirname));
 app.use(express.static(path.resolve(__dirname, ".."), {
   dotfiles:     "deny",
   index:        false,
