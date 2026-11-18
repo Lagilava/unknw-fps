@@ -226,6 +226,17 @@ export function createWeaponHandFitter() {
         desiredQ.copy(rightWristQ);
         solve('right',bones,rightHand,target,desiredQ,applyRotation,rig);
       }
+      // During the rifle reload, guide the firing hand toward the keyed
+      // magazine, then toward the magwell while the fresh clip is in transit.
+      // The existing left-arm solve keeps the support hand on the handguard.
+      if(support && gunType==='rifle' && reload>=.02) {
+        const mag=gun.userData.blenderReload?.magazine;
+        if(mag?.visible) mag.getWorldPosition(target);
+        else target.set(.09,-.13,0).applyMatrix4(gun.matrixWorld);
+        palmPoint(rightHand,palm);
+        target.lerp(palm,1-THREE.MathUtils.smoothstep(reload,0,.7));
+        solve('right',bones,rightHand,target,rightWristQ,applyRotation,rig);
+      }
       if(support) {
         target.copy(leftGrip).applyMatrix4(gun.matrixWorld);
         desiredQ.copy(leftWristQ);
