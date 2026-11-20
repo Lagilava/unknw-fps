@@ -5030,28 +5030,45 @@ function createLightningEffect() {
   function updateWeaponSkinShader(dt) { weaponSkinUniforms.uTime.value += dt; }
   window.__rbWeaponSkin = { uniforms: weaponSkinUniforms }; // dev diagnostic
 
-  let blenderRifleAsset: Promise<any> | null = null;
-  function installBlenderRifle(gun: any, originalParts: any[]) {
-    blenderRifleAsset ||= createGLTFLoader().loadAsync(
-      new URL('../assets/models/weapons/rifle-reload.glb', import.meta.url).href
-    );
-    blenderRifleAsset.then(gltf => {
+  const blenderWeaponAssets = new Map<GunType, Promise<any>>();
+  function installBlenderWeapon(gun: any, gunType: GunType, muzzle: any) {
+    const hands = gun.userData.fpHands;
+    const originalParts = gun.children.filter(child => child !== muzzle && child !== hands?.left && child !== hands?.right);
+    if (!blenderWeaponAssets.has(gunType)) blenderWeaponAssets.set(gunType,
+      createGLTFLoader().loadAsync(new URL(`../assets/models/weapons/${gunType}-reload.glb`, import.meta.url).href));
+    blenderWeaponAssets.get(gunType)!.then(gltf => {
       if (!gun.parent) return;
       const authored = gltf.scene.clone(true);
       gun.add(authored);
+      // Keep the original rig as a fallback until the authored asset has loaded.
       originalParts.forEach(part => { part.visible = false; });
+      // Viewmodels can have different pack-a-punch states; share geometry but
+      // never share mutable material instances between the cached gun rigs.
+      authored.traverse((part: any) => {
+        if (!part.isMesh || !part.material) return;
+        part.material = part.material.clone();
+        if (part.material.isMeshStandardMaterial) {
+          part.material.userData.baseEmissive = part.material.emissive.getHex();
+          part.material.userData.baseEmissiveIntensity = part.material.emissiveIntensity;
+          part.material.userData.baseMetalness = part.material.metalness;
+          part.material.userData.baseRoughness = part.material.roughness;
+          gun.userData.packMats?.push(part.material);
+        }
+      });
       if (gltf.animations.length) {
         const mixer = new THREE.AnimationMixer(authored);
+        // Blender exports an Action for each mechanical pivot. Both must play
+        // against the same clock or the handle moves while the magazine stays put.
         gltf.animations.forEach(clip => mixer.clipAction(clip).play());
         gun.userData.blenderReload = {
           mixer, duration: Math.max(...gltf.animations.map(clip => clip.duration)),
           magazine: authored.getObjectByName('ReloadMagazine'),
         };
       }
-    }).catch(error => console.warn('Blender rifle unavailable; using original rig', error));
+    }).catch(error => console.warn(`Blender ${gunType} unavailable; using original rig`, error));
   }
 
-  function seekBlenderRifleReload(gun: any, normalized: number) {
+  function seekBlenderWeaponReload(gun: any, normalized: number) {
     const reload = gun?.userData.blenderReload;
     if (reload) reload.mixer.setTime(Math.max(0, Math.min(1, normalized)) * reload.duration);
   }
@@ -5130,6 +5147,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.PISTOL);
       const { muzzle, flash } = buildMuzzleRig(0.36, 0.045, 0xffcf7a, 0.3, 0.05, 0.16, 0.034);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5156,6 +5174,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.SMG);
       const { muzzle, flash } = buildMuzzleRig(0.66, 0.02, 0xffc86a, 0.3, 0.05, 0.18, 0.036);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5185,6 +5204,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.LMG);
       const { muzzle, flash } = buildMuzzleRig(1.13, 0.02, 0xffc06a, 0.4, 0.07, 0.22, 0.05);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5216,6 +5236,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.DMR);
       const { muzzle, flash } = buildMuzzleRig(1.17, 0.03, 0xffd97a, 0.3, 0.05, 0.22, 0.038);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5241,6 +5262,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.AKIMBO);
       const { muzzle, flash } = buildMuzzleRig(0.4, 0.05, 0xffc86a, 0.32, 0.052, 0.16, 0.036);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5268,6 +5290,7 @@ function createLightningEffect() {
       chamberGlow.visible = false;
       if (firstPersonModel) attachFirstPersonHands(gun, GUNS.FLAK);
       const { muzzle, flash } = buildMuzzleRig(0.72, 0.03, 0xffbf5a, 0.46, 0.08, 0.24, 0.055);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5360,7 +5383,7 @@ function createLightningEffect() {
       muzzle.userData.flashGlow = glow;
       muzzle.userData.flash3d = flash3d;
       muzzle.userData.barrelTips = [new THREE.Vector3(0.14, 0.0, 0.0)];
-      installBlenderRifle(gun, originalRifleParts);
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide, mag, receiver, animParts: { trigger, chamberGlow } };
     }
 
@@ -5445,6 +5468,7 @@ function createLightningEffect() {
         new THREE.Vector3(0.15, 0.0, 0.06),
         new THREE.Vector3(0.15, 0.0, -0.06),
       ];
+      installBlenderWeapon(gun, gunType, muzzle);
       return { gun, muzzle, flash, slide: pump, mag, animParts: { trigger, chamberGlow } };
     }
 
@@ -5533,6 +5557,7 @@ function createLightningEffect() {
     muzzle.userData.flashGlow = glow;
     muzzle.userData.flash3d = flash3d;
     muzzle.userData.barrelTips = [new THREE.Vector3(0.16, 0.0, 0.0)];
+    installBlenderWeapon(gun, gunType, muzzle);
     return { gun, muzzle, flash, slide: boltHandle, mag, barrel, animParts: { trigger, boltKnob, chamberGlow } };
   }
 
@@ -7242,9 +7267,9 @@ function createLightningEffect() {
     const reloadActive = thirdPerson.reloadTimer > 0;
     const reloadDuration = weaponAnim.animSpec.reloadDuration || 1;
     const reloadT = reloadActive ? 1 - thirdPerson.reloadTimer / reloadDuration : 0;
-    if (currentGun === GUNS.RIFLE) seekBlenderRifleReload(thirdPerson.weapon?.gun, reloadT);
+    seekBlenderWeaponReload(thirdPerson.weapon?.gun, reloadT);
     const authoredMagazine = thirdPerson.weapon?.gun.userData.blenderReload?.magazine;
-    if (authoredMagazine) authoredMagazine.visible = !(reloadActive && reloadT > 0.32 && reloadT < 0.58);
+    if (authoredMagazine && GUN_SPECS[currentGun]?.reloadStyle !== 'shells') authoredMagazine.visible = !(reloadActive && reloadT > 0.32 && reloadT < 0.58);
     const easeReload = v => {
       const t = Math.max(0, Math.min(1, v));
       return t * t * (3 - 2 * t);
@@ -20338,7 +20363,7 @@ async function spawnEnemies(wave, options: any = {}) {
 
     const reloadActive = gunState.reloadTimer > 0;
     const reloadT = reloadActive ? 1 - gunState.reloadTimer / weaponAnim.animSpec.reloadDuration : 0;
-    if (currentGun === GUNS.RIFLE) seekBlenderRifleReload(weapon.gun, reloadT);
+    seekBlenderWeaponReload(weapon.gun, reloadT);
     const clamp01 = v => Math.max(0, Math.min(1, v));
     const ease01 = v => {
       const t = clamp01(v);
